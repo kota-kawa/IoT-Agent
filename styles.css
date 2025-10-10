@@ -32,7 +32,7 @@ body{
 /* レイアウト */
 .app{
   display: grid;
-  grid-template-columns: 420px 1fr;
+  grid-template-columns: minmax(480px, 36vw) 1fr;
   gap: 16px;
   min-height: 100vh;
   padding: 16px;
@@ -113,7 +113,7 @@ body{
 }
 
 .chat-controller{
-  margin: 0 16px 16px;
+  margin: 0 20px 16px;
   margin-top: auto;
   position: sticky;
   bottom: 16px;
@@ -122,7 +122,7 @@ body{
 
 .chat-controller__inner{
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 14px;
   padding: 18px 20px;
   border-radius: 24px;
