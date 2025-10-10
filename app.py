@@ -7,13 +7,16 @@ from dataclasses import dataclass, field
 from typing import Any, Deque, Dict, List, Optional
 
 from dotenv import load_dotenv as loadenv
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, redirect, request, session, url_for
 from openai import OpenAI
 
 
 loadenv()
 
 app = Flask(__name__, static_folder=".", static_url_path="")
+app.secret_key = os.getenv("FLASK_SECRET_KEY", "change-this-secret")
+
+APP_PASSWORD = "kkawagoe"
 
 
 @dataclass
@@ -149,7 +152,29 @@ def _structured_llm_prompt(messages: List[Dict[str, str]]) -> Dict[str, Any]:
 
 @app.get("/")
 def index():
+    if not session.get("authenticated"):
+        return redirect(url_for("login"))
     return app.send_static_file("index.html")
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if request.method == "POST":
+        password = request.form.get("password", "")
+        if password == APP_PASSWORD:
+            session["authenticated"] = True
+            return redirect(url_for("index"))
+        return redirect(url_for("login", error="1"))
+
+    if session.get("authenticated"):
+        return redirect(url_for("index"))
+    return app.send_static_file("login.html")
+
+
+@app.post("/logout")
+def logout():
+    session.clear()
+    return redirect(url_for("login"))
 
 
 @app.get("/pico-w-test")
