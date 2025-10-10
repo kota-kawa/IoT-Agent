@@ -32,12 +32,12 @@ body{
 /* レイアウト */
 .app{
   display: grid;
-  grid-template-columns: minmax(320px, 24vw) 1fr;
-  gap: 20px;
+  grid-template-columns: minmax(320px, 360px) minmax(0, 1fr);
+  gap: 24px;
   min-height: 100vh;
-  padding: 24px;
-  max-width: 1320px;
-  margin: 0 auto;
+  padding: 24px 32px;
+  max-width: none;
+  margin: 0;
   align-items: start;
 }
 
@@ -89,7 +89,7 @@ body{
   background: var(--bg-elev);
   border-radius: 12px;
   border: 1px solid rgba(255,255,255,.06);
-  padding: 12px;
+  padding: 18px 12px 12px;
   overflow: auto;
   min-height: 220px;
   margin-bottom: 16px;
@@ -241,11 +241,11 @@ body{
 .main__actions{ display:flex; gap: 8px; }
 
 .grid{
-  --min: 260px;
+  --min: 300px;
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(var(--min), 1fr));
   gap: 18px;
-  padding-top: 20px;
+  padding-top: 24px;
 }
 
 /* カード */
