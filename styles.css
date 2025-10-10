@@ -32,15 +32,25 @@ body{
 /* レイアウト */
 .app{
   display: grid;
-  grid-template-columns: minmax(480px, 36vw) 1fr;
-  gap: 16px;
+  grid-template-columns: minmax(320px, 24vw) 1fr;
+  gap: 20px;
   min-height: 100vh;
-  padding: 16px;
+  padding: 24px;
+  max-width: 1320px;
+  margin: 0 auto;
+  align-items: start;
 }
 
 @media (max-width: 960px){
   .app{
     grid-template-columns: 1fr;
+    gap: 16px;
+    padding: 16px;
+    max-width: none;
+  }
+  .sidebar,
+  .main{
+    min-height: auto;
   }
 }
 
@@ -51,6 +61,7 @@ body{
   box-shadow: var(--shadow);
   display: flex;
   flex-direction: column;
+  min-height: calc(100vh - 48px);
 }
 
 .sidebar__header{
@@ -215,10 +226,11 @@ body{
   border: 1px solid rgba(255,255,255,.06);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow);
-  padding: 16px;
+  padding: 24px;
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  min-height: calc(100vh - 48px);
 }
 .main__header{
   display: flex; justify-content: space-between; align-items: center;
@@ -232,8 +244,8 @@ body{
   --min: 260px;
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(var(--min), 1fr));
-  gap: 14px;
-  padding-top: 14px;
+  gap: 18px;
+  padding-top: 20px;
 }
 
 /* カード */
