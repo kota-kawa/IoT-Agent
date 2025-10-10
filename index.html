@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>IoTダッシュボード（グリーンテーマ）</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app">
+    <!-- 左：チャットサイドバー -->
+    <aside class="sidebar" aria-label="共通チャット">
+      <header class="sidebar__header">
+        <div class="sidebar__title">
+          <span class="sidebar__bubble">💬</span>
+          <h1>共通チャット</h1>
+        </div>
+        <p class="sidebar__desc">ビューを切り替えてもここから同じチャットを操作できます。</p>
+      </header>
+
+      <section class="chat" id="chat">
+        <!-- メッセージログ -->
+        <div class="chat__log" id="chatLog" role="log" aria-live="polite" aria-relevant="additions"></div>
+
+        <!-- 入力エリア（※一時停止ボタンなし） -->
+        <form class="chat__composer" id="chatForm" autocomplete="off">
+          <label for="chatInput" class="sr-only">メッセージを入力</label>
+          <textarea id="chatInput" class="chat__input" rows="2" placeholder="ブラウザに指示したい内容を入力してください。例: ランプをオン、温度を25にして"></textarea>
+          <div class="chat__actions">
+            <button type="submit" class="btn btn--primary" id="sendBtn" aria-label="送信">送信</button>
+          </div>
+        </form>
+      </section>
+    </aside>
+
+    <!-- 右：IoTダッシュボード -->
+    <main class="main">
+      <header class="main__header">
+        <div>
+          <h2 class="main__title">IoT ダッシュボード</h2>
+          <p class="main__subtitle">ホーム内の仮想デバイスを確認・制御できます。</p>
+        </div>
+        <div class="main__actions">
+          <button class="btn btn--ghost" id="addDeviceBtn">デバイス追加</button>
+          <button class="btn btn--danger" id="resetBtn">リセット</button>
+        </div>
+      </header>
+
+      <!-- デバイスのグリッド -->
+      <section class="grid" id="deviceGrid" aria-label="デバイス一覧">
+        <!-- JSでカードを描画 -->
+      </section>
+    </main>
+  </div>
+
+  <!-- デバイス追加モーダル -->
+  <dialog id="addDialog" class="dialog">
+    <form method="dialog" class="dialog__panel" id="addDeviceForm">
+      <header class="dialog__header">
+        <h3>デバイスを追加</h3>
+      </header>
+      <div class="dialog__body">
+        <div class="form__row">
+          <label class="form__label" for="deviceKind">種別</label>
+          <select id="deviceKind" class="form__control">
+            <option value="sensor-temp">温度センサー</option>
+            <option value="sensor-humid">湿度センサー</option>
+            <option value="actuator-lamp">ランプ</option>
+            <option value="actuator-fan">ファン</option>
+          </select>
+        </div>
+        <div class="form__row">
+          <label class="form__label" for="deviceName">名前</label>
+          <input id="deviceName" class="form__control" type="text" placeholder="例: リビング温度" />
+        </div>
+      </div>
+      <footer class="dialog__footer">
+        <button class="btn btn--ghost" value="cancel">キャンセル</button>
+        <button class="btn btn--primary" value="confirm">追加</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <script src="app.js"></script>
+</body>
+</html>
