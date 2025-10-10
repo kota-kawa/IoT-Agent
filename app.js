@@ -317,6 +317,22 @@ const logEl = $("#chatLog");
 const formEl = $("#chatForm");
 const inputEl = $("#chatInput");
 const sendBtn = $("#sendBtn");
+const pauseBtn = $("#pauseBtn");
+const chatResetBtn = $("#chatResetBtn");
+const INITIAL_GREETING = "こんにちは！右側のカードを直接操作するか、チャットで指示してください。例:「ランプをオン」「温度を25にして」";
+let isPaused = false;
+let isSending = false;
+
+function updateChatControls(){
+  if(!sendBtn || !inputEl) return;
+  const disableSend = isPaused || isSending;
+  sendBtn.disabled = disableSend;
+  inputEl.disabled = isPaused;
+  if(pauseBtn){
+    pauseBtn.classList.toggle("is-active", isPaused);
+    pauseBtn.setAttribute("aria-pressed", String(isPaused));
+  }
+}
 
 function pushMessage(role, text){
   const item = document.createElement("div");
@@ -419,19 +435,42 @@ function summarizeState(){
 // フォーム送信
 formEl.addEventListener("submit", (e) => {
   e.preventDefault();
+  if(isPaused || isSending) return;
   const text = inputEl.value.trim();
   if(!text) return;
   pushMessage("user", text);
   inputEl.value = "";
-  sendBtn.disabled = true;
+  isSending = true;
+  updateChatControls();
 
   // 疑似レスポンス
   setTimeout(() => {
     const reply = handleChatCommand(text);
     pushMessage("assistant", reply);
-    sendBtn.disabled = false;
+    isSending = false;
+    updateChatControls();
   }, 450);
 });
+
+if(pauseBtn){
+  pauseBtn.addEventListener("click", () => {
+    isPaused = !isPaused;
+    updateChatControls();
+    if(!isPaused){
+      inputEl.focus();
+    }
+  });
+}
+
+if(chatResetBtn){
+  chatResetBtn.addEventListener("click", () => {
+    logEl.innerHTML = "";
+    pushMessage("assistant", INITIAL_GREETING);
+    isPaused = false;
+    isSending = false;
+    updateChatControls();
+  });
+}
 
 /** ---------- 初期化 ---------- */
 (function init(){
@@ -441,5 +480,6 @@ formEl.addEventListener("submit", (e) => {
   render();
 
   // 初期メッセージ
-  pushMessage("assistant", "こんにちは！右側のカードを直接操作するか、チャットで指示してください。例:「ランプをオン」「温度を25にして」");
+  pushMessage("assistant", INITIAL_GREETING);
+  updateChatControls();
 })();
