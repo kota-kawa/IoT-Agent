@@ -9,28 +9,44 @@
 <body>
   <div class="app">
     <!-- 左：チャットサイドバー -->
-    <aside class="sidebar" aria-label="共通チャット">
+    <aside class="sidebar" aria-label="IoT Agent">
       <header class="sidebar__header">
         <div class="sidebar__title">
           <span class="sidebar__bubble">💬</span>
-          <h1>共通チャット</h1>
+          <h1>IoT Agent</h1>
         </div>
-        <p class="sidebar__desc">ビューを切り替えてもここから同じチャットを操作できます。</p>
       </header>
 
       <section class="chat" id="chat">
         <!-- メッセージログ -->
         <div class="chat__log" id="chatLog" role="log" aria-live="polite" aria-relevant="additions"></div>
-
-        <!-- 入力エリア（※一時停止ボタンなし） -->
-        <form class="chat__composer" id="chatForm" autocomplete="off">
-          <label for="chatInput" class="sr-only">メッセージを入力</label>
-          <textarea id="chatInput" class="chat__input" rows="2" placeholder="ブラウザに指示したい内容を入力してください。例: ランプをオン、温度を25にして"></textarea>
-          <div class="chat__actions">
-            <button type="submit" class="btn btn--primary" id="sendBtn" aria-label="送信">送信</button>
-          </div>
-        </form>
       </section>
+
+      <!-- 入力エリア -->
+      <form class="chat-controller" id="chatForm" autocomplete="off">
+        <label for="chatInput" class="sr-only">メッセージを入力</label>
+        <div class="chat-controller__inner">
+          <textarea
+            id="chatInput"
+            class="chat-controller__input"
+            rows="2"
+            placeholder="ブラウザに指示したい内容を入力してください。"
+          ></textarea>
+          <div class="chat-controller__side">
+            <button type="submit" class="control-btn control-btn--send" id="sendBtn" aria-label="送信">
+              <span aria-hidden="true">➜</span>
+            </button>
+            <div class="control-btn__row">
+              <button type="button" class="control-btn" id="pauseBtn" aria-label="一時停止">
+                <span aria-hidden="true">⏸</span>
+              </button>
+              <button type="button" class="control-btn" id="chatResetBtn" aria-label="リセット">
+                <span aria-hidden="true">⟲</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </form>
     </aside>
 
     <!-- 右：IoTダッシュボード -->
