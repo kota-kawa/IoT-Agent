@@ -322,6 +322,7 @@ const chatResetBtn = $("#chatResetBtn");
 const INITIAL_GREETING = "こんにちは！右側のカードを直接操作するか、チャットで指示してください。例:「ランプをオン」「温度を25にして」";
 let isPaused = false;
 let isSending = false;
+const chatHistory = [];
 
 function updateChatControls(){
   if(!sendBtn || !inputEl) return;
@@ -335,6 +336,7 @@ function updateChatControls(){
 }
 
 function pushMessage(role, text){
+  chatHistory.push({ role, content: text });
   const item = document.createElement("div");
   item.className = `message message--${role}`;
   item.innerHTML = `
@@ -355,7 +357,7 @@ function escapeHtml(s){
 }
 
 // 簡易NLU：日本語/かな混じり指示を解析
-function handleChatCommand(text){
+function applyDeviceCommand(text){
   const t = text.replace(/\s+/g, "");
 
   // ランプ
@@ -400,7 +402,7 @@ function handleChatCommand(text){
     return s;
   }
 
-  return "了解しました。チャットからも操作できます。例: 「ランプをオン」「ファンをオフ」「温度を25.5にして」「湿度60%にして」「状態を教えて」。";
+  return null;
 }
 
 function setActuatorByName(regex, on){
@@ -432,8 +434,28 @@ function summarizeState(){
   return parts.join(" ・ ");
 }
 
+async function requestAssistantResponse(){
+  const payload = {
+    messages: chatHistory.map(({ role, content }) => ({ role, content }))
+  };
+
+  const res = await fetch("/api/chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+
+  if(!res.ok){
+    const errText = await res.text();
+    throw new Error(errText || `HTTP ${res.status}`);
+  }
+
+  const data = await res.json();
+  return typeof data.reply === "string" ? data.reply : "";
+}
+
 // フォーム送信
-formEl.addEventListener("submit", (e) => {
+formEl.addEventListener("submit", async (e) => {
   e.preventDefault();
   if(isPaused || isSending) return;
   const text = inputEl.value.trim();
@@ -443,13 +465,28 @@ formEl.addEventListener("submit", (e) => {
   isSending = true;
   updateChatControls();
 
-  // 疑似レスポンス
-  setTimeout(() => {
-    const reply = handleChatCommand(text);
-    pushMessage("assistant", reply);
+  const localFallback = applyDeviceCommand(text);
+
+  try {
+    const reply = await requestAssistantResponse();
+    const cleanReply = reply && reply.trim();
+    if(cleanReply){
+      pushMessage("assistant", cleanReply);
+    } else if(localFallback){
+      pushMessage("assistant", localFallback);
+    } else {
+      pushMessage("assistant", "了解しました。");
+    }
+  } catch(err){
+    if(localFallback){
+      pushMessage("assistant", localFallback);
+    } else {
+      pushMessage("assistant", `エラーが発生しました: ${err.message}`);
+    }
+  } finally {
     isSending = false;
     updateChatControls();
-  }, 450);
+  }
 });
 
 if(pauseBtn){
@@ -465,6 +502,7 @@ if(pauseBtn){
 if(chatResetBtn){
   chatResetBtn.addEventListener("click", () => {
     logEl.innerHTML = "";
+    chatHistory.length = 0;
     pushMessage("assistant", INITIAL_GREETING);
     isPaused = false;
     isSending = false;
