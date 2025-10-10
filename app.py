@@ -22,6 +22,11 @@ def index():
     return app.send_static_file("index.html")
 
 
+@app.get("/pico-w-test")
+def pico_w_test():
+    return jsonify({"message": "Successful!"})
+
+
 @app.post("/api/chat")
 def chat():
     payload = request.get_json(silent=True) or {}
