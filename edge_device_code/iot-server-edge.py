@@ -2,11 +2,6 @@
 """
 Raspberry Pi Pico W (MicroPython) - LLMエージェント連携クライアント（デバイス側のみ）
 
-変更点（2025-10-10）:
-  * MicroPython の一部ビルドに sys.stdout / sys.stderr が無いため、
-    標準出力の捕捉を「sys へ代入」→「builtins.print の一時ラップ（tee）」に変更。
-  * 例外は sys.print_exception() で専用バッファへ書き出し。
-  * それ以外の動作は従来通り：1秒ポーリングでジョブ取得→ローカル関数実行→結果POST。
 
 機能:
   - Wi-Fi接続（secrets.py から SSID/PASS 読み込み）
@@ -603,3 +598,4 @@ def agent_loop():
 # エントリポイント：エージェント連携を起動
 if __name__ == "__main__":
     agent_loop()
+
