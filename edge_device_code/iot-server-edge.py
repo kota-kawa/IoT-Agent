@@ -144,11 +144,11 @@ def ensure_wifi(max_wait_sec: int = 20) -> bool:
     _wlan = network.WLAN(network.STA_IF)
     _wlan.active(True)
     if not _wlan.isconnected():
-        print(f"[net] connecting SSID='{WIFI_SSID}' ...")
+        print("[net] connecting SSID='{}' ...".format(WIFI_SSID))
         try:
             _wlan.connect(WIFI_SSID, WIFI_PASSWORD)
         except Exception as e:
-            print(f"[net] connect() error: {e}")
+            print("[net] connect() error: {}".format(e))
             return False
 
         t0 = time.ticks_ms()
@@ -162,7 +162,7 @@ def ensure_wifi(max_wait_sec: int = 20) -> bool:
 
     if _wlan.isconnected():
         try:
-            print(f"[net] connected: ip={_wlan.ifconfig()[0]}")
+            print("[net] connected: ip={}".format(_wlan.ifconfig()[0]))
         except Exception:
             print("[net] connected.")
         return True
@@ -322,7 +322,7 @@ def _load_device_id(path: str = "device_id.txt") -> str:
 def roll_dice():
     """サイコロ(1-6)"""
     v = random.randint(1, 6)
-    print(f"[dice] roll -> {v}")
+    print("[dice] roll -> {}".format(v))
     return v
 
 
@@ -332,7 +332,7 @@ def blink_led(times: int = 5, interval_sec: float = 0.2):
         raise ValueError("times must be >= 1")
     if interval_sec <= 0:
         raise ValueError("interval_sec must be > 0")
-    print(f"[led] blinking {times} times @ {interval_sec:.3f}s")
+    print("[led] blinking {} times @ {:.3f}s".format(times, interval_sec))
     for _ in range(times):
         LED_PIN.value(1)
         time.sleep(interval_sec)
@@ -354,7 +354,7 @@ def read_temperature(samples: int = 16, sample_interval_sec: float = 0.01):
             time.sleep(sample_interval_sec)
     vtemp = volts_sum / samples
     temp_c = 27.0 - (vtemp - 0.706) / 0.001721
-    print(f("[temp] est -> {temp_c:.2f} °C (avg of {samples})"))
+    print("[temp] est -> {:.2f} °C (avg of {})".format(temp_c, samples))
     return temp_c
 
 
@@ -412,9 +412,9 @@ def register_device(base_url: str, device_id: str):
         payload["meta"]["label"] = DEVICE_LABEL
     if DEVICE_LOCATION:
         payload["meta"]["location"] = DEVICE_LOCATION
-    print(f"[agent] register -> {url}")
+    print("[agent] register -> {}".format(url))
     status, text = http_post_json(url, payload, timeout=HTTP_TIMEOUT_SEC)
-    print(f"[agent] register status {status}")
+    print("[agent] register status {}".format(status))
     if text:
         preview = text if len(text) <= HTTP_BODY_PREVIEW_LEN else text[:HTTP_BODY_PREVIEW_LEN] + "\n...[truncated]"
         print("[agent] register resp preview:\n" + preview)
@@ -441,7 +441,7 @@ def fetch_next_job(base_url: str, device_id: str):
         else:
             if _NOT_REGISTERED_WARNED:
                 _NOT_REGISTERED_WARNED = False
-            print(f"[agent] next status {status}")
+            print("[agent] next status {}".format(status))
         if text:
             preview = text if len(text) <= HTTP_BODY_PREVIEW_LEN else text[:HTTP_BODY_PREVIEW_LEN] + "\n...[truncated]"
             print("[agent] next resp preview:\n" + preview)
@@ -452,7 +452,7 @@ def fetch_next_job(base_url: str, device_id: str):
         job = json.loads(text)
         return job
     except Exception as e:
-        print(f"[agent] JSON parse error: {e}")
+        print("[agent] JSON parse error: {}".format(e))
         return None
 
 
@@ -468,7 +468,7 @@ def post_result(base_url: str, device_id: str, job_id: str, ok: bool, return_val
         "ts": time.ticks_ms() & 0x7fffffff,
     }
     status, text = http_post_json(url, payload, timeout=HTTP_TIMEOUT_SEC)
-    print(f"[agent] result status {status}")
+    print("[agent] result status {}".format(status))
     if text:
         preview = text if len(text) <= HTTP_BODY_PREVIEW_LEN else text[:HTTP_BODY_PREVIEW_LEN] + "\n...[truncated]"
         print("[agent] result resp preview:\n" + preview)
@@ -563,13 +563,13 @@ def agent_loop():
         return
 
     device_id = _load_device_id()
-    print(f"[agent] device_id={device_id}")
+    print("[agent] device_id={}".format(device_id))
 
     if AUTO_REGISTER_ON_BOOT:
         try:
             register_device(BASE_URL, device_id)
         except Exception as e:
-            print(f"[agent] register error: {e}")
+            print("[agent] register error: {}".format(e))
     else:
         print(
             "[agent] auto registration is disabled. Register this device from the dashboard "
@@ -591,7 +591,7 @@ def agent_loop():
             name = (cmd.get("name") or "").strip().lower()
             args = cmd.get("args") or {}
 
-            print(f"[agent] job received: id={job_id} name={name} args={args}")
+            print("[agent] job received: id={} name={} args={}".format(job_id, name, args))
 
             ok, ret, out, err = _exec_with_capture(
                 _call_function_by_name, {"name": name, "args": args}
@@ -603,7 +603,7 @@ def agent_loop():
             if err and len(err) > HTTP_BODY_PREVIEW_LEN:
                 err = err[:HTTP_BODY_PREVIEW_LEN] + "\n...[truncated]"
 
-            print(f"[agent] exec ok={ok} ret={ret}")
+            print("[agent] exec ok={} ret={}".format(ok, ret))
             post_result(BASE_URL, device_id, job_id, ok, ret, out, err)
 
             gc.collect()
@@ -613,7 +613,7 @@ def agent_loop():
             print("\n[agent] interrupted by user.")
             break
         except Exception as e:
-            print(f"[agent] loop error: {e}")
+            print("[agent] loop error: {}".format(e))
             # 軽いバックオフ
             sleep_s = POLL_INTERVAL_SEC + min(5, backoff)
             backoff = min(5, backoff + 1)
