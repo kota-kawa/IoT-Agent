@@ -30,6 +30,9 @@ let isFetchingDevices = false;
 function displayName(device){
   if(!device) return "";
   const meta = device.meta || {};
+  if(typeof meta.display_name === "string" && meta.display_name.trim()){
+    return meta.display_name.trim();
+  }
   if(typeof meta.note === "string" && meta.note.trim()){
     return meta.note.trim();
   }
@@ -177,7 +180,9 @@ function renderMeta(meta){
   if(!meta || typeof meta !== "object"){
     return null;
   }
-  const entries = Object.entries(meta).filter(([, value]) => value !== "" && value !== null && value !== undefined);
+  const entries = Object.entries(meta).filter(([key, value]) =>
+    key !== "display_name" && value !== "" && value !== null && value !== undefined
+  );
   if(!entries.length){
     return null;
   }
@@ -292,6 +297,21 @@ function renderDevices(){
     title.appendChild(titleText);
 
     head.appendChild(title);
+
+    const tools = document.createElement("div");
+    tools.className = "card__tools";
+    const renameBtn = document.createElement("button");
+    renameBtn.type = "button";
+    renameBtn.className = "iconbtn";
+    renameBtn.dataset.action = "rename";
+    renameBtn.dataset.deviceId = device.device_id;
+    renameBtn.title = "名前を変更";
+    const ariaLabel = displayName(device) || device.device_id;
+    renameBtn.setAttribute("aria-label", `${ariaLabel} の名前を変更`);
+    renameBtn.textContent = "✏️";
+    tools.appendChild(renameBtn);
+
+    head.appendChild(tools);
     card.appendChild(head);
 
     const body = document.createElement("div");
@@ -346,11 +366,38 @@ async function fetchDevices({ silent = false } = {}){
   }
 }
 
+async function updateDeviceDisplayName(deviceId, displayName){
+  const payload = { display_name: displayName || null };
+  const res = await fetch(`/api/devices/${encodeURIComponent(deviceId)}/name`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+  const text = await res.text();
+  let data = null;
+  if(text){
+    try{
+      data = JSON.parse(text);
+    }catch(_err){
+      // ignore
+    }
+  }
+
+  if(!res.ok){
+    const message = (data && (data.error || data.message)) || text || `HTTP ${res.status}`;
+    throw new Error(message);
+  }
+
+  return data?.device || null;
+}
+
 /** ---------- デバイス登録モーダル ---------- */
 const registerBtn = $("#registerDeviceBtn");
 const registerDialog = $("#registerDialog");
 const registerForm = $("#registerDeviceForm");
 const registerDeviceIdInput = $("#registerDeviceId");
+const registerNameInput = $("#registerDeviceName");
 const registerNoteInput = $("#registerDeviceNote");
 const registerDialogMessageEl = $("#registerDialogMessage");
 const registerCancelBtn = $("#registerCancelBtn");
@@ -361,6 +408,7 @@ const REGISTER_DIALOG_DEFAULT = registerDialogMessageEl
   : "Pico W の device_id.txt に保存された ID を入力し、ダッシュボードから登録します。";
 let cachedPicoCapabilities = null;
 let lastRegisteredDeviceId = null;
+let lastRegisteredDeviceName = null;
 
 function showRegisterNotice(message, kind = "info"){
   if(!registerNoticeEl) return;
@@ -426,6 +474,7 @@ async function handleRegisterSubmit(event){
   if(!registerSubmitBtn) return;
 
   const deviceId = registerDeviceIdInput ? registerDeviceIdInput.value.trim() : "";
+  const displayNameInput = registerNameInput ? registerNameInput.value.trim() : "";
   const note = registerNoteInput ? registerNoteInput.value.trim() : "";
 
   if(!deviceId){
@@ -451,6 +500,9 @@ async function handleRegisterSubmit(event){
         registered_via: "dashboard",
       },
     };
+    if(displayNameInput){
+      payload.meta.display_name = displayNameInput;
+    }
     if(note){
       payload.meta.note = note;
     }
@@ -477,8 +529,19 @@ async function handleRegisterSubmit(event){
     }
 
     const registeredId = data && typeof data.device_id === "string" ? data.device_id : deviceId;
+    const registeredDevice = data && data.device && typeof data.device === "object" ? data.device : null;
     lastRegisteredDeviceId = registeredId;
-    setRegisterDialogMessage(`デバイス ${registeredId} を登録しました。`, "success");
+    if(registeredDevice){
+      lastRegisteredDeviceName = displayName(registeredDevice);
+    }else if(displayNameInput){
+      lastRegisteredDeviceName = displayNameInput;
+    }else{
+      lastRegisteredDeviceName = null;
+    }
+    const successLabel = lastRegisteredDeviceName
+      ? `${lastRegisteredDeviceName} (ID: ${registeredId})`
+      : registeredId;
+    setRegisterDialogMessage(`デバイス ${successLabel} を登録しました。`, "success");
     registerDialog?.close("success");
   }catch(err){
     const message = err instanceof Error ? err.message : String(err);
@@ -512,11 +575,56 @@ if(registerForm){
 if(registerDialog){
   registerDialog.addEventListener("close", () => {
     if(registerDialog.returnValue === "success" && lastRegisteredDeviceId){
-      showRegisterNotice(`デバイス「${lastRegisteredDeviceId}」を登録しました。Pico W を起動するとジョブの取得を開始できます。`, "success");
+      const label = lastRegisteredDeviceName || lastRegisteredDeviceId;
+      const idSuffix = lastRegisteredDeviceName ? ` (ID: ${lastRegisteredDeviceId})` : "";
+      showRegisterNotice(`デバイス「${label}」${idSuffix}を登録しました。Pico W を起動するとジョブの取得を開始できます。`, "success");
       fetchDevices();
     }
     lastRegisteredDeviceId = null;
+    lastRegisteredDeviceName = null;
     clearRegisterDialog();
+  });
+}
+
+if(gridEl){
+  gridEl.addEventListener("click", async (event) => {
+    const target = event.target instanceof Element ? event.target.closest("button[data-action]") : null;
+    if(!target) return;
+    const action = target.dataset.action;
+    const deviceId = target.dataset.deviceId;
+    if(action !== "rename" || !deviceId) return;
+    event.preventDefault();
+
+    const device = devices.find((d) => d.device_id === deviceId);
+    const currentName = device?.meta?.display_name && typeof device.meta.display_name === "string"
+      ? device.meta.display_name
+      : "";
+    const promptLabel = currentName || displayName(device) || deviceId;
+    const newName = window.prompt(`「${promptLabel}」の新しい名前を入力してください。`, currentName);
+    if(newName === null) return;
+
+    const trimmed = newName.trim();
+    if(trimmed === (currentName || "").trim()){
+      return;
+    }
+    try{
+      const updatedDevice = await updateDeviceDisplayName(deviceId, trimmed);
+      if(updatedDevice){
+        const idx = devices.findIndex((d) => d.device_id === deviceId);
+        if(idx !== -1){
+          devices[idx] = updatedDevice;
+        }
+        const label = displayName(updatedDevice) || updatedDevice.device_id;
+        renderDevices();
+        showRegisterNotice(`デバイス名を「${label}」に更新しました。`, "success");
+        fetchDevices({ silent: true });
+      }else{
+        throw new Error("サーバーから更新後のデバイス情報が取得できませんでした。");
+      }
+    }catch(err){
+      const message = err instanceof Error ? err.message : String(err);
+      showRegisterNotice(`名前の更新に失敗しました: ${message}`, "error");
+    }
   });
 }
 
