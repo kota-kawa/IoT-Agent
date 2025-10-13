@@ -1,0 +1,17 @@
+# バイナリファイルを無視
+*.env
+*.ini
+*.service
+*.sock
+*.exe
+*.dll
+*.json
+*.Identifier
+# ログファイルを無視
+
+*.zip
+*.pptx
+*.txt
+
+# 仮想環境ディレクトリを無視
+venv/
