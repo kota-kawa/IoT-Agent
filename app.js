@@ -312,6 +312,171 @@ resetBtn.addEventListener("click", () => {
   }
 });
 
+/** ---------- エッジデバイス登録 ---------- */
+const registerBtn = $("#registerEdgeBtn");
+const registerDialog = $("#registerDialog");
+const registerForm = $("#registerDeviceForm");
+const registerDeviceIdInput = $("#registerDeviceId");
+const registerNoteInput = $("#registerDeviceNote");
+const registerDialogMessageEl = $("#registerDialogMessage");
+const registerCancelBtn = $("#registerCancelBtn");
+const registerSubmitBtn = $("#registerSubmitBtn");
+const registerNoticeEl = $("#registerNotice");
+
+const REGISTER_DIALOG_DEFAULT = registerDialogMessageEl
+  ? registerDialogMessageEl.textContent.trim()
+  : "Pico W の device_id.txt に保存された ID を入力し、ダッシュボードから登録します。";
+let cachedPicoCapabilities = null;
+let lastRegisteredDeviceId = null;
+
+async function loadPicoCapabilities(){
+  if(cachedPicoCapabilities){
+    return cachedPicoCapabilities;
+  }
+  const res = await fetch("/pico_capabilities.json", { cache: "no-cache" });
+  if(!res.ok){
+    throw new Error(`capabilities の取得に失敗しました (HTTP ${res.status})`);
+  }
+  const data = await res.json();
+  if(!Array.isArray(data)){
+    throw new Error("capabilities の形式が不正です");
+  }
+  cachedPicoCapabilities = data;
+  return data;
+}
+
+function setRegisterDialogMessage(message, kind = "info"){
+  if(!registerDialogMessageEl) return;
+  registerDialogMessageEl.textContent = message;
+  registerDialogMessageEl.className = "form__hint";
+  if(kind === "error"){
+    registerDialogMessageEl.classList.add("form__hint--error");
+  }else if(kind === "success"){
+    registerDialogMessageEl.classList.add("form__hint--success");
+  }
+}
+
+function showRegisterNotice(message, kind = "info"){
+  if(!registerNoticeEl) return;
+  registerNoticeEl.hidden = false;
+  registerNoticeEl.textContent = message;
+  registerNoticeEl.className = "main__notice";
+  if(kind === "error"){
+    registerNoticeEl.classList.add("main__notice--error");
+  }else if(kind === "success"){
+    registerNoticeEl.classList.add("main__notice--success");
+  }
+}
+
+function clearRegisterDialog(){
+  if(registerForm){
+    registerForm.reset();
+  }
+  if(registerSubmitBtn){
+    registerSubmitBtn.disabled = false;
+    registerSubmitBtn.textContent = "登録";
+  }
+  setRegisterDialogMessage(REGISTER_DIALOG_DEFAULT);
+}
+
+async function handleRegisterSubmit(event){
+  event.preventDefault();
+  if(!registerSubmitBtn) return;
+
+  const deviceId = registerDeviceIdInput ? registerDeviceIdInput.value.trim() : "";
+  const note = registerNoteInput ? registerNoteInput.value.trim() : "";
+
+  if(!deviceId){
+    setRegisterDialogMessage("デバイスIDを入力してください。", "error");
+    if(registerDeviceIdInput){
+      registerDeviceIdInput.focus();
+    }
+    return;
+  }
+
+  registerSubmitBtn.disabled = true;
+  registerSubmitBtn.textContent = "登録中…";
+  setRegisterDialogMessage("サーバーへ登録しています…");
+
+  try{
+    const capabilities = await loadPicoCapabilities();
+    const payload = {
+      device_id: deviceId,
+      capabilities,
+      meta: {
+        firmware: "pico_w_agent/1.1.0",
+        ua: "PicoW-MicroPython-Agent/1.1",
+        registered_via: "dashboard",
+      },
+    };
+    if(note){
+      payload.meta.note = note;
+    }
+
+    const res = await fetch("/pico-w/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    const text = await res.text();
+    let data = null;
+    if(text){
+      try{
+        data = JSON.parse(text);
+      }catch(_err){
+        // ignore JSON parse error and fall back to raw text
+      }
+    }
+
+    if(!res.ok){
+      const message = (data && (data.error || data.message)) || text || `HTTP ${res.status}`;
+      throw new Error(message);
+    }
+
+    const registeredId = data && typeof data.device_id === "string" ? data.device_id : deviceId;
+    lastRegisteredDeviceId = registeredId;
+    setRegisterDialogMessage(`デバイス ${registeredId} を登録しました。`, "success");
+    registerDialog?.close("success");
+  }catch(err){
+    const message = err instanceof Error ? err.message : String(err);
+    setRegisterDialogMessage(`登録に失敗しました: ${message}`, "error");
+  }finally{
+    registerSubmitBtn.disabled = false;
+    registerSubmitBtn.textContent = "登録";
+  }
+}
+
+if(registerBtn && registerDialog){
+  registerBtn.addEventListener("click", () => {
+    clearRegisterDialog();
+    registerDialog.showModal();
+    if(registerDeviceIdInput){
+      setTimeout(() => registerDeviceIdInput.focus(), 50);
+    }
+  });
+}
+
+if(registerCancelBtn && registerDialog){
+  registerCancelBtn.addEventListener("click", () => {
+    registerDialog.close("cancel");
+  });
+}
+
+if(registerForm){
+  registerForm.addEventListener("submit", handleRegisterSubmit);
+}
+
+if(registerDialog){
+  registerDialog.addEventListener("close", () => {
+    if(registerDialog.returnValue === "success" && lastRegisteredDeviceId){
+      showRegisterNotice(`デバイス「${lastRegisteredDeviceId}」を登録しました。Pico W を起動するとジョブの取得を開始できます。`, "success");
+    }
+    lastRegisteredDeviceId = null;
+    clearRegisterDialog();
+  });
+}
+
 /** ---------- チャット：超軽量LLMもどき（デモ用） ---------- */
 const logEl = $("#chatLog");
 const formEl = $("#chatForm");

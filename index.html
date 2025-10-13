@@ -57,10 +57,13 @@
           <p class="main__subtitle">ホーム内の仮想デバイスを確認・制御できます。</p>
         </div>
         <div class="main__actions">
+          <button class="btn btn--primary" id="registerEdgeBtn">エッジデバイス登録</button>
           <button class="btn btn--ghost" id="addDeviceBtn">デバイス追加</button>
           <button class="btn btn--danger" id="resetBtn">リセット</button>
         </div>
       </header>
+
+      <div class="main__notice" id="registerNotice" role="status" aria-live="polite" hidden></div>
 
       <!-- デバイスのグリッド -->
       <section class="grid" id="deviceGrid" aria-label="デバイス一覧">
@@ -93,6 +96,30 @@
       <footer class="dialog__footer">
         <button class="btn btn--ghost" value="cancel">キャンセル</button>
         <button class="btn btn--primary" value="confirm">追加</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <!-- エッジデバイス登録モーダル -->
+  <dialog id="registerDialog" class="dialog" aria-labelledby="registerDialogTitle">
+    <form class="dialog__panel" id="registerDeviceForm" novalidate>
+      <header class="dialog__header">
+        <h3 id="registerDialogTitle">Pico W を登録</h3>
+      </header>
+      <div class="dialog__body">
+        <p class="form__hint" id="registerDialogMessage">Pico W の <code>device_id.txt</code> に保存された ID を入力し、ダッシュボードから登録します。</p>
+        <div class="form__row">
+          <label class="form__label" for="registerDeviceId">デバイスID</label>
+          <input id="registerDeviceId" class="form__control" type="text" name="device_id" placeholder="例: pico-abc123" autocomplete="off" required />
+        </div>
+        <div class="form__row">
+          <label class="form__label" for="registerDeviceNote">メモ（任意）</label>
+          <input id="registerDeviceNote" class="form__control" type="text" name="note" placeholder="設置場所など" autocomplete="off" />
+        </div>
+      </div>
+      <footer class="dialog__footer">
+        <button type="button" class="btn btn--ghost" id="registerCancelBtn">キャンセル</button>
+        <button type="submit" class="btn btn--primary" id="registerSubmitBtn">登録</button>
       </footer>
     </form>
   </dialog>

@@ -239,6 +239,26 @@ body{
 .main__title{ margin: 0; font-size: 22px; letter-spacing: .02em; }
 .main__subtitle{ margin: 4px 0 0; color: var(--text-dim); font-size: 12px; }
 .main__actions{ display:flex; gap: 8px; }
+.main__notice{
+  margin: 16px 4px 0;
+  padding: 12px 16px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,.08);
+  background: rgba(10, 40, 25, .75);
+  font-size: 13px;
+  color: var(--text-dim);
+  transition: opacity .25s ease;
+}
+.main__notice--success{
+  border-color: rgba(53,208,134,.45);
+  color: var(--text);
+  background: linear-gradient(180deg, rgba(38,105,72,.78), rgba(16,52,36,.82));
+}
+.main__notice--error{
+  border-color: rgba(228,91,91,.6);
+  color: #ffdede;
+  background: linear-gradient(180deg, rgba(108,32,32,.78), rgba(62,14,14,.82));
+}
 
 .grid{
   --min: 300px;
@@ -345,6 +365,21 @@ dialog::backdrop{ background: rgba(0,0,0,.6); }
   padding: 8px 10px;
 }
 .form__control:focus{ outline: none; box-shadow: var(--ring); border-color: rgba(53,208,134,.35); }
+.form__hint{
+  font-size: 12px;
+  color: var(--text-dim);
+  margin: 0;
+}
+.form__hint--error{ color: #ffb6b6; }
+.form__hint--success{ color: #9df5c9; }
+
+code{
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  background: rgba(6, 30, 20, .65);
+  border-radius: 6px;
+  padding: 2px 4px;
+  font-size: 12px;
+}
 
 /* アクセシビリティ */
 .sr-only{ position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); border:0; }

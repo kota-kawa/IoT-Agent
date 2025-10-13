@@ -15,6 +15,10 @@ Raspberry Pi Pico W (MicroPython) - LLMエージェント連携クライアン�
   - 1秒間隔ポーリングでサーバーからジョブ(JSON)取得
   - 指示JSONに基づきローカル関数を実行し、結果をPOST返却
 
+備考:
+  - 2025-10-10 時点ではダッシュボードから手動登録する運用を想定。
+    自動登録を再有効化する場合は AUTO_REGISTER_ON_BOOT=True を設定する。
+
 想定サーバーAPI:
   - POST {BASE_URL}{REGISTER_PATH}
       req: {"device_id": "...", "capabilities": [...], "meta": {...}}
@@ -89,6 +93,7 @@ except Exception:
     pass
 
 POLL_INTERVAL_SEC = 1  # 1秒間隔でサーバーをポーリング
+AUTO_REGISTER_ON_BOOT = False  # True にすると起動時に自動登録
 
 USER_AGENT = "PicoW-MicroPython-Agent/1.1"
 HTTP_BODY_PREVIEW_LEN = 512
@@ -103,6 +108,7 @@ TEMP_ADC = ADC(4)
 ADC_TO_VOLT = 3.3 / 65535.0
 
 _wlan = None  # WLAN ハンドル
+_NOT_REGISTERED_WARNED = False
 
 # =========================
 # ネットワーク/HTTP
@@ -398,16 +404,31 @@ def register_device(base_url: str, device_id: str):
 
 
 def fetch_next_job(base_url: str, device_id: str):
+    global _NOT_REGISTERED_WARNED
     url = "{}{}?device_id={}".format(base_url, NEXT_PATH, device_id)
     status, text = http_get_text(url, timeout=HTTP_TIMEOUT_SEC)
     if status == 204 or (status == 200 and not text.strip()):
+        if _NOT_REGISTERED_WARNED:
+            _NOT_REGISTERED_WARNED = False
         return None  # no job
     if status != 200:
-        print(f"[agent] next status {status}")
+        if status == 404:
+            if not _NOT_REGISTERED_WARNED:
+                print(
+                    "[agent] device not registered on server. Register it from the dashboard "
+                    "(https://iot-agent.project-kk.com/) and keep this script running."
+                )
+                _NOT_REGISTERED_WARNED = True
+        else:
+            if _NOT_REGISTERED_WARNED:
+                _NOT_REGISTERED_WARNED = False
+            print(f"[agent] next status {status}")
         if text:
             preview = text if len(text) <= HTTP_BODY_PREVIEW_LEN else text[:HTTP_BODY_PREVIEW_LEN] + "\n...[truncated]"
             print("[agent] next resp preview:\n" + preview)
         return None
+    if _NOT_REGISTERED_WARNED:
+        _NOT_REGISTERED_WARNED = False
     try:
         job = json.loads(text)
         return job
@@ -525,11 +546,16 @@ def agent_loop():
     device_id = _load_device_id()
     print(f"[agent] device_id={device_id}")
 
-    # 初回登録
-    try:
-        register_device(BASE_URL, device_id)
-    except Exception as e:
-        print(f"[agent] register error: {e}")
+    if AUTO_REGISTER_ON_BOOT:
+        try:
+            register_device(BASE_URL, device_id)
+        except Exception as e:
+            print(f"[agent] register error: {e}")
+    else:
+        print(
+            "[agent] auto registration is disabled. Register this device from the dashboard "
+            "(https://iot-agent.project-kk.com/) before sending jobs."
+        )
 
     backoff = 0
     while True:
