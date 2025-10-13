@@ -7,6 +7,7 @@ Raspberry Pi Pico W (MicroPython) - LLMエージェント連携クライアン�
     標準出力の捕捉を「sys へ代入」→「builtins.print の一時ラップ（tee）」に変更。
   * 例外は sys.print_exception() で専用バッファへ書き出し。
   * それ以外の動作は従来通り：1秒ポーリングでジョブ取得→ローカル関数実行→結果POST。
+  * ダッシュボードの UI 名称を「デバイス登録」に合わせて案内を更新。
 
 機能:
   - Wi-Fi接続（secrets.py から SSID/PASS 読み込み）
@@ -16,7 +17,7 @@ Raspberry Pi Pico W (MicroPython) - LLMエージェント連携クライアン�
   - 指示JSONに基づきローカル関数を実行し、結果をPOST返却
 
 備考:
-  - 2025-10-10 時点ではダッシュボードから手動登録する運用を想定。
+  - 2025-10-10 時点ではダッシュボードの「デバイス登録」から手動登録する運用を想定。
     自動登録を再有効化する場合は AUTO_REGISTER_ON_BOOT=True を設定する。
 
 想定サーバーAPI:
@@ -89,6 +90,19 @@ try:
     from secrets import WIFI_SSID as _SSID, WIFI_PASSWORD as _PW  # type: ignore
     WIFI_SSID = _SSID
     WIFI_PASSWORD = _PW
+except Exception:
+    pass
+
+DEVICE_LABEL = ""
+DEVICE_LOCATION = ""
+try:
+    from secrets import DEVICE_LABEL as _DEVICE_LABEL  # type: ignore
+    DEVICE_LABEL = _DEVICE_LABEL
+except Exception:
+    pass
+try:
+    from secrets import DEVICE_LOCATION as _DEVICE_LOCATION  # type: ignore
+    DEVICE_LOCATION = _DEVICE_LOCATION
 except Exception:
     pass
 
@@ -394,6 +408,10 @@ def register_device(base_url: str, device_id: str):
             "ua": USER_AGENT,
         },
     }
+    if DEVICE_LABEL:
+        payload["meta"]["label"] = DEVICE_LABEL
+    if DEVICE_LOCATION:
+        payload["meta"]["location"] = DEVICE_LOCATION
     print(f"[agent] register -> {url}")
     status, text = http_post_json(url, payload, timeout=HTTP_TIMEOUT_SEC)
     print(f"[agent] register status {status}")
@@ -415,8 +433,9 @@ def fetch_next_job(base_url: str, device_id: str):
         if status == 404:
             if not _NOT_REGISTERED_WARNED:
                 print(
-                    "[agent] device not registered on server. Register it from the dashboard "
-                    "(https://iot-agent.project-kk.com/) and keep this script running."
+                    "[agent] device not registered on server. Open the dashboard and use "
+                    "the 'デバイス登録' button (https://iot-agent.project-kk.com/) while keeping "
+                    "this script running."
                 )
                 _NOT_REGISTERED_WARNED = True
         else:

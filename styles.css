@@ -268,6 +268,23 @@ body{
   padding-top: 24px;
 }
 
+.empty-state{
+  grid-column: 1 / -1;
+  padding: 40px 28px;
+  border-radius: var(--radius);
+  border: 1px dashed rgba(255,255,255,.18);
+  background: rgba(9,36,23,.55);
+  text-align: center;
+  color: var(--text-dim);
+  display: grid;
+  gap: 8px;
+  font-size: 15px;
+}
+.empty-state__hint{
+  font-size: 13px;
+  color: rgba(208,229,217,.75);
+}
+
 /* カード */
 .card{
   background: var(--card);
@@ -305,6 +322,96 @@ body{
 
 .card__body{
   display: grid; gap: 12px;
+}
+.device-field{
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+.device-field__value{
+  font-size: 14px;
+  color: var(--text);
+  letter-spacing: .01em;
+}
+.device-section{
+  display: grid;
+  gap: 8px;
+}
+.capability-list,
+.meta-list{
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+.capability-list__item,
+.device-result{
+  border: 1px solid rgba(255,255,255,.08);
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: rgba(11,36,24,.5);
+  display: grid;
+  gap: 6px;
+}
+.capability-list__name{
+  font-weight: 600;
+  letter-spacing: .01em;
+}
+.capability-list__desc,
+.capability-list__params{
+  font-size: 12px;
+  color: var(--text-dim);
+  line-height: 1.5;
+}
+.meta-list__item{
+  display: grid;
+  grid-template-columns: minmax(100px, 140px) 1fr;
+  gap: 8px;
+  align-items: start;
+}
+.meta-list__key{
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.meta-list__value{
+  font-size: 13px;
+  color: var(--text);
+  word-break: break-word;
+}
+.device-result{
+  background: rgba(11,36,24,.65);
+  gap: 10px;
+}
+.device-result__status{
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: .02em;
+  border: 1px solid transparent;
+  width: fit-content;
+}
+.device-result__status--ok{
+  background: rgba(40,160,100,.25);
+  border-color: rgba(70,214,141,.45);
+  color: #abf4ce;
+}
+.device-result__status--error{
+  background: rgba(168,54,54,.2);
+  border-color: rgba(235,109,109,.4);
+  color: #ffd0d0;
+}
+.device-result__detail{
+  font-size: 13px;
+  color: var(--text);
+  display: grid;
+  gap: 4px;
+  word-break: break-word;
 }
 .sensor__value{
   font-size: 32px; font-weight: 800; letter-spacing: .02em;
