@@ -27,6 +27,7 @@ class DeviceState:
     job_queue: Deque[Dict[str, Any]] = field(default_factory=deque)
     last_seen: float = field(default_factory=time.time)
     last_result: Optional[Dict[str, Any]] = None
+    registered_at: float = field(default_factory=time.time)
 
 
 _DEVICES: Dict[str, DeviceState] = {}
@@ -52,6 +53,15 @@ def _build_device_context() -> str:
         lines.append(f"Device ID: {device.device_id}")
         if device.meta:
             lines.append(f"  Meta: {json.dumps(device.meta, ensure_ascii=False)}")
+        lines.append(
+            "  Registered at: "
+            + time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(device.registered_at))
+        )
+        lines.append(
+            "  Last seen: "
+            + time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(device.last_seen))
+        )
+        lines.append(f"  Queue depth: {len(device.job_queue)}")
         lines.append("  Capabilities:")
         for cap in device.capabilities:
             params = cap.get("params") or []
@@ -119,6 +129,18 @@ def _validate_device_command(command: Dict[str, Any]) -> Optional[Dict[str, Any]
         "args": args,
     }
     return validated
+
+
+def _serialize_device(device: DeviceState) -> Dict[str, Any]:
+    return {
+        "device_id": device.device_id,
+        "capabilities": device.capabilities,
+        "meta": device.meta,
+        "queue_depth": len(device.job_queue),
+        "last_seen": device.last_seen,
+        "registered_at": device.registered_at,
+        "last_result": device.last_result,
+    }
 
 
 def _structured_llm_prompt(messages: List[Dict[str, str]]) -> Dict[str, Any]:
@@ -248,15 +270,39 @@ def register_device():
         return jsonify({"error": "device_id is required"}), 400
     if not isinstance(capabilities, list):
         return jsonify({"error": "capabilities must be a list"}), 400
+    cleaned_id = device_id.strip()
+    now = time.time()
+    metadata = meta if isinstance(meta, dict) else {}
 
-    device_state = DeviceState(
-        device_id=device_id.strip(),
-        capabilities=capabilities,
-        meta=meta if isinstance(meta, dict) else {},
-    )
-    _DEVICES[device_state.device_id] = device_state
+    existing = _DEVICES.get(cleaned_id)
+    if existing:
+        existing.capabilities = capabilities
+        existing.meta = metadata
+        existing.last_seen = now
+        status = "updated"
+        device_state = existing
+    else:
+        device_state = DeviceState(
+            device_id=cleaned_id,
+            capabilities=capabilities,
+            meta=metadata,
+            last_seen=now,
+        )
+        _DEVICES[cleaned_id] = device_state
+        status = "registered"
 
-    return jsonify({"status": "registered", "device_id": device_state.device_id})
+    return jsonify({
+        "status": status,
+        "device_id": device_state.device_id,
+        "device": _serialize_device(device_state),
+    })
+
+
+@app.get("/api/devices")
+def list_devices():
+    devices = [_serialize_device(device) for device in _DEVICES.values()]
+    devices.sort(key=lambda d: d["device_id"])
+    return jsonify({"devices": devices})
 
 
 @app.get("/pico-w/next")
