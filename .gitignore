@@ -6,6 +6,7 @@
 *.exe
 *.dll
 *.json
+!pico_capabilities.json
 *.Identifier
 # ログファイルを無視
 
