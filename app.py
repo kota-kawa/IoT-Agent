@@ -35,6 +35,9 @@ _DEVICES: Dict[str, DeviceState] = {}
 _PENDING_JOBS: Dict[str, str] = {}
 
 
+DEVICE_RESULT_TIMEOUT = float(os.getenv("DEVICE_RESULT_TIMEOUT", "20"))
+
+
 def _client() -> OpenAI:
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
@@ -264,6 +267,18 @@ def _manual_result_reply(
     return "\n".join(lines)
 
 
+def _timeout_reply(command: Dict[str, Any], timeout_seconds: float) -> str:
+    device_id = command.get("device_id")
+    device_label = _device_label_for_prompt(device_id) if device_id else "対象デバイス"
+    command_name = command.get("name", "不明なコマンド")
+    seconds = int(timeout_seconds) if timeout_seconds >= 1 else timeout_seconds
+    return (
+        f"{device_label} にコマンド『{command_name}』を送信しましたが、"
+        f"{seconds}秒以内に結果を受信できませんでした。\n"
+        "デバイスの状態を確認してから、もう一度お試しください。"
+    )
+
+
 def _finalize_reply_with_result(
     client: OpenAI,
     base_messages: List[Dict[str, str]],
@@ -380,7 +395,9 @@ def chat():
         if job_id is None:
             final_reply = (reply_message + "\n" if reply_message else "") + "(注意: デバイスにコマンドを送信できませんでした。)"
         else:
-            result = _await_device_result(validated_command["device_id"], job_id)
+            result = _await_device_result(
+                validated_command["device_id"], job_id, timeout=DEVICE_RESULT_TIMEOUT
+            )
             if result:
                 final_reply = _finalize_reply_with_result(
                     client,
@@ -390,13 +407,7 @@ def chat():
                     result,
                 )
             else:
-                timeout_message = (
-                    "デバイスからの応答を待ちましたが、時間内に結果を取得できませんでした。"
-                )
-                if reply_message:
-                    final_reply = f"{reply_message}\n({timeout_message})"
-                else:
-                    final_reply = timeout_message
+                final_reply = _timeout_reply(validated_command, DEVICE_RESULT_TIMEOUT)
 
     return jsonify({"reply": final_reply})
 
