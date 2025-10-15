@@ -362,8 +362,8 @@ def read_temperature(samples: int = 16, sample_interval_sec: float = 0.01):
             time.sleep(sample_interval_sec)
     vtemp = volts_sum / samples
     temp_c = 27.0 - (vtemp - 0.706) / 0.001721
-    print("[temp] est -> {:.2f} °C (avg of {})".format(temp_c, samples))
-    return temp_c
+    print("[temp] est -> {:.2f} C (avg of {})".format(temp_c, samples))
+    return round(temp_c, 2)
 
 
 # 関数ディスパッチテーブル
