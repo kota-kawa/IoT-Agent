@@ -533,19 +533,47 @@ def post_result():
     raw_device_id = payload.get("device_id") if isinstance(payload, dict) else None
 
     query_device_id = request.args.get("device_id", "")
-    candidate_ids: List[str] = []
-    if isinstance(raw_device_id, str) and raw_device_id.strip():
-        cleaned = raw_device_id.strip()
-        if cleaned not in candidate_ids:
-            candidate_ids.append(cleaned)
-    if isinstance(query_device_id, str) and query_device_id.strip():
-        cleaned = query_device_id.strip()
-        if cleaned not in candidate_ids:
-            candidate_ids.append(cleaned)
+    query_job_id = request.args.get("job_id", "")
+    header_device_id = request.headers.get("X-Device-ID", "")
+
+    provided_ids: List[str] = []
+
+    def _normalise_candidate(value: Any) -> Optional[str]:
+        if isinstance(value, str):
+            cleaned = value.strip()
+            if cleaned:
+                return cleaned
+        return None
+
+    for candidate in (
+        raw_device_id,
+        query_device_id,
+        header_device_id,
+    ):
+        cleaned = _normalise_candidate(candidate)
+        if cleaned and cleaned not in provided_ids:
+            provided_ids.append(cleaned)
+
+    if len(provided_ids) > 1:
+        return (
+            jsonify({"error": "conflicting device_id values"}),
+            400,
+        )
+
+    if not isinstance(job_id, str) or not job_id:
+        cleaned_job_id = _normalise_candidate(query_job_id)
+        if cleaned_job_id:
+            job_id = cleaned_job_id
+
+    candidate_ids: List[str] = [*provided_ids]
+
+    fallback_id = None
     if isinstance(job_id, str) and job_id:
-        fallback_id = _PENDING_JOBS.get(job_id)
-        if isinstance(fallback_id, str) and fallback_id.strip():
-            candidate_ids.append(fallback_id.strip())
+        mapped_id = _PENDING_JOBS.get(job_id)
+        if isinstance(mapped_id, str) and mapped_id.strip():
+            fallback_id = mapped_id.strip()
+            if fallback_id not in candidate_ids:
+                candidate_ids.append(fallback_id)
 
     resolved_device: Optional[DeviceState] = None
     for candidate in candidate_ids:
@@ -553,10 +581,19 @@ def post_result():
         if resolved_device:
             break
 
+    if not resolved_device and len(_DEVICES) == 1:
+        # Some edge device firmwares omit the device_id on the result endpoint.
+        # When there is only a single registered device we can safely assume it
+        # is the source of the result so that measurements are not dropped.
+        resolved_device = next(iter(_DEVICES.values()))
+
     if not resolved_device:
         if candidate_ids:
             return jsonify({"error": "device not registered"}), 404
         return jsonify({"error": "device_id is required"}), 400
+
+    if fallback_id and provided_ids and fallback_id != provided_ids[0]:
+        return jsonify({"error": "job_id does not belong to device"}), 409
 
     device = resolved_device
 
