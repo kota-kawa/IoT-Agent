@@ -532,9 +532,16 @@ def post_result():
     job_id = payload.get("job_id") if isinstance(payload, dict) else None
     raw_device_id = payload.get("device_id") if isinstance(payload, dict) else None
 
+    query_device_id = request.args.get("device_id", "")
     candidate_ids: List[str] = []
     if isinstance(raw_device_id, str) and raw_device_id.strip():
-        candidate_ids.append(raw_device_id.strip())
+        cleaned = raw_device_id.strip()
+        if cleaned not in candidate_ids:
+            candidate_ids.append(cleaned)
+    if isinstance(query_device_id, str) and query_device_id.strip():
+        cleaned = query_device_id.strip()
+        if cleaned not in candidate_ids:
+            candidate_ids.append(cleaned)
     if isinstance(job_id, str) and job_id:
         fallback_id = _PENDING_JOBS.get(job_id)
         if isinstance(fallback_id, str) and fallback_id.strip():
@@ -566,6 +573,7 @@ def post_result():
         "stderr": payload.get("stderr"),
         "error": payload.get("error"),
         "ts": payload.get("ts"),
+        "device_id": device.device_id,
     }
     device.last_result = result_record
     if job_id:
