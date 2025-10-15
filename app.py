@@ -521,23 +521,37 @@ def next_job():
 
 @app.post("/pico-w/result")
 def post_result():
-    payload = request.get_json(silent=True) or {}
-    job_id = payload.get("job_id")
-    device_id = payload.get("device_id")
-    if not isinstance(device_id, str) or not device_id.strip():
-        if isinstance(job_id, str) and job_id:
-            device_id = _PENDING_JOBS.get(job_id)
-        else:
-            device_id = None
+    payload = request.get_json(silent=True)
+    if payload is None:
+        raw_body = request.get_data(cache=False, as_text=True) or ""
+        try:
+            payload = json.loads(raw_body) if raw_body else {}
+        except json.JSONDecodeError:
+            payload = {}
 
-    if not isinstance(device_id, str) or not device_id.strip():
+    job_id = payload.get("job_id") if isinstance(payload, dict) else None
+    raw_device_id = payload.get("device_id") if isinstance(payload, dict) else None
+
+    candidate_ids: List[str] = []
+    if isinstance(raw_device_id, str) and raw_device_id.strip():
+        candidate_ids.append(raw_device_id.strip())
+    if isinstance(job_id, str) and job_id:
+        fallback_id = _PENDING_JOBS.get(job_id)
+        if isinstance(fallback_id, str) and fallback_id.strip():
+            candidate_ids.append(fallback_id.strip())
+
+    resolved_device: Optional[DeviceState] = None
+    for candidate in candidate_ids:
+        resolved_device = _DEVICES.get(candidate)
+        if resolved_device:
+            break
+
+    if not resolved_device:
+        if candidate_ids:
+            return jsonify({"error": "device not registered"}), 404
         return jsonify({"error": "device_id is required"}), 400
 
-    cleaned_device_id = device_id.strip()
-
-    device = _DEVICES.get(cleaned_device_id)
-    if not device:
-        return jsonify({"error": "device not registered"}), 404
+    device = resolved_device
 
     device.last_seen = time.time()
     if isinstance(job_id, str) and job_id:
