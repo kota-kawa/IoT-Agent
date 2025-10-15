@@ -267,10 +267,18 @@ def http_get_text(url: str, timeout: int = HTTP_TIMEOUT_SEC):
         return status, text
 
 
-def http_post_json(url: str, obj, timeout: int = HTTP_TIMEOUT_SEC):
+def http_post_json(url: str, obj, timeout: int = HTTP_TIMEOUT_SEC, extra_headers: dict = None):
     """POST JSON -> (status:int, text:str)"""
     payload = json.dumps(obj)
     headers = {"Content-Type": "application/json"}
+    if extra_headers:
+        for key, value in extra_headers.items():
+            try:
+                if value is None:
+                    continue
+                headers[str(key)] = str(value)
+            except Exception:
+                continue
     # Try urequests
     try:
         import urequests as requests  # type: ignore
@@ -470,7 +478,13 @@ def post_result(base_url: str, device_id: str, job_id: str, ok: bool, return_val
         "stderr": stderr_text or "",
         "ts": time.ticks_ms() & 0x7fffffff,
     }
-    status, text = http_post_json(url, payload, timeout=HTTP_TIMEOUT_SEC)
+    extra_headers = {"X-Device-ID": device_id}
+    status, text = http_post_json(
+        url,
+        payload,
+        timeout=HTTP_TIMEOUT_SEC,
+        extra_headers=extra_headers,
+    )
     print("[agent] result status {}".format(status))
     if text:
         preview = text if len(text) <= HTTP_BODY_PREVIEW_LEN else text[:HTTP_BODY_PREVIEW_LEN] + "\n...[truncated]"
