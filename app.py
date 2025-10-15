@@ -32,6 +32,7 @@ class DeviceState:
 
 
 _DEVICES: Dict[str, DeviceState] = {}
+_PENDING_JOBS: Dict[str, str] = {}
 
 
 def _client() -> OpenAI:
@@ -106,6 +107,7 @@ def _enqueue_device_command(device_id: str, command: Dict[str, Any]) -> Optional
     job_id = uuid.uuid4().hex
     device.job_queue.append({"job_id": job_id, "command": command})
     device.last_seen = time.time()
+    _PENDING_JOBS[job_id] = device_id
     return job_id
 
 
@@ -117,6 +119,7 @@ def _await_device_result(device_id: str, job_id: str, timeout: float = 20.0) -> 
             return None
         result = device.job_results.pop(job_id, None)
         if result:
+            _PENDING_JOBS.pop(job_id, None)
             return result
         time.sleep(0.2)
     return None
@@ -508,16 +511,28 @@ def next_job():
 @app.post("/pico-w/result")
 def post_result():
     payload = request.get_json(silent=True) or {}
+    job_id = payload.get("job_id")
     device_id = payload.get("device_id")
+    if not isinstance(device_id, str) or not device_id.strip():
+        if isinstance(job_id, str) and job_id:
+            device_id = _PENDING_JOBS.get(job_id)
+        else:
+            device_id = None
+
     if not isinstance(device_id, str) or not device_id.strip():
         return jsonify({"error": "device_id is required"}), 400
 
-    device = _DEVICES.get(device_id.strip())
+    cleaned_device_id = device_id.strip()
+
+    device = _DEVICES.get(cleaned_device_id)
     if not device:
         return jsonify({"error": "device not registered"}), 404
 
     device.last_seen = time.time()
-    job_id = payload.get("job_id")
+    if isinstance(job_id, str) and job_id:
+        _PENDING_JOBS.pop(job_id, None)
+    else:
+        job_id = None
     result_record = {
         "job_id": job_id,
         "ok": bool(payload.get("ok")),
@@ -528,7 +543,7 @@ def post_result():
         "ts": payload.get("ts"),
     }
     device.last_result = result_record
-    if isinstance(job_id, str) and job_id:
+    if job_id:
         device.job_results[job_id] = dict(result_record)
 
     return jsonify({"status": "ack"})
