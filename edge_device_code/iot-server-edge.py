@@ -457,7 +457,10 @@ def fetch_next_job(base_url: str, device_id: str):
 
 
 def post_result(base_url: str, device_id: str, job_id: str, ok: bool, return_value, stdout_text: str, stderr_text: str):
-    url = base_url + RESULT_PATH
+    # サーバー側で device_id をクエリパラメーターとして参照するケースがあり、
+    # ボディのみでは 400 ("device_id is required") が返る状況が確認された。
+    # 念のためクエリにも同じ値を付与して送信し、互換性を高める。
+    url = "{}{}?device_id={}".format(base_url, RESULT_PATH, device_id)
     payload = {
         "device_id": device_id,
         "job_id": job_id,
