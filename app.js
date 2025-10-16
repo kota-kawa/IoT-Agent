@@ -311,6 +311,16 @@ function renderDevices(){
     renameBtn.textContent = "✏️";
     tools.appendChild(renameBtn);
 
+    const deleteBtn = document.createElement("button");
+    deleteBtn.type = "button";
+    deleteBtn.className = "iconbtn iconbtn--danger";
+    deleteBtn.dataset.action = "delete";
+    deleteBtn.dataset.deviceId = device.device_id;
+    deleteBtn.title = "デバイスを削除";
+    deleteBtn.setAttribute("aria-label", `${ariaLabel} を削除`);
+    deleteBtn.textContent = "🗑️";
+    tools.appendChild(deleteBtn);
+
     head.appendChild(tools);
     card.appendChild(head);
 
@@ -390,6 +400,29 @@ async function updateDeviceDisplayName(deviceId, displayName){
   }
 
   return data?.device || null;
+}
+
+async function deleteDevice(deviceId){
+  const res = await fetch(`/api/devices/${encodeURIComponent(deviceId)}`, {
+    method: "DELETE",
+  });
+
+  const text = await res.text();
+  let data = null;
+  if(text){
+    try{
+      data = JSON.parse(text);
+    }catch(_err){
+      // ignore
+    }
+  }
+
+  if(!res.ok){
+    const message = (data && (data.error || data.message)) || text || `HTTP ${res.status}`;
+    throw new Error(message);
+  }
+
+  return data;
 }
 
 /** ---------- デバイス登録モーダル ---------- */
@@ -592,38 +625,58 @@ if(gridEl){
     if(!target) return;
     const action = target.dataset.action;
     const deviceId = target.dataset.deviceId;
-    if(action !== "rename" || !deviceId) return;
+    if(!deviceId) return;
     event.preventDefault();
 
-    const device = devices.find((d) => d.device_id === deviceId);
-    const currentName = device?.meta?.display_name && typeof device.meta.display_name === "string"
-      ? device.meta.display_name
-      : "";
-    const promptLabel = currentName || displayName(device) || deviceId;
-    const newName = window.prompt(`「${promptLabel}」の新しい名前を入力してください。`, currentName);
-    if(newName === null) return;
+    if(action === "rename"){
+      const device = devices.find((d) => d.device_id === deviceId);
+      const currentName = device?.meta?.display_name && typeof device.meta.display_name === "string"
+        ? device.meta.display_name
+        : "";
+      const promptLabel = currentName || displayName(device) || deviceId;
+      const newName = window.prompt(`「${promptLabel}」の新しい名前を入力してください。`, currentName);
+      if(newName === null) return;
 
-    const trimmed = newName.trim();
-    if(trimmed === (currentName || "").trim()){
+      const trimmed = newName.trim();
+      if(trimmed === (currentName || "").trim()){
+        return;
+      }
+      try{
+        const updatedDevice = await updateDeviceDisplayName(deviceId, trimmed);
+        if(updatedDevice){
+          const idx = devices.findIndex((d) => d.device_id === deviceId);
+          if(idx !== -1){
+            devices[idx] = updatedDevice;
+          }
+          const label = displayName(updatedDevice) || updatedDevice.device_id;
+          renderDevices();
+          showRegisterNotice(`デバイス名を「${label}」に更新しました。`, "success");
+          fetchDevices({ silent: true });
+        }else{
+          throw new Error("サーバーから更新後のデバイス情報が取得できませんでした。");
+        }
+      }catch(err){
+        const message = err instanceof Error ? err.message : String(err);
+        showRegisterNotice(`名前の更新に失敗しました: ${message}`, "error");
+      }
       return;
     }
-    try{
-      const updatedDevice = await updateDeviceDisplayName(deviceId, trimmed);
-      if(updatedDevice){
-        const idx = devices.findIndex((d) => d.device_id === deviceId);
-        if(idx !== -1){
-          devices[idx] = updatedDevice;
-        }
-        const label = displayName(updatedDevice) || updatedDevice.device_id;
+
+    if(action === "delete"){
+      const device = devices.find((d) => d.device_id === deviceId);
+      const label = displayName(device) || deviceId;
+      const confirmed = window.confirm(`デバイス「${label}」を削除しますか？\nジョブキューや履歴も失われます。`);
+      if(!confirmed) return;
+      try{
+        await deleteDevice(deviceId);
+        devices = devices.filter((d) => d.device_id !== deviceId);
         renderDevices();
-        showRegisterNotice(`デバイス名を「${label}」に更新しました。`, "success");
+        showRegisterNotice(`デバイス「${label}」を削除しました。`, "success");
         fetchDevices({ silent: true });
-      }else{
-        throw new Error("サーバーから更新後のデバイス情報が取得できませんでした。");
+      }catch(err){
+        const message = err instanceof Error ? err.message : String(err);
+        showRegisterNotice(`デバイスの削除に失敗しました: ${message}`, "error");
       }
-    }catch(err){
-      const message = err instanceof Error ? err.message : String(err);
-      showRegisterNotice(`名前の更新に失敗しました: ${message}`, "error");
     }
   });
 }
