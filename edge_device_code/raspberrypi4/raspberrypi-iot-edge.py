@@ -594,7 +594,10 @@ def main() -> None:
     device_id = _load_device_id()
     llm = _create_llm()
 
-    if not _register_device(session, device_id):
+    while True:
+        if _register_device(session, device_id):
+            break
+
         logging.error("Unable to register device. Retrying in 10 seconds...")
         time.sleep(10)
 
