@@ -33,6 +33,7 @@ class DeviceState:
     last_seen: float = field(default_factory=time.time)
     last_result: Optional[Dict[str, Any]] = None
     registered_at: float = field(default_factory=time.time)
+    approved: bool = False
 
 
 _DEVICES: Dict[str, DeviceState] = {}
@@ -188,6 +189,7 @@ def _serialize_device(device: DeviceState) -> Dict[str, Any]:
         "last_seen": device.last_seen,
         "registered_at": device.registered_at,
         "last_result": device.last_result,
+        "approved": device.approved,
     }
 
 
@@ -608,6 +610,9 @@ def register_device():
     cleaned_id = device_id.strip()
     now = time.time()
     metadata = meta if isinstance(meta, dict) else {}
+    manual_registration = metadata.get("registered_via") == "dashboard" or bool(
+        payload.get("approved")
+    )
 
     display_name = metadata.get("display_name") if isinstance(metadata, dict) else None
     if isinstance(display_name, str):
@@ -620,18 +625,56 @@ def register_device():
         metadata.pop("display_name", None)
 
     existing = _DEVICES.get(cleaned_id)
+
     if existing:
+        if not existing.approved and not manual_registration:
+            return (
+                jsonify(
+                    {
+                        "error": "device not approved",
+                        "message": "Device must be registered from the dashboard before connecting.",
+                    }
+                ),
+                403,
+            )
+
         existing.capabilities = capabilities
-        existing.meta = metadata
+
+        if not isinstance(existing.meta, dict):
+            existing.meta = {}
+
+        incoming_meta = metadata.copy()
+        if manual_registration:
+            if "display_name" not in incoming_meta:
+                existing.meta.pop("display_name", None)
+        elif "display_name" in incoming_meta:
+            incoming_meta.pop("display_name", None)
+
+        existing.meta.update(incoming_meta)
         existing.last_seen = now
+        if manual_registration:
+            existing.approved = True
+            existing.registered_at = existing.registered_at or now
         status = "updated"
         device_state = existing
     else:
+        if not manual_registration:
+            return (
+                jsonify(
+                    {
+                        "error": "device not approved",
+                        "message": "Device must be registered from the dashboard before connecting.",
+                    }
+                ),
+                403,
+            )
+
         device_state = DeviceState(
             device_id=cleaned_id,
             capabilities=capabilities,
             meta=metadata,
             last_seen=now,
+            approved=True,
         )
         _DEVICES[cleaned_id] = device_state
         status = "registered"
