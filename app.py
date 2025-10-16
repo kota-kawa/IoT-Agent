@@ -200,7 +200,7 @@ def _structured_llm_prompt(messages: List[Dict[str, str]]) -> Dict[str, Any]:
     )
 
     return {
-        "model": "gpt-5",
+        "model": "gpt-5-mini-2025-08-07",
         "input": [
             {"role": "system", "content": system_prompt},
             {"role": "system", "content": context_message},
