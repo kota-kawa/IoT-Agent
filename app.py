@@ -75,6 +75,47 @@ def _agent_device() -> Optional[DeviceState]:
     return None
 
 
+def _describe_device_role(device: DeviceState) -> List[str]:
+    lines: List[str] = []
+    meta = device.meta if isinstance(device.meta, dict) else {}
+    raw_role = None
+    if isinstance(meta, dict):
+        candidate = meta.get("role") or meta.get("device_role")
+        if isinstance(candidate, str) and candidate.strip():
+            raw_role = candidate.strip()
+
+    if raw_role:
+        lines.append(f"  Role tag: {raw_role}")
+        if raw_role.lower() == AGENT_ROLE_VALUE:
+            lines.append(
+                "  Role details: High-capability automation agent for "
+                "multi-step or conversational instructions."
+            )
+    elif _device_is_agent(device):
+        lines.append(
+            "  Role details: Treated as an automation agent because it exposes "
+            "the agent_instruction capability."
+        )
+    else:
+        lines.append(
+            "  Role details: Peripheral or sensor device. Only execute the "
+            "explicit capabilities listed below."
+        )
+
+    action_catalog = meta.get("action_catalog") if isinstance(meta, dict) else None
+    if isinstance(action_catalog, list):
+        action_names = [
+            str(entry.get("name")).strip()
+            for entry in action_catalog
+            if isinstance(entry, dict) and entry.get("name")
+        ]
+        filtered = [name for name in action_names if name]
+        if filtered:
+            lines.append("  Agent predefined actions: " + ", ".join(filtered))
+
+    return lines
+
+
 def _build_device_context() -> str:
     if not _DEVICES:
         return "No devices are currently registered."
@@ -85,6 +126,7 @@ def _build_device_context() -> str:
         display_name = device.meta.get("display_name") if isinstance(device.meta, dict) else None
         if isinstance(display_name, str) and display_name.strip():
             lines.append(f"  Friendly name: {display_name.strip()}")
+        lines.extend(_describe_device_role(device))
         if device.meta:
             lines.append(f"  Meta: {json.dumps(device.meta, ensure_ascii=False)}")
         lines.append(
@@ -154,9 +196,9 @@ def _await_device_result(device_id: str, job_id: str, timeout: float = 120.0) ->
     return None
 
 
-def _validate_device_command(command: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def _validate_device_command(command: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     if not isinstance(command, dict):
-        return None
+        return None, "device_command の形式が不正なため処理を中止しました。"
 
     raw_device_id = command.get("device_id")
     device_id: Optional[str] = None
@@ -165,25 +207,43 @@ def _validate_device_command(command: Dict[str, Any]) -> Optional[Dict[str, Any]
     elif len(_DEVICES) == 1:
         device_id = _first_device_id()
 
-    if not device_id or device_id not in _DEVICES:
-        return None
+    if not device_id:
+        if _DEVICES:
+            return None, "複数のデバイスが登録されているため、device_id を指定できないコマンドは実行しません。"
+        return None, "実行可能なデバイスが登録されていません。"
+
+    if device_id not in _DEVICES:
+        return None, f"不明な device_id '{device_id}' が指定されたため処理を中止しました。"
 
     name = command.get("name")
     if not isinstance(name, str) or not name.strip():
-        return None
+        return None, "device_command の name が空です。"
 
     args = command.get("args")
     if args is None:
         args = {}
     if not isinstance(args, dict):
-        return None
+        return None, "device_command の args はオブジェクトである必要があります。"
+
+    validated_name = name.strip()
+    device = _DEVICES.get(device_id)
+    capability_names = {
+        str(cap.get("name")).strip()
+        for cap in (device.capabilities if device else [])
+        if isinstance(cap, dict) and cap.get("name")
+    }
+    if capability_names and validated_name not in capability_names:
+        return (
+            None,
+            f"{device_id} は '{validated_name}' という機能をサポートしていないため実行を中止しました。",
+        )
 
     validated = {
         "device_id": device_id,
-        "name": name.strip(),
+        "name": validated_name,
         "args": args,
     }
-    return validated
+    return validated, None
 
 
 def _serialize_device(device: DeviceState) -> Dict[str, Any]:
@@ -223,7 +283,14 @@ def _structured_llm_prompt(messages: List[Dict[str, str]]) -> Dict[str, Any]:
         "be either null or an object with the keys 'device_id', 'name', "
         "and 'args'. Do not wrap the JSON inside code fences. If no "
         "device action is required, set 'device_command' to null. Only "
-        "use device IDs and capability names provided in the context."
+        "use device IDs and capability names provided in the context. "
+        "When an action is required and multiple devices exist, you MUST "
+        "select the single most appropriate device_id by comparing the "
+        "roles and capabilities described. Never omit 'device_id' or use "
+        "an unknown value. If the correct device cannot be determined, "
+        "set 'device_command' to null and ask the user to clarify which "
+        "device should be used. Prefer devices tagged with the "
+        f"'{AGENT_ROLE_VALUE}' role for complex or conversational tasks."
     )
 
     context_message = (
@@ -548,9 +615,16 @@ def _chat_via_legacy(messages: List[Dict[str, str]]) -> Tuple[Dict[str, Any], in
         reply_message = parsed_response.get("raw", "").strip()
 
     device_command = parsed_response.get("device_command")
-    validated_command = _validate_device_command(device_command) if device_command else None
+    if device_command:
+        validated_command, validation_error = _validate_device_command(device_command)
+    else:
+        validated_command, validation_error = (None, None)
 
     final_reply = reply_message
+
+    if validation_error:
+        notice = f"(システム通知: {validation_error})"
+        final_reply = (reply_message + "\n" if reply_message else "") + notice
 
     if validated_command:
         final_reply = _execute_standard_device_command(
@@ -628,10 +702,17 @@ def chat():
             reply_message = parsed_response.get("raw", "").strip()
 
         device_command = parsed_response.get("device_command")
-        validated_command = _validate_device_command(device_command) if device_command else None
+        if device_command:
+            validated_command, validation_error = _validate_device_command(device_command)
+        else:
+            validated_command, validation_error = (None, None)
 
         payload: Dict[str, Any] = {"reply": reply_message}
         status: int = 200
+
+        if validation_error:
+            notice = f"(システム通知: {validation_error})"
+            payload["reply"] = (reply_message + "\n" if reply_message else "") + notice
 
         if validated_command:
             target_device = _DEVICES.get(validated_command["device_id"])
