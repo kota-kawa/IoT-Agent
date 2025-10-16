@@ -113,6 +113,8 @@ USER_AGENT = "PicoW-MicroPython-Agent/1.1"
 HTTP_BODY_PREVIEW_LEN = 512
 HTTP_TIMEOUT_SEC = 15
 _RECV_CHUNK = 1024
+RESULT_MAX_ATTEMPTS = 4
+RESULT_RETRY_BASE_DELAY = 2
 
 # =========================
 # ハードウェア初期化
@@ -464,7 +466,18 @@ def fetch_next_job(base_url: str, device_id: str):
         return None
 
 
-def post_result(base_url: str, device_id: str, job_id: str, ok: bool, return_value, stdout_text: str, stderr_text: str):
+def post_result(
+    base_url: str,
+    device_id: str,
+    job_id: str,
+    ok: bool,
+    return_value,
+    stdout_text: str,
+    stderr_text: str,
+    *,
+    max_attempts: int = RESULT_MAX_ATTEMPTS,
+    backoff_base: int = RESULT_RETRY_BASE_DELAY,
+) -> bool:
     # サーバー側で device_id をクエリパラメーターとして参照するケースがあり、
     # ボディのみでは 400 ("device_id is required") が返る状況が確認された。
     # 念のためクエリにも同じ値を付与して送信し、互換性を高める。
@@ -479,17 +492,31 @@ def post_result(base_url: str, device_id: str, job_id: str, ok: bool, return_val
         "ts": time.ticks_ms() & 0x7fffffff,
     }
     extra_headers = {"X-Device-ID": device_id}
-    status, text = http_post_json(
-        url,
-        payload,
-        timeout=HTTP_TIMEOUT_SEC,
-        extra_headers=extra_headers,
-    )
-    print("[agent] result status {}".format(status))
-    if text:
-        preview = text if len(text) <= HTTP_BODY_PREVIEW_LEN else text[:HTTP_BODY_PREVIEW_LEN] + "\n...[truncated]"
-        print("[agent] result resp preview:\n" + preview)
-    return status
+    attempt = 0
+    while attempt < max_attempts:
+        attempt += 1
+        status, text = http_post_json(
+            url,
+            payload,
+            timeout=HTTP_TIMEOUT_SEC,
+            extra_headers=extra_headers,
+        )
+        print("[agent] result status {} (attempt {} of {})".format(status, attempt, max_attempts))
+        if text:
+            preview = text if len(text) <= HTTP_BODY_PREVIEW_LEN else text[:HTTP_BODY_PREVIEW_LEN] + "\n...[truncated]"
+            print("[agent] result resp preview:\n" + preview)
+
+        if 200 <= (status or 0) < 300:
+            return True
+
+        if attempt < max_attempts:
+            delay = backoff_base * (2 ** (attempt - 1))
+            if delay > 30:
+                delay = 30
+            print("[agent] result post failed (status {}). Retrying in {}s.".format(status, delay))
+            time.sleep(delay)
+
+    return False
 
 
 def _call_function_by_name(name: str, args: dict):
@@ -594,8 +621,41 @@ def agent_loop():
         )
 
     backoff = 0
+    pending_result = None
+    pending_attempt = 0
     while True:
         try:
+            if pending_result is not None:
+                job_id, ok, ret, out, err = pending_result
+                success = post_result(
+                    BASE_URL,
+                    device_id,
+                    job_id,
+                    ok,
+                    ret,
+                    out,
+                    err,
+                    max_attempts=1,
+                )
+                if success:
+                    pending_result = None
+                    pending_attempt = 0
+                    gc.collect()
+                    time.sleep(POLL_INTERVAL_SEC)
+                    continue
+                else:
+                    pending_attempt += 1
+                    delay = RESULT_RETRY_BASE_DELAY * (2 ** (pending_attempt - 1))
+                    if delay > 30:
+                        delay = 30
+                    print(
+                        "[agent] result delivery still failing for job {}. Retrying in {}s.".format(
+                            job_id, delay
+                        )
+                    )
+                    time.sleep(delay)
+                    continue
+
             job = fetch_next_job(BASE_URL, device_id)
             if not job:
                 if backoff > 0:
@@ -603,7 +663,8 @@ def agent_loop():
                 time.sleep(POLL_INTERVAL_SEC)
                 continue
 
-            job_id = job.get("job_id") or job.get("id") or ""
+            raw_job_id = job.get("job_id") or job.get("id")
+            job_id = str(raw_job_id) if raw_job_id is not None else ""
             cmd = job.get("command") or {}
             name = (cmd.get("name") or "").strip().lower()
             args = cmd.get("args") or {}
@@ -621,10 +682,10 @@ def agent_loop():
                 err = err[:HTTP_BODY_PREVIEW_LEN] + "\n...[truncated]"
 
             print("[agent] exec ok={} ret={}".format(ok, ret))
-            post_result(BASE_URL, device_id, job_id, ok, ret, out, err)
-
-            gc.collect()
-            time.sleep(POLL_INTERVAL_SEC)
+            backoff = 0
+            pending_result = (job_id, ok, ret, out, err)
+            pending_attempt = 0
+            continue
 
         except KeyboardInterrupt:
             print("\n[agent] interrupted by user.")
