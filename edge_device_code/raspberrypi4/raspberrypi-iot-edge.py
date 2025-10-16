@@ -45,7 +45,7 @@ DEVICE_ID_ENV = os.getenv("IOT_AGENT_DEVICE_ID")
 DEVICE_ID_PATH = Path(
     os.getenv(
         "IOT_AGENT_DEVICE_ID_PATH",
-        str(Path.home() / ".cache" / "iot-agent-device-id"),
+        str(Path(__file__).resolve().parent / "device_id.txt"),
     )
 )
 
