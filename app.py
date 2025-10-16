@@ -4,7 +4,7 @@ import time
 import uuid
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Any, Deque, Dict, List, Optional
+from typing import Any, Deque, Dict, List, Optional, Tuple
 
 from dotenv import load_dotenv as loadenv
 from flask import Flask, jsonify, redirect, request, session, url_for
@@ -17,6 +17,10 @@ app = Flask(__name__, static_folder=".", static_url_path="")
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "change-this-secret")
 
 APP_PASSWORD = "kkawagoe"
+
+AGENT_ROLE_VALUE = "raspberrypi-agent"
+AGENT_CAPABILITY_NAME = "agent_instruction"
+AGENT_COMMAND_NAME = "agent_instruction"
 
 
 @dataclass
@@ -47,6 +51,27 @@ def _client() -> OpenAI:
 
 def _first_device_id() -> Optional[str]:
     return next(iter(_DEVICES), None)
+
+
+def _device_is_agent(device: DeviceState) -> bool:
+    meta = device.meta if isinstance(device.meta, dict) else {}
+    role = meta.get("role") or meta.get("device_role")
+    if isinstance(role, str) and role.strip().lower() == AGENT_ROLE_VALUE:
+        return True
+
+    for capability in device.capabilities:
+        name = capability.get("name") if isinstance(capability, dict) else None
+        if isinstance(name, str) and name.strip().lower() == AGENT_CAPABILITY_NAME:
+            return True
+
+    return False
+
+
+def _agent_device() -> Optional[DeviceState]:
+    for device in _DEVICES.values():
+        if _device_is_agent(device):
+            return device
+    return None
 
 
 def _build_device_context() -> str:
@@ -229,6 +254,77 @@ def _call_llm_and_parse(client: OpenAI, messages: List[Dict[str, str]]) -> Dict[
     }
 
 
+def _call_llm_text(client: OpenAI, payload: Dict[str, Any]) -> str:
+    response = client.responses.create(**payload)
+    text = getattr(response, "output_text", "")
+    return text.strip()
+
+
+def _structured_agent_instruction_prompt(messages: List[Dict[str, str]]) -> Dict[str, Any]:
+    device_context = _build_device_context()
+    system_prompt = (
+        "You translate the latest user instruction into a single, simple "
+        "English sentence that describes the IoT task to perform. Use clear "
+        "imperative phrasing and avoid technical jargon. If no action is "
+        "required or the request cannot be fulfilled, respond with "
+        "'No action required.'"
+    )
+
+    guidance = (
+        "When referencing device capabilities, prefer the official names "
+        "listed in the available context. Keep the response under 25 words."
+    )
+
+    context_message = (
+        "Available device information:\n" + device_context
+        if device_context
+        else "No devices are currently registered."
+    )
+
+    return {
+        "model": "gpt-4.1-2025-04-14",
+        "input": [
+            {"role": "system", "content": system_prompt},
+            {"role": "system", "content": guidance},
+            {"role": "system", "content": context_message},
+            *messages,
+            {
+                "role": "system",
+                "content": "Reply with one English sentence and no additional formatting.",
+            },
+        ],
+    }
+
+
+def _structured_agent_followup_prompt(
+    base_messages: List[Dict[str, str]],
+    english_instruction: str,
+    result: Dict[str, Any],
+) -> Dict[str, Any]:
+    device_context = _build_device_context()
+    summary_instruction = (
+        "The edge device executed the request using the following simple "
+        f"English instruction: {english_instruction}\n"
+        f"Device response JSON: {_format_result_for_prompt(result)}\n"
+        "Write a concise Japanese message for the user that summarises the "
+        "outcome. Mention success or failure clearly and include key "
+        "details from the result when helpful. Do not request further "
+        "actions unless the user explicitly asked."
+    )
+
+    messages: List[Dict[str, str]] = [
+        {"role": "system", "content": "You are an assistant supporting IoT devices."},
+    ]
+    if device_context:
+        messages.append(
+            {"role": "system", "content": "Available device information:\n" + device_context}
+        )
+    messages.extend(base_messages)
+    messages.append({"role": "system", "content": summary_instruction})
+
+    return {"model": "gpt-4.1-2025-04-14", "input": messages}
+
+
 def _format_return_value_for_user(value: Any) -> str:
     if value is None:
         return "値は返されませんでした。"
@@ -244,7 +340,12 @@ def _manual_result_reply(
     device_label: str, command_name: str, result: Dict[str, Any]
 ) -> str:
     status = "成功" if result.get("ok") else "失敗"
-    lines = [f"{device_label} でコマンド『{command_name}』を実行しました。", f"結果: {status}"]
+    if command_name and any(ch.isspace() for ch in command_name):
+        command_label = f"指示「{command_name}」"
+    else:
+        command_label = f"コマンド『{command_name}』"
+
+    lines = [f"{device_label} で{command_label}を実行しました。", f"結果: {status}"]
 
     if result.get("job_id"):
         lines.append(f"ジョブID: {result.get('job_id')}")
@@ -271,9 +372,22 @@ def _timeout_reply(command: Dict[str, Any], timeout_seconds: float) -> str:
     device_id = command.get("device_id")
     device_label = _device_label_for_prompt(device_id) if device_id else "対象デバイス"
     command_name = command.get("name", "不明なコマンド")
+    instruction_text = None
+    args = command.get("args")
+    if isinstance(args, dict):
+        instruction_text = args.get("instruction")
+        if isinstance(instruction_text, str) and not instruction_text.strip():
+            instruction_text = None
+
+    if command_name == AGENT_COMMAND_NAME and instruction_text:
+        command_label = f"指示「{instruction_text.strip()}」"
+    elif isinstance(command_name, str) and any(ch.isspace() for ch in command_name):
+        command_label = f"指示「{command_name}」"
+    else:
+        command_label = f"コマンド『{command_name}』"
     seconds = int(timeout_seconds) if timeout_seconds >= 1 else timeout_seconds
     return (
-        f"{device_label} にコマンド『{command_name}』を送信しましたが、"
+        f"{device_label} に{command_label}を送信しましたが、"
         f"{seconds}秒以内に結果を受信できませんでした。\n"
         "デバイスの状態を確認してから、もう一度お試しください。"
     )
@@ -314,6 +428,108 @@ def _finalize_reply_with_result(
         return followup_reply.strip()
 
     return _manual_result_reply(device_label, command_name, result)
+
+
+def _chat_via_legacy(messages: List[Dict[str, str]]) -> Tuple[Dict[str, Any], int]:
+    try:
+        client = _client()
+        parsed_response = _call_llm_and_parse(client, messages)
+    except RuntimeError as exc:
+        return {"error": str(exc)}, 500
+    except Exception as exc:  # pragma: no cover - network/SDK errors
+        return {"error": str(exc)}, 500
+
+    reply_message = parsed_response.get("reply")
+    if not isinstance(reply_message, str):
+        reply_message = parsed_response.get("raw", "").strip()
+
+    device_command = parsed_response.get("device_command")
+    validated_command = _validate_device_command(device_command) if device_command else None
+
+    final_reply = reply_message
+
+    if validated_command:
+        command_payload = {
+            "name": validated_command["name"],
+            "args": validated_command["args"],
+        }
+        job_id = _enqueue_device_command(validated_command["device_id"], command_payload)
+        if job_id is None:
+            final_reply = (reply_message + "\n" if reply_message else "") + "(注意: デバイスにコマンドを送信できませんでした。)"
+        else:
+            result = _await_device_result(
+                validated_command["device_id"], job_id, timeout=DEVICE_RESULT_TIMEOUT
+            )
+            if result:
+                final_reply = _finalize_reply_with_result(
+                    client,
+                    messages,
+                    reply_message,
+                    validated_command,
+                    result,
+                )
+            else:
+                final_reply = _timeout_reply(validated_command, DEVICE_RESULT_TIMEOUT)
+
+    return {"reply": final_reply}, 200
+
+
+def _chat_via_agent(
+    agent: DeviceState, messages: List[Dict[str, str]]
+) -> Tuple[Dict[str, Any], int]:
+    try:
+        client = _client()
+    except RuntimeError as exc:
+        return {"error": str(exc)}, 500
+    except Exception as exc:  # pragma: no cover - network/SDK errors
+        return {"error": str(exc)}, 500
+
+    try:
+        english_instruction = _call_llm_text(
+            client, _structured_agent_instruction_prompt(messages)
+        )
+    except Exception as exc:  # pragma: no cover - network/SDK errors
+        return {"error": str(exc)}, 500
+
+    english_instruction = english_instruction.strip()
+    if not english_instruction:
+        return {"error": "Failed to build instruction for device."}, 500
+
+    command_payload = {
+        "name": AGENT_COMMAND_NAME,
+        "args": {"instruction": english_instruction},
+    }
+    job_id = _enqueue_device_command(agent.device_id, command_payload)
+    if job_id is None:
+        return {
+            "reply": "指示を送信できませんでした。デバイスの接続状態を確認してください。"
+        }, 200
+
+    result = _await_device_result(agent.device_id, job_id, timeout=DEVICE_RESULT_TIMEOUT)
+    if result:
+        try:
+            final_reply = _call_llm_text(
+                client,
+                _structured_agent_followup_prompt(messages, english_instruction, result),
+            )
+        except Exception:
+            final_reply = ""
+
+        if not final_reply:
+            final_reply = _manual_result_reply(
+                _device_label_for_prompt(agent.device_id),
+                english_instruction,
+                result,
+            )
+
+        return {"reply": final_reply}, 200
+
+    timeout_command = {
+        "device_id": agent.device_id,
+        "name": AGENT_COMMAND_NAME,
+        "args": {"instruction": english_instruction},
+    }
+    return {"reply": _timeout_reply(timeout_command, DEVICE_RESULT_TIMEOUT)}, 200
 
 
 @app.get("/")
@@ -369,47 +585,13 @@ def chat():
     if not formatted_messages or formatted_messages[-1]["role"] != "user":
         return jsonify({"error": "last message must be from user"}), 400
 
-    try:
-        client = _client()
-        parsed_response = _call_llm_and_parse(client, formatted_messages)
-    except RuntimeError as exc:
-        return jsonify({"error": str(exc)}), 500
-    except Exception as exc:  # pragma: no cover - network/SDK errors
-        return jsonify({"error": str(exc)}), 500
+    agent_device = _agent_device()
+    if agent_device:
+        payload, status = _chat_via_agent(agent_device, formatted_messages)
+    else:
+        payload, status = _chat_via_legacy(formatted_messages)
 
-    reply_message = parsed_response.get("reply")
-    if not isinstance(reply_message, str):
-        reply_message = parsed_response.get("raw", "").strip()
-
-    device_command = parsed_response.get("device_command")
-    validated_command = _validate_device_command(device_command) if device_command else None
-
-    final_reply = reply_message
-
-    if validated_command:
-        command_payload = {
-            "name": validated_command["name"],
-            "args": validated_command["args"],
-        }
-        job_id = _enqueue_device_command(validated_command["device_id"], command_payload)
-        if job_id is None:
-            final_reply = (reply_message + "\n" if reply_message else "") + "(注意: デバイスにコマンドを送信できませんでした。)"
-        else:
-            result = _await_device_result(
-                validated_command["device_id"], job_id, timeout=DEVICE_RESULT_TIMEOUT
-            )
-            if result:
-                final_reply = _finalize_reply_with_result(
-                    client,
-                    formatted_messages,
-                    reply_message,
-                    validated_command,
-                    result,
-                )
-            else:
-                final_reply = _timeout_reply(validated_command, DEVICE_RESULT_TIMEOUT)
-
-    return jsonify({"reply": final_reply})
+    return jsonify(payload), status
 
 
 @app.post("/pico-w/register")
