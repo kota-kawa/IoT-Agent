@@ -158,7 +158,13 @@ def _validate_device_command(command: Dict[str, Any]) -> Optional[Dict[str, Any]
     if not isinstance(command, dict):
         return None
 
-    device_id = command.get("device_id") or _first_device_id()
+    raw_device_id = command.get("device_id")
+    device_id: Optional[str] = None
+    if isinstance(raw_device_id, str) and raw_device_id.strip():
+        device_id = raw_device_id.strip()
+    elif len(_DEVICES) == 1:
+        device_id = _first_device_id()
+
     if not device_id or device_id not in _DEVICES:
         return None
 
@@ -802,26 +808,35 @@ def post_result():
             400,
         )
 
-    if not isinstance(job_id, str) or not job_id:
+    if not isinstance(job_id, str) or not job_id.strip():
         cleaned_job_id = _normalise_candidate(query_job_id)
         if cleaned_job_id:
             job_id = cleaned_job_id
+        else:
+            job_id = None
+    else:
+        job_id = job_id.strip()
 
-    candidate_ids: List[str] = [*provided_ids]
-
-    fallback_id = None
-    if isinstance(job_id, str) and job_id:
-        mapped_id = _PENDING_JOBS.get(job_id)
-        if isinstance(mapped_id, str) and mapped_id.strip():
-            fallback_id = mapped_id.strip()
-            if fallback_id not in candidate_ids:
-                candidate_ids.append(fallback_id)
+    mapped_device_id: Optional[str] = None
+    if job_id:
+        mapped = _PENDING_JOBS.get(job_id)
+        if isinstance(mapped, str) and mapped.strip():
+            mapped_device_id = mapped.strip()
 
     resolved_device: Optional[DeviceState] = None
-    for candidate in candidate_ids:
-        resolved_device = _DEVICES.get(candidate)
-        if resolved_device:
-            break
+    mismatch_resolved_via_job = False
+
+    if mapped_device_id and mapped_device_id in _DEVICES:
+        resolved_device = _DEVICES[mapped_device_id]
+        if provided_ids and mapped_device_id not in provided_ids:
+            mismatch_resolved_via_job = True
+
+    if not resolved_device:
+        for candidate in provided_ids:
+            device_candidate = _DEVICES.get(candidate)
+            if device_candidate:
+                resolved_device = device_candidate
+                break
 
     if not resolved_device and len(_DEVICES) == 1:
         # Some edge device firmwares omit the device_id on the result endpoint.
@@ -830,12 +845,17 @@ def post_result():
         resolved_device = next(iter(_DEVICES.values()))
 
     if not resolved_device:
-        if candidate_ids:
+        if provided_ids or job_id:
             return jsonify({"error": "device not registered"}), 404
         return jsonify({"error": "device_id is required"}), 400
 
-    if fallback_id and provided_ids and fallback_id != provided_ids[0]:
-        return jsonify({"error": "job_id does not belong to device"}), 409
+    if (
+        mapped_device_id
+        and mapped_device_id in _DEVICES
+        and resolved_device.device_id != mapped_device_id
+    ):
+        resolved_device = _DEVICES[mapped_device_id]
+        mismatch_resolved_via_job = True
 
     device = resolved_device
 
@@ -858,7 +878,11 @@ def post_result():
     if job_id:
         device.job_results[job_id] = dict(result_record)
 
-    return jsonify({"status": "ack"})
+    response_payload = {"status": "ack"}
+    if mismatch_resolved_via_job:
+        response_payload["warning"] = "device_id mismatch resolved via job_id"
+
+    return jsonify(response_payload)
 
 
 if __name__ == "__main__":
