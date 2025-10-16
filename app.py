@@ -438,6 +438,102 @@ def _finalize_reply_with_result(
     return _manual_result_reply(device_label, command_name, result)
 
 
+def _execute_standard_device_command(
+    client: OpenAI,
+    messages: List[Dict[str, str]],
+    initial_reply: str,
+    command: Dict[str, Any],
+) -> str:
+    command_payload = {
+        "name": command["name"],
+        "args": command["args"],
+    }
+    job_id = _enqueue_device_command(command["device_id"], command_payload)
+    if job_id is None:
+        notice = "(注意: デバイスにコマンドを送信できませんでした。)"
+        return (initial_reply + "\n" if initial_reply else "") + notice
+
+    result = _await_device_result(command["device_id"], job_id, timeout=DEVICE_RESULT_TIMEOUT)
+    if result:
+        return _finalize_reply_with_result(
+            client,
+            messages,
+            initial_reply,
+            command,
+            result,
+        )
+
+    return _timeout_reply(command, DEVICE_RESULT_TIMEOUT)
+
+
+def _execute_agent_device_command(
+    client: OpenAI,
+    agent: DeviceState,
+    messages: List[Dict[str, str]],
+    initial_reply: str,
+    command: Dict[str, Any],
+) -> Tuple[Dict[str, Any], int]:
+    args = command.get("args") if isinstance(command, dict) else {}
+    args_dict = args if isinstance(args, dict) else {}
+    raw_instruction = args_dict.get("instruction")
+    english_instruction: Optional[str] = None
+
+    if isinstance(raw_instruction, str) and raw_instruction.strip():
+        english_instruction = raw_instruction.strip()
+    else:
+        try:
+            english_instruction = _call_llm_text(
+                client, _structured_agent_instruction_prompt(messages)
+            ).strip()
+        except Exception as exc:  # pragma: no cover - network/SDK errors
+            return {"error": str(exc)}, 500
+
+        if not english_instruction:
+            return {"error": "Failed to build instruction for device."}, 500
+
+    command_args = dict(args_dict)
+    command_args["instruction"] = english_instruction
+
+    command_payload = {
+        "name": AGENT_COMMAND_NAME,
+        "args": command_args,
+    }
+
+    job_id = _enqueue_device_command(agent.device_id, command_payload)
+    if job_id is None:
+        failure_message = "指示を送信できませんでした。デバイスの接続状態を確認してください。"
+        combined = (initial_reply + "\n" if initial_reply else "") + failure_message
+        return {"reply": combined}, 200
+
+    result = _await_device_result(agent.device_id, job_id, timeout=DEVICE_RESULT_TIMEOUT)
+    if result:
+        try:
+            final_reply = _call_llm_text(
+                client,
+                _structured_agent_followup_prompt(messages, english_instruction, result),
+            )
+        except Exception:  # pragma: no cover - network/SDK errors
+            final_reply = ""
+
+        reply_text = final_reply.strip() if isinstance(final_reply, str) else ""
+        if not reply_text:
+            reply_text = _manual_result_reply(
+                _device_label_for_prompt(agent.device_id), english_instruction, result
+            )
+
+        return {"reply": reply_text}, 200
+
+    timeout_reply = _timeout_reply(
+        {
+            "device_id": agent.device_id,
+            "name": english_instruction,
+            "args": command_args,
+        },
+        DEVICE_RESULT_TIMEOUT,
+    )
+    return {"reply": timeout_reply}, 200
+
+
 def _chat_via_legacy(messages: List[Dict[str, str]]) -> Tuple[Dict[str, Any], int]:
     try:
         client = _client()
@@ -457,87 +553,11 @@ def _chat_via_legacy(messages: List[Dict[str, str]]) -> Tuple[Dict[str, Any], in
     final_reply = reply_message
 
     if validated_command:
-        command_payload = {
-            "name": validated_command["name"],
-            "args": validated_command["args"],
-        }
-        job_id = _enqueue_device_command(validated_command["device_id"], command_payload)
-        if job_id is None:
-            final_reply = (reply_message + "\n" if reply_message else "") + "(注意: デバイスにコマンドを送信できませんでした。)"
-        else:
-            result = _await_device_result(
-                validated_command["device_id"], job_id, timeout=DEVICE_RESULT_TIMEOUT
-            )
-            if result:
-                final_reply = _finalize_reply_with_result(
-                    client,
-                    messages,
-                    reply_message,
-                    validated_command,
-                    result,
-                )
-            else:
-                final_reply = _timeout_reply(validated_command, DEVICE_RESULT_TIMEOUT)
+        final_reply = _execute_standard_device_command(
+            client, messages, reply_message, validated_command
+        )
 
     return {"reply": final_reply}, 200
-
-
-def _chat_via_agent(
-    agent: DeviceState, messages: List[Dict[str, str]]
-) -> Tuple[Dict[str, Any], int]:
-    try:
-        client = _client()
-    except RuntimeError as exc:
-        return {"error": str(exc)}, 500
-    except Exception as exc:  # pragma: no cover - network/SDK errors
-        return {"error": str(exc)}, 500
-
-    try:
-        english_instruction = _call_llm_text(
-            client, _structured_agent_instruction_prompt(messages)
-        )
-    except Exception as exc:  # pragma: no cover - network/SDK errors
-        return {"error": str(exc)}, 500
-
-    english_instruction = english_instruction.strip()
-    if not english_instruction:
-        return {"error": "Failed to build instruction for device."}, 500
-
-    command_payload = {
-        "name": AGENT_COMMAND_NAME,
-        "args": {"instruction": english_instruction},
-    }
-    job_id = _enqueue_device_command(agent.device_id, command_payload)
-    if job_id is None:
-        return {
-            "reply": "指示を送信できませんでした。デバイスの接続状態を確認してください。"
-        }, 200
-
-    result = _await_device_result(agent.device_id, job_id, timeout=DEVICE_RESULT_TIMEOUT)
-    if result:
-        try:
-            final_reply = _call_llm_text(
-                client,
-                _structured_agent_followup_prompt(messages, english_instruction, result),
-            )
-        except Exception:
-            final_reply = ""
-
-        if not final_reply:
-            final_reply = _manual_result_reply(
-                _device_label_for_prompt(agent.device_id),
-                english_instruction,
-                result,
-            )
-
-        return {"reply": final_reply}, 200
-
-    timeout_command = {
-        "device_id": agent.device_id,
-        "name": AGENT_COMMAND_NAME,
-        "args": {"instruction": english_instruction},
-    }
-    return {"reply": _timeout_reply(timeout_command, DEVICE_RESULT_TIMEOUT)}, 200
 
 
 @app.get("/")
@@ -595,7 +615,39 @@ def chat():
 
     agent_device = _agent_device()
     if agent_device:
-        payload, status = _chat_via_agent(agent_device, formatted_messages)
+        try:
+            client = _client()
+            parsed_response = _call_llm_and_parse(client, formatted_messages)
+        except RuntimeError as exc:
+            return jsonify({"error": str(exc)}), 500
+        except Exception as exc:  # pragma: no cover - network/SDK errors
+            return jsonify({"error": str(exc)}), 500
+
+        reply_message = parsed_response.get("reply")
+        if not isinstance(reply_message, str):
+            reply_message = parsed_response.get("raw", "").strip()
+
+        device_command = parsed_response.get("device_command")
+        validated_command = _validate_device_command(device_command) if device_command else None
+
+        payload: Dict[str, Any] = {"reply": reply_message}
+        status: int = 200
+
+        if validated_command:
+            target_device = _DEVICES.get(validated_command["device_id"])
+            if target_device and _device_is_agent(target_device):
+                payload, status = _execute_agent_device_command(
+                    client,
+                    target_device,
+                    formatted_messages,
+                    reply_message,
+                    validated_command,
+                )
+            else:
+                final_reply = _execute_standard_device_command(
+                    client, formatted_messages, reply_message, validated_command
+                )
+                payload, status = {"reply": final_reply}, 200
     else:
         payload, status = _chat_via_legacy(formatted_messages)
 
