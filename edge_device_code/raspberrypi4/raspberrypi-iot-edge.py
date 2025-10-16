@@ -14,7 +14,7 @@ plain Raspberry Pi 4 without additional peripherals.
 import json
 import logging
 import os
-import shutil
+import random
 import sys
 import time
 import uuid
@@ -60,27 +60,24 @@ AGENT_ROLE_VALUE = "raspberrypi-agent"
 AGENT_COMMAND_NAME = "agent_instruction"
 
 SUPPORTED_ACTIONS: Dict[str, Dict[str, Any]] = {
+    "play_rock_paper_scissors": {
+        "description": "Play a round of rock-paper-scissors against the agent.",
+        "params": [
+            {
+                "name": "player_move",
+                "type": "string",
+                "required": False,
+                "description": "Player's move: rock, paper, or scissors (グー/チョキ/パーも可)",
+            }
+        ],
+    },
     "get_current_time": {
         "description": "Return the current local time in ISO 8601 format.",
         "params": [],
     },
-    "get_system_status": {
-        "description": "Report CPU load average, uptime, disk usage and memory information.",
+    "tell_joke": {
+        "description": "Tell one joke chosen from a predefined list.",
         "params": [],
-    },
-    "list_directory": {
-        "description": "List files and folders within a directory.",
-        "params": [
-            {"name": "path", "type": "string", "required": False, "default": "."},
-            {"name": "limit", "type": "integer", "required": False, "default": 20},
-        ],
-    },
-    "read_text_file": {
-        "description": "Read a UTF-8 text file and return its first characters.",
-        "params": [
-            {"name": "path", "type": "string", "required": True},
-            {"name": "max_chars", "type": "integer", "required": False, "default": 4000},
-        ],
     },
     "no_action": {
         "description": "Used when the request should not trigger a device operation.",
@@ -119,8 +116,8 @@ LLM_SYSTEM_PROMPT = (
     + ".\n"
     "If the instruction cannot be completed with the available actions, set action to 'no_action' and provide a short reason in 'message'.\n"
     "Examples:\n"
-    "Instruction: List the home folder.\n"
-    "{\"action\": \"list_directory\", \"parameters\": {\"path\": \"~/\"}}\n"
+    "Instruction: Let's play rock paper scissors, I choose rock.\n"
+    "{\"action\": \"play_rock_paper_scissors\", \"parameters\": {\"player_move\": \"rock\"}}\n"
     "Instruction: I just wanted to say thanks.\n"
     "{\"action\": \"no_action\", \"parameters\": {}, \"message\": \"Gratitude only.\"}"
 )
@@ -295,135 +292,93 @@ def _build_result_payload(
 # ==== Task execution =======================================================
 
 
-def _list_directory(params: Dict[str, Any]) -> Dict[str, Any]:
-    path = params.get("path") or "."
-    limit = params.get("limit", 20)
-    try:
-        limit = int(limit)
-    except Exception:
-        limit = 20
+JOKES = [
+    "Why don't scientists trust atoms? Because they make up everything!",
+    "I told my computer I needed a break, and it said 'No problem, I'll go to sleep.'",
+    "What's a robot's favorite snack? Computer chips!",
+    "プログラマーがハロウィンとクリスマスを間違える理由は？ 10月31日が12月25日だから。",
+    "ラズベリーパイが落ち込んでいたので聞いてみたら、『バッテリーが低いんだ』って。",
+]
 
-    if limit <= 0:
-        limit = 20
+_MOVE_ALIASES = {
+    "rock": "rock",
+    "stone": "rock",
+    "グー": "rock",
+    "gu": "rock",
+    "goo": "rock",
+    "paper": "paper",
+    "パー": "paper",
+    "paa": "paper",
+    "pa": "paper",
+    "hand": "paper",
+    "scissors": "scissors",
+    "チョキ": "scissors",
+    "choki": "scissors",
+    "scissor": "scissors",
+}
 
-    path_obj = Path(path).expanduser().resolve()
-    entries = []
-    limited = False
-    for entry in sorted(path_obj.iterdir(), key=lambda p: p.name):
-        if len(entries) >= limit:
-            limited = True
-            break
-        entry_type = "dir" if entry.is_dir() else "file" if entry.is_file() else "other"
-        entries.append({"name": entry.name, "type": entry_type})
+_VALID_MOVES = ("rock", "paper", "scissors")
+
+_WIN_MAP = {
+    "rock": "scissors",
+    "scissors": "paper",
+    "paper": "rock",
+}
+
+
+def _normalize_move(value: str) -> Optional[str]:
+    key = value.strip().lower()
+    return _MOVE_ALIASES.get(key)
+
+
+def _play_rock_paper_scissors(params: Dict[str, Any]) -> Dict[str, Any]:
+    move_value = params.get("player_move") if isinstance(params, dict) else None
+    if isinstance(move_value, str) and move_value.strip():
+        player_move = _normalize_move(move_value)
+        if not player_move:
+            raise ValueError("player_move must be rock, paper, scissors, or グー/チョキ/パー")
+        provided = True
+    else:
+        player_move = random.choice(_VALID_MOVES)
+        provided = False
+
+    agent_move = random.choice(_VALID_MOVES)
+    if player_move == agent_move:
+        outcome = "draw"
+    elif _WIN_MAP[player_move] == agent_move:
+        outcome = "win"
+    else:
+        outcome = "lose"
+
+    result_message = {
+        "win": "You win!",
+        "lose": "You lose!",
+        "draw": "It's a draw!",
+    }[outcome]
 
     return {
-        "path": str(path_obj),
-        "entries": entries,
-        "limited": limited,
+        "player_move": player_move,
+        "agent_move": agent_move,
+        "outcome": outcome,
+        "message": result_message,
+        "player_move_was_random": not provided,
     }
 
 
-def _read_text_file(params: Dict[str, Any]) -> Dict[str, Any]:
-    path_value = params.get("path")
-    if not isinstance(path_value, str) or not path_value.strip():
-        raise ValueError("path parameter is required")
-
-    max_chars = params.get("max_chars", 4000)
-    try:
-        max_chars = int(max_chars)
-    except Exception:
-        max_chars = 4000
-
-    if max_chars <= 0:
-        max_chars = 4000
-
-    file_path = Path(path_value).expanduser().resolve()
-    if not file_path.is_file():
-        raise FileNotFoundError(f"File not found: {file_path}")
-
-    content = file_path.read_text(encoding="utf-8", errors="replace")
-    truncated = False
-    if len(content) > max_chars:
-        content = content[:max_chars]
-        truncated = True
-
-    return {
-        "path": str(file_path),
-        "content": content,
-        "truncated": truncated,
-    }
-
-
-def _read_meminfo() -> Dict[str, int]:
-    info: Dict[str, int] = {}
-    try:
-        with open("/proc/meminfo", "r", encoding="utf-8") as handle:
-            for line in handle:
-                parts = line.split(":")
-                if len(parts) != 2:
-                    continue
-                key = parts[0].strip()
-                value_part = parts[1].strip().split()
-                if not value_part:
-                    continue
-                try:
-                    value = int(value_part[0])
-                except ValueError:
-                    continue
-                info[key] = value
-    except Exception:
-        pass
-    return info
-
-
-def _get_system_status() -> Dict[str, Any]:
-    status: Dict[str, Any] = {}
-
-    try:
-        load1, load5, load15 = os.getloadavg()
-        status["load_average"] = {"1m": load1, "5m": load5, "15m": load15}
-    except (OSError, AttributeError):
-        pass
-
-    try:
-        with open("/proc/uptime", "r", encoding="utf-8") as handle:
-            uptime_seconds = float(handle.read().split()[0])
-            status["uptime_seconds"] = uptime_seconds
-    except Exception:
-        pass
-
-    try:
-        disk = shutil.disk_usage("/")
-        status["disk_usage"] = {
-            "total": disk.total,
-            "used": disk.used,
-            "free": disk.free,
-        }
-    except Exception:
-        pass
-
-    meminfo = _read_meminfo()
-    if meminfo:
-        status["memory_kib"] = {
-            key: meminfo[key]
-            for key in ("MemTotal", "MemAvailable", "MemFree", "Buffers", "Cached")
-            if key in meminfo
-        }
-
-    return status
+def _tell_joke() -> Dict[str, Any]:
+    joke = random.choice(JOKES)
+    return {"joke": joke}
 
 
 def _execute_action(action: str, parameters: Dict[str, Any]) -> Tuple[bool, Any, Optional[str]]:
     try:
+        if action == "play_rock_paper_scissors":
+            return True, _play_rock_paper_scissors(parameters or {}), None
         if action == "get_current_time":
             now = datetime.now(timezone.utc).astimezone()
             return True, {"current_time": now.isoformat()}, None
-        if action == "get_system_status":
-            return True, _get_system_status(), None
-        if action == "list_directory":
-            return True, _list_directory(parameters or {}), None
-        if action == "read_text_file":
-            return True, _read_text_file(parameters or {}), None
+        if action == "tell_joke":
+            return True, _tell_joke(), None
         if action == "no_action":
             message = parameters.get("message") if isinstance(parameters, dict) else None
             return True, {"message": message or "No action executed."}, None
