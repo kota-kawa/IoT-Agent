@@ -168,6 +168,7 @@ def _register_device(session: requests.Session, device_id: str) -> bool:
     payload = {
         "device_id": device_id,
         "capabilities": CAPABILITIES,
+        "approved": True,
         "meta": {
             "display_name": DISPLAY_NAME,
             "role": AGENT_ROLE_VALUE,
