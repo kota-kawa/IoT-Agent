@@ -90,6 +90,16 @@ SUPPORTED_ACTIONS: Dict[str, Dict[str, Any]] = {
     },
 }
 
+ACTION_CATALOG = [
+    {
+        "name": action,
+        "description": spec["description"],
+        "params": spec.get("params", []),
+    }
+    for action, spec in SUPPORTED_ACTIONS.items()
+    if action != "no_action"
+]
+
 CAPABILITIES = [
     {
         "name": AGENT_COMMAND_NAME,
@@ -99,16 +109,6 @@ CAPABILITIES = [
         ],
     },
     *ACTION_CATALOG,
-]
-
-ACTION_CATALOG = [
-    {
-        "name": action,
-        "description": spec["description"],
-        "params": spec.get("params", []),
-    }
-    for action, spec in SUPPORTED_ACTIONS.items()
-    if action != "no_action"
 ]
 
 LLM_SYSTEM_PROMPT = (
