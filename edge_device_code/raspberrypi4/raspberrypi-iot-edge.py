@@ -32,7 +32,12 @@ LLAMA_THREADS = int(os.getenv("LLAMA_THREADS", "4"))
 LLAMA_CONTEXT = int(os.getenv("LLAMA_CONTEXT", "1024"))
 LLAMA_TEMPERATURE = float(os.getenv("LLAMA_TEMPERATURE", "0.2"))
 
-SERVER_BASE_URL = os.getenv("IOT_SERVER_URL", "http://localhost:5006").rstrip("/")
+# NOTE: The IoT server is deployed remotely, so we default to the public
+# endpoint. Set IOT_SERVER_URL to override when testing against a different
+# environment.
+SERVER_BASE_URL = os.getenv(
+    "IOT_SERVER_URL", "https://iot-agent.project-kk.com"
+).rstrip("/")
 REQUEST_TIMEOUT = float(os.getenv("IOT_AGENT_HTTP_TIMEOUT", "10"))
 POLL_INTERVAL = float(os.getenv("IOT_AGENT_POLL_INTERVAL", "2.0"))
 
