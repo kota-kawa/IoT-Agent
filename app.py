@@ -39,7 +39,7 @@ _DEVICES: Dict[str, DeviceState] = {}
 _PENDING_JOBS: Dict[str, str] = {}
 
 
-DEVICE_RESULT_TIMEOUT = float(os.getenv("DEVICE_RESULT_TIMEOUT", "20"))
+DEVICE_RESULT_TIMEOUT = float(os.getenv("DEVICE_RESULT_TIMEOUT", "120"))
 
 
 def _client() -> OpenAI:
@@ -139,7 +139,7 @@ def _enqueue_device_command(device_id: str, command: Dict[str, Any]) -> Optional
     return job_id
 
 
-def _await_device_result(device_id: str, job_id: str, timeout: float = 20.0) -> Optional[Dict[str, Any]]:
+def _await_device_result(device_id: str, job_id: str, timeout: float = 120.0) -> Optional[Dict[str, Any]]:
     deadline = time.time() + timeout
     while time.time() < deadline:
         device = _DEVICES.get(device_id)
