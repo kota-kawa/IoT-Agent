@@ -97,7 +97,8 @@ CAPABILITIES = [
         "params": [
             {"name": "instruction", "type": "string", "required": True},
         ],
-    }
+    },
+    *ACTION_CATALOG,
 ]
 
 ACTION_CATALOG = [
@@ -503,8 +504,11 @@ def _process_job(
 
     command = job.get("command") or {}
     args = command.get("args") if isinstance(command, dict) else {}
-    instruction_value = args.get("instruction") if isinstance(args, dict) else None
-    instruction = instruction_value.strip() if isinstance(instruction_value, str) else None
+    command_name = command.get("name") if isinstance(command, dict) else None
+    if isinstance(command_name, str):
+        command_name = command_name.strip()
+    else:
+        command_name = None
 
     job_device_id = job.get("device_id") or job.get("target_device_id")
     if job_device_id and job_device_id != device_id:
@@ -530,9 +534,9 @@ def _process_job(
     if not job_id:
         logging.error("Invalid job payload without a job_id: %s", job)
         return
-    if not instruction:
-        message = "Job is missing instruction text."
-        logging.error("Job %s missing instruction", job_id)
+    if not command_name:
+        message = "Job is missing a command name."
+        logging.error("Job %s missing command", job_id)
         payload = _build_result_payload(
             device_id=device_id,
             job_id=job_id,
@@ -544,15 +548,60 @@ def _process_job(
             error=message,
         )
         if not _post_result(session, payload):
-            logging.error("Failed to report missing instruction for job %s", job_id)
+            logging.error("Failed to report missing command for job %s", job_id)
         return
 
-    logging.info("Processing job %s with instruction: %s", job_id, instruction)
+    action: Optional[str] = None
+    parameters: Dict[str, Any] = {}
+    message: Optional[str] = None
+    if command_name == AGENT_COMMAND_NAME:
+        instruction_value = args.get("instruction") if isinstance(args, dict) else None
+        instruction = instruction_value.strip() if isinstance(instruction_value, str) else None
+        if not instruction:
+            message = "Job is missing instruction text."
+            logging.error("Job %s missing instruction", job_id)
+            payload = _build_result_payload(
+                device_id=device_id,
+                job_id=job_id,
+                ok=False,
+                action=None,
+                parameters=None,
+                message=message,
+                result=None,
+                error=message,
+            )
+            if not _post_result(session, payload):
+                logging.error("Failed to report missing instruction for job %s", job_id)
+            return
 
-    plan = _plan_from_instruction(llm, instruction)
-    action = plan.get("action", "no_action")
-    parameters = plan.get("parameters") if isinstance(plan.get("parameters"), dict) else {}
-    message = plan.get("message") if isinstance(plan.get("message"), str) else None
+        logging.info("Processing job %s with instruction: %s", job_id, instruction)
+
+        plan = _plan_from_instruction(llm, instruction)
+        action = plan.get("action", "no_action")
+        parameters = (
+            plan.get("parameters") if isinstance(plan.get("parameters"), dict) else {}
+        )
+        message = plan.get("message") if isinstance(plan.get("message"), str) else None
+    else:
+        action = command_name
+        parameters = args if isinstance(args, dict) else {}
+        logging.info("Processing job %s with direct action: %s", job_id, action)
+
+    if not isinstance(action, str) or not action:
+        error_message = "Resolved action is invalid."
+        payload = _build_result_payload(
+            device_id=device_id,
+            job_id=job_id,
+            ok=False,
+            action=None,
+            parameters=None,
+            message=error_message,
+            result=None,
+            error=error_message,
+        )
+        if not _post_result(session, payload):
+            logging.error("Failed to report invalid action for job %s", job_id)
+        return
 
     ok, return_value, error_message = _execute_action(action, parameters)
 
