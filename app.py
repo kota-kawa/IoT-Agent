@@ -682,6 +682,23 @@ def update_device_name(device_id: str):
     return jsonify({"status": "updated", "device": _serialize_device(device)})
 
 
+@app.delete("/api/devices/<device_id>")
+def delete_device(device_id: str):
+    cleaned_id = (device_id or "").strip()
+    if not cleaned_id:
+        return jsonify({"error": "device_id is required"}), 400
+
+    device = _DEVICES.pop(cleaned_id, None)
+    if not device:
+        return jsonify({"error": "device not registered"}), 404
+
+    stale_jobs = [job_id for job_id, mapped in _PENDING_JOBS.items() if mapped == cleaned_id]
+    for job_id in stale_jobs:
+        _PENDING_JOBS.pop(job_id, None)
+
+    return jsonify({"status": "deleted", "device_id": cleaned_id})
+
+
 @app.get("/pico-w/next")
 def next_job():
     device_id = request.args.get("device_id", "").strip()
