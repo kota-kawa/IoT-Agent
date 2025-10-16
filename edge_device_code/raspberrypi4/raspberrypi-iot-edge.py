@@ -227,15 +227,68 @@ def _poll_next_job(session: requests.Session, device_id: str) -> Optional[Dict[s
     return None
 
 
-def _post_result(session: requests.Session, payload: Dict[str, Any]) -> None:
-    try:
-        session.post(
-            _build_url(RESULT_PATH),
-            json=payload,
-            timeout=REQUEST_TIMEOUT,
-        )
-    except Exception as exc:
-        logging.error("Failed to post result: %s", exc)
+def _post_result(
+    session: requests.Session,
+    payload: Dict[str, Any],
+    *,
+    max_attempts: int = 3,
+    backoff_seconds: float = 2.0,
+) -> bool:
+    url = _build_url(RESULT_PATH)
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            response = session.post(url, json=payload, timeout=REQUEST_TIMEOUT)
+            if 200 <= response.status_code < 300:
+                return True
+
+            body_preview = response.text[:200] if response.text else ""
+            logging.error(
+                "Result post attempt %s failed with status %s. Body preview: %s",
+                attempt,
+                response.status_code,
+                body_preview,
+            )
+        except Exception as exc:
+            logging.error("Result post attempt %s raised error: %s", attempt, exc)
+
+        if attempt >= max_attempts:
+            break
+
+        sleep_for = min(backoff_seconds * (2 ** (attempt - 1)), 30.0)
+        logging.info("Retrying result post in %.1f seconds", sleep_for)
+        time.sleep(sleep_for)
+
+    return False
+
+
+def _build_result_payload(
+    *,
+    device_id: str,
+    job_id: str,
+    ok: bool,
+    action: Optional[str],
+    parameters: Optional[Dict[str, Any]],
+    message: Optional[str],
+    result: Any,
+    error: Optional[str],
+) -> Dict[str, Any]:
+    return {
+        "device_id": device_id,
+        "job_id": job_id,
+        "ok": bool(ok),
+        "return_value": {
+            "action": action,
+            "parameters": parameters or {},
+            "message": message,
+            "result": result,
+        },
+        "stdout": None,
+        "stderr": None,
+        "error": error,
+        "ts": time.time(),
+    }
 
 
 # ==== Task execution =======================================================
@@ -438,16 +491,60 @@ def _process_job(
     device_id: str,
     job: Dict[str, Any],
 ) -> None:
-    job_id = job.get("job_id")
+    raw_job_id: Any = job.get("job_id")
+    if raw_job_id is None and "id" in job:
+        raw_job_id = job.get("id")
+
+    job_id = None
+    if isinstance(raw_job_id, str):
+        job_id = raw_job_id.strip()
+    elif raw_job_id is not None:
+        job_id = str(raw_job_id)
+
     command = job.get("command") or {}
     args = command.get("args") if isinstance(command, dict) else {}
-    instruction = args.get("instruction") if isinstance(args, dict) else None
+    instruction_value = args.get("instruction") if isinstance(args, dict) else None
+    instruction = instruction_value.strip() if isinstance(instruction_value, str) else None
 
-    if not job_id or not isinstance(job_id, str):
-        logging.error("Invalid job payload: missing job_id")
+    job_device_id = job.get("device_id") or job.get("target_device_id")
+    if job_device_id and job_device_id != device_id:
+        message = (
+            f"Job is targeted to device '{job_device_id}' but this agent is '{device_id}'."
+        )
+        logging.warning("Skipping job %s: %s", job_id or "<unknown>", message)
+        if job_id:
+            payload = _build_result_payload(
+                device_id=device_id,
+                job_id=job_id,
+                ok=False,
+                action=None,
+                parameters=None,
+                message=message,
+                result=None,
+                error=message,
+            )
+            if not _post_result(session, payload):
+                logging.error("Failed to report mismatched device for job %s", job_id)
         return
-    if not instruction or not isinstance(instruction, str):
+
+    if not job_id:
+        logging.error("Invalid job payload without a job_id: %s", job)
+        return
+    if not instruction:
+        message = "Job is missing instruction text."
         logging.error("Job %s missing instruction", job_id)
+        payload = _build_result_payload(
+            device_id=device_id,
+            job_id=job_id,
+            ok=False,
+            action=None,
+            parameters=None,
+            message=message,
+            result=None,
+            error=message,
+        )
+        if not _post_result(session, payload):
+            logging.error("Failed to report missing instruction for job %s", job_id)
         return
 
     logging.info("Processing job %s with instruction: %s", job_id, instruction)
@@ -459,21 +556,16 @@ def _process_job(
 
     ok, return_value, error_message = _execute_action(action, parameters)
 
-    result_payload = {
-        "device_id": device_id,
-        "job_id": job_id,
-        "ok": bool(ok),
-        "return_value": {
-            "action": action,
-            "parameters": parameters,
-            "message": message,
-            "result": return_value,
-        },
-        "stdout": None,
-        "stderr": None,
-        "error": error_message,
-        "ts": time.time(),
-    }
+    result_payload = _build_result_payload(
+        device_id=device_id,
+        job_id=job_id,
+        ok=bool(ok),
+        action=action,
+        parameters=parameters,
+        message=message,
+        result=return_value,
+        error=error_message,
+    )
 
     logging.info(
         "Job %s completed: action=%s ok=%s error=%s",
@@ -483,7 +575,8 @@ def _process_job(
         error_message,
     )
 
-    _post_result(session, result_payload)
+    if not _post_result(session, result_payload):
+        logging.error("Failed to deliver result for job %s", job_id)
 
 
 def main() -> None:
