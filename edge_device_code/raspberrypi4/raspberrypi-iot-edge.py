@@ -72,7 +72,7 @@ SUPPORTED_ACTIONS: Dict[str, Dict[str, Any]] = {
                 "name": "player_move",
                 "type": "string",
                 "required": False,
-                "description": "Player's move: rock, paper, or scissors (グー/チョキ/パーも可)",
+                "description": "Player's move: rock, paper, or scissors",
             }
         ],
     },
@@ -319,23 +319,20 @@ JOKES = [
     "Why don't scientists trust atoms? Because they make up everything!",
     "I told my computer I needed a break, and it said 'No problem, I'll go to sleep.'",
     "What's a robot's favorite snack? Computer chips!",
-    "プログラマーがハロウィンとクリスマスを間違える理由は？ 10月31日が12月25日だから。",
-    "ラズベリーパイが落ち込んでいたので聞いてみたら、『バッテリーが低いんだ』って。",
+    "Why do programmers confuse Halloween with Christmas? Because October 31st is December 25th.",
+    "My Raspberry Pi was down so I asked it about it and it said, 'The battery is low.'",
 ]
 
 _MOVE_ALIASES = {
     "rock": "rock",
     "stone": "rock",
-    "グー": "rock",
     "gu": "rock",
     "goo": "rock",
     "paper": "paper",
-    "パー": "paper",
     "paa": "paper",
     "pa": "paper",
     "hand": "paper",
     "scissors": "scissors",
-    "チョキ": "scissors",
     "choki": "scissors",
     "scissor": "scissors",
 }
@@ -359,7 +356,7 @@ def _play_rock_paper_scissors(params: Dict[str, Any]) -> Dict[str, Any]:
     if isinstance(move_value, str) and move_value.strip():
         player_move = _normalize_move(move_value)
         if not player_move:
-            raise ValueError("player_move must be rock, paper, scissors, or グー/チョキ/パー")
+            raise ValueError("player_move must be rock, paper, scissors")
         provided = True
     else:
         player_move = random.choice(_VALID_MOVES)
