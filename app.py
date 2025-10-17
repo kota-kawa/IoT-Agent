@@ -1,4 +1,7 @@
 import json
+
+# Flask ベースの IoT 管理サーバーとダッシュボード API を実装するモジュール
+# 標準ライブラリ：環境変数、時刻処理、識別子生成を扱う
 import os
 import time
 import uuid
@@ -6,11 +9,17 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Deque, Dict, List, Optional, Tuple
 
+# 外部依存：環境変数の読み込み、Web アプリ基盤、OpenAI クライアント
 from dotenv import load_dotenv as loadenv
 from flask import Flask, jsonify, redirect, request, session, url_for
 from openai import OpenAI
 
 
+## ------------------------------------------------------------
+## アプリケーション初期化
+## ------------------------------------------------------------
+
+# .env ファイルを読み込み、環境変数を設定する
 loadenv()
 
 app = Flask(__name__, static_folder=".", static_url_path="")
@@ -25,25 +34,40 @@ AGENT_COMMAND_NAME = "agent_instruction"
 
 @dataclass
 class DeviceState:
+    # メモリ上に保持するエッジデバイスの状態情報
+
+    # デバイス識別子（例: シリアル番号）
     device_id: str
+    # サーバーに登録された機能一覧
     capabilities: List[Dict[str, Any]]
+    # 任意メタデータ（表示名や説明など）
     meta: Dict[str, Any]
+    # エッジデバイスが取得するジョブの待ち行列
     job_queue: Deque[Dict[str, Any]] = field(default_factory=deque)
+    # 完了したジョブ結果を job_id ごとに保持
     job_results: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    # 最後にポーリングされた時刻（UNIX 時刻）
     last_seen: float = field(default_factory=time.time)
+    # 直近のジョブ結果
     last_result: Optional[Dict[str, Any]] = None
+    # 登録時刻（UNIX 時刻）
     registered_at: float = field(default_factory=time.time)
+    # 管理者承認済みかどうか
     approved: bool = False
 
 
+# メモリ上でデバイス情報と進行中ジョブを管理する辞書
 _DEVICES: Dict[str, DeviceState] = {}
 _PENDING_JOBS: Dict[str, str] = {}
 
 
+# デバイスがジョブ結果を返さない場合にタイムアウトとみなす秒数
 DEVICE_RESULT_TIMEOUT = float(os.getenv("DEVICE_RESULT_TIMEOUT", "120"))
 
 
 def _normalise_capability_params(params: Any) -> List[Dict[str, Any]]:
+    # capability の params 部分を検証・整形するユーティリティ
+
     if not isinstance(params, list):
         return []
 
@@ -86,6 +110,8 @@ def _normalise_capability_params(params: Any) -> List[Dict[str, Any]]:
 
 
 def _normalise_capabilities(raw_capabilities: Any) -> List[Dict[str, Any]]:
+    # 能力宣言の配列を API 内部向けにクリーニングする
+
     if not isinstance(raw_capabilities, list):
         return []
 
@@ -126,6 +152,8 @@ def _normalise_capabilities(raw_capabilities: Any) -> List[Dict[str, Any]]:
 
 
 def _client() -> OpenAI:
+    # OpenAI API クライアントを生成し、API キーが無い場合は例外を送出
+
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY is not set")
@@ -133,10 +161,13 @@ def _client() -> OpenAI:
 
 
 def _first_device_id() -> Optional[str]:
+    # 最初に登録されたデバイス ID を取得（ダッシュボード表示用）
     return next(iter(_DEVICES), None)
 
 
 def _device_is_agent(device: DeviceState) -> bool:
+    # デバイスがエージェント役割（LLM 制御対象）か判定する
+
     meta = device.meta if isinstance(device.meta, dict) else {}
     role = meta.get("role") or meta.get("device_role")
     if isinstance(role, str) and role.strip().lower() == AGENT_ROLE_VALUE:
@@ -151,6 +182,7 @@ def _device_is_agent(device: DeviceState) -> bool:
 
 
 def _agent_device() -> Optional[DeviceState]:
+    # 登録デバイスの中からエージェント役割を担うものを検索する
     for device in _DEVICES.values():
         if _device_is_agent(device):
             return device
@@ -158,6 +190,7 @@ def _agent_device() -> Optional[DeviceState]:
 
 
 def _action_catalog_for_device(device: DeviceState) -> List[Dict[str, Any]]:
+    # デバイスが提供するアクション一覧を取得し、LLM 用に整形
     meta = device.meta if isinstance(device.meta, dict) else {}
     catalog = meta.get("action_catalog") if isinstance(meta, dict) else None
 
@@ -203,6 +236,8 @@ def _action_catalog_for_device(device: DeviceState) -> List[Dict[str, Any]]:
 
 
 def _describe_device_role(device: DeviceState) -> List[str]:
+    # エージェント向けにデバイスの役割や行動カタログを文章化する
+
     lines: List[str] = []
     meta = device.meta if isinstance(device.meta, dict) else {}
     raw_role = None
@@ -244,6 +279,7 @@ def _describe_device_role(device: DeviceState) -> List[str]:
 
 
 def _build_device_context() -> str:
+    # LLM へのプロンプトに用いる全デバイスの状況サマリーを構築
     if not _DEVICES:
         return "No devices are currently registered."
 
@@ -298,6 +334,7 @@ def _build_device_context() -> str:
 
 
 def _enqueue_device_command(device_id: str, command: Dict[str, Any]) -> Optional[str]:
+    # 指定デバイスのジョブキューへコマンドを追加し、job_id を返す
     device = _DEVICES.get(device_id)
     if not device:
         return None
@@ -310,6 +347,7 @@ def _enqueue_device_command(device_id: str, command: Dict[str, Any]) -> Optional
 
 
 def _await_device_result(device_id: str, job_id: str, timeout: float = 120.0) -> Optional[Dict[str, Any]]:
+    # デバイスから結果が返るまでポーリングし、タイムアウトしたら None
     deadline = time.time() + timeout
     while time.time() < deadline:
         device = _DEVICES.get(device_id)
@@ -324,6 +362,7 @@ def _await_device_result(device_id: str, job_id: str, timeout: float = 120.0) ->
 
 
 def _validate_device_command(command: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    # LLM から生成された device_command の妥当性を検査しメッセージを返す
     if not isinstance(command, dict):
         return None, "device_command の形式が不正なため処理を中止しました。"
 
@@ -376,6 +415,7 @@ def _validate_device_command(command: Dict[str, Any]) -> Tuple[Optional[Dict[str
 def _validate_device_command_sequence(
     commands: Any,
 ) -> Tuple[List[Dict[str, Any]], List[str]]:
+    # 複数コマンドを検証し、成功したものとエラー文をそれぞれ返す
     if commands is None:
         return [], []
 
@@ -401,6 +441,7 @@ def _validate_device_command_sequence(
 
 
 def _serialize_device(device: DeviceState) -> Dict[str, Any]:
+    # クライアント向けにデバイス状態を辞書へ変換する
     return {
         "device_id": device.device_id,
         "capabilities": device.capabilities,
@@ -415,6 +456,7 @@ def _serialize_device(device: DeviceState) -> Dict[str, Any]:
 
 
 def _device_label_for_prompt(device_id: str) -> str:
+    # ユーザーへの説明に使うラベル文字列を生成
     device = _DEVICES.get(device_id)
     if not device:
         return device_id
@@ -425,10 +467,12 @@ def _device_label_for_prompt(device_id: str) -> str:
 
 
 def _format_result_for_prompt(result: Dict[str, Any]) -> str:
+    # ジョブ結果を JSON 文字列化し、日本語応答の下準備を行う
     return json.dumps(result, ensure_ascii=False, default=str)
 
 
 def _structured_llm_prompt(messages: List[Dict[str, str]]) -> Dict[str, Any]:
+    # LLM へ投げる構造化プロンプトとコンテキストを組み立てる
     device_context = _build_device_context()
     system_prompt = (
         "You are an assistant that manages IoT devices for the user. "
@@ -470,6 +514,7 @@ def _structured_llm_prompt(messages: List[Dict[str, str]]) -> Dict[str, Any]:
 
 
 def _extract_json_object(text: str) -> Tuple[Optional[Any], Optional[str]]:
+    # LLM 応答文字列から先頭の JSON オブジェクトを抽出する
     if not text:
         return None, ""
 
@@ -497,6 +542,8 @@ def _extract_json_object(text: str) -> Tuple[Optional[Any], Optional[str]]:
 
 
 def _call_llm_and_parse(client: OpenAI, messages: List[Dict[str, str]]) -> Dict[str, Any]:
+    # LLM 応答から reply と device_commands を抽出して辞書化
+
     response = client.responses.create(**_structured_llm_prompt(messages))
     reply_text = getattr(response, "output_text", None) or ""
 
@@ -536,12 +583,16 @@ def _call_llm_and_parse(client: OpenAI, messages: List[Dict[str, str]]) -> Dict[
 
 
 def _call_llm_text(client: OpenAI, payload: Dict[str, Any]) -> str:
+    # 指定ペイロードで LLM を呼び出し、クリーンなテキストを返す
+
     response = client.responses.create(**payload)
     text = getattr(response, "output_text", "")
     return text.strip()
 
 
 def _structured_agent_instruction_prompt(messages: List[Dict[str, str]]) -> Dict[str, Any]:
+    # エージェント向け英語命令文の生成に必要なプロンプトを組み立てる
+
     device_context = _build_device_context()
     system_prompt = (
         "You translate the latest user instruction into a single, simple "
@@ -582,6 +633,8 @@ def _structured_agent_followup_prompt(
     english_instruction: str,
     result: Dict[str, Any],
 ) -> Dict[str, Any]:
+    # デバイス応答をもとにユーザー向け日本語要約を生成するプロンプト
+
     device_context = _build_device_context()
     summary_instruction = (
         "The edge device executed the request using the following simple "
@@ -609,6 +662,8 @@ def _structured_agent_followup_prompt(
 
 
 def _format_return_value_for_user(value: Any) -> str:
+    # 戻り値を人間が理解しやすい日本語文に再構成する
+
     if value is None:
         return "値は返されませんでした。"
     if isinstance(value, (str, int, float, bool)):
@@ -705,6 +760,7 @@ def _format_return_value_for_user(value: Any) -> str:
 def _manual_result_reply(
     device_label: str, command_name: str, result: Dict[str, Any]
 ) -> str:
+    # API の生結果をユーザーへ伝わりやすい文章に整形
     status = "成功" if result.get("ok") else "失敗"
     if command_name and any(ch.isspace() for ch in command_name):
         command_label = f"指示「{command_name}」"
@@ -736,6 +792,8 @@ def _manual_result_reply(
 
 @dataclass
 class _CommandExecutionSummary:
+    # コマンド実行結果をテンポラリにまとめる内部用データ構造
+
     device_id: Optional[str]
     command_name: str
     args: Dict[str, Any] = field(default_factory=dict)
@@ -748,6 +806,7 @@ class _CommandExecutionSummary:
 
 
 def _timeout_reply(command: Dict[str, Any], timeout_seconds: float) -> str:
+    # ジョブがタイムアウトした際にユーザーへ通知するメッセージ生成
     device_id = command.get("device_id")
     device_label = _device_label_for_prompt(device_id) if device_id else "対象デバイス"
     command_name = command.get("name", "不明なコマンド")
@@ -778,6 +837,8 @@ def _execute_standard_device_command(
     initial_reply: str,
     command: Dict[str, Any],
 ) -> _CommandExecutionSummary:
+    # 通常デバイスに対して単発コマンドを送り、結果をまとめる
+
     device_id = command.get("device_id")
     command_name = (
         str(command.get("name")) if isinstance(command.get("name"), str) else "不明なコマンド"
@@ -827,6 +888,8 @@ def _execute_device_command_sequence(
     initial_reply: str,
     commands: List[Dict[str, Any]],
 ) -> Tuple[str, int]:
+    # 連続コマンドを順に処理し、レスポンス文と言語コードを返す
+
     if not commands:
         return initial_reply, 200
 
@@ -887,6 +950,8 @@ def _execute_agent_device_command(
     initial_reply: str,
     command: Dict[str, Any],
 ) -> _CommandExecutionSummary:
+    # エージェント役デバイスに英語指示を生成して送信し、結果を整理
+
     args = command.get("args") if isinstance(command, dict) else {}
     args_dict = args if isinstance(args, dict) else {}
     raw_instruction = args_dict.get("instruction")
@@ -988,6 +1053,8 @@ def _summarize_device_command_sequence(
     initial_reply: str,
     summaries: List[_CommandExecutionSummary],
 ) -> str:
+    # 実行済みコマンドの要約を LLM もしくはフォールバックで生成
+
     fallback_parts = [
         summary.manual_reply.strip()
         for summary in summaries
@@ -1015,6 +1082,8 @@ def _structured_multi_command_followup_prompt(
     initial_reply: str,
     summaries: List[_CommandExecutionSummary],
 ) -> Dict[str, Any]:
+    # マルチステップの実行結果を踏まえた最終回答生成プロンプトを構築
+
     device_context = _build_device_context()
     step_descriptions: List[str] = []
 
@@ -1078,6 +1147,8 @@ def _structured_multi_command_followup_prompt(
 
 
 def _chat_via_legacy(messages: List[Dict[str, str]]) -> Tuple[Dict[str, Any], int]:
+    # エージェントデバイス不在時にレガシーフローでチャットを処理
+
     try:
         client = _client()
         parsed_response = _call_llm_and_parse(client, messages)
@@ -1112,6 +1183,8 @@ def _chat_via_legacy(messages: List[Dict[str, str]]) -> Tuple[Dict[str, Any], in
 
 @app.get("/")
 def index():
+    # 認証済みでなければログインページへリダイレクト
+
     if not session.get("authenticated"):
         return redirect(url_for("login"))
     return app.send_static_file("index.html")
@@ -1119,6 +1192,8 @@ def index():
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
+    # シンプルなパスワード認証を行い、成功時にセッションを確立
+
     if request.method == "POST":
         password = request.form.get("password", "")
         if password == APP_PASSWORD:
@@ -1133,17 +1208,23 @@ def login():
 
 @app.post("/logout")
 def logout():
+    # セッション情報を破棄してログイン画面へ戻す
+
     session.clear()
     return redirect(url_for("login"))
 
 
 @app.get("/api/devices/ping")
 def device_ping():
+    # エッジデバイスからの疎通確認に応答するシンプルなエンドポイント
+
     return jsonify({"message": "ok"})
 
 
 @app.post("/api/chat")
 def chat():
+    # チャット API のメインエントリーポイントで、LLM 連携とデバイス制御を仲介
+
     payload = request.get_json(silent=True) or {}
     messages = payload.get("messages", [])
 
@@ -1200,6 +1281,8 @@ def chat():
 
 @app.post("/api/devices/register")
 def register_device():
+    # 新しいデバイスを手動登録し、メタ情報を保存
+
     payload = request.get_json(silent=True) or {}
     device_id = payload.get("device_id")
     capabilities = payload.get("capabilities")
@@ -1291,6 +1374,8 @@ def register_device():
 
 @app.get("/api/devices")
 def list_devices():
+    # 登録済みデバイス一覧を JSON 形式で返却
+
     devices = [_serialize_device(device) for device in _DEVICES.values()]
     devices.sort(key=lambda d: d["device_id"])
     return jsonify({"devices": devices})
@@ -1298,6 +1383,8 @@ def list_devices():
 
 @app.patch("/api/devices/<device_id>/name")
 def update_device_name(device_id: str):
+    # デバイスの表示名を更新する PATCH エンドポイント
+
     cleaned_id = (device_id or "").strip()
     if not cleaned_id:
         return jsonify({"error": "device_id is required"}), 400
@@ -1330,6 +1417,8 @@ def update_device_name(device_id: str):
 
 @app.delete("/api/devices/<device_id>")
 def delete_device(device_id: str):
+    # デバイスを削除し、関連ジョブもクリア
+
     cleaned_id = (device_id or "").strip()
     if not cleaned_id:
         return jsonify({"error": "device_id is required"}), 400
@@ -1347,6 +1436,8 @@ def delete_device(device_id: str):
 
 @app.get("/api/devices/<device_id>/jobs/next")
 def next_job(device_id: str):
+    # エッジデバイスが次に取得するジョブをポーリング
+
     cleaned_id = (device_id or "").strip()
     if not cleaned_id:
         return jsonify({"error": "device_id is required"}), 400
@@ -1366,6 +1457,8 @@ def next_job(device_id: str):
 
 @app.post("/api/devices/<device_id>/jobs/result")
 def post_result(device_id: str):
+    # エッジデバイスからのジョブ結果を受け取り記録
+
     payload = request.get_json(silent=True)
     if payload is None:
         raw_body = request.get_data(cache=False, as_text=True) or ""
