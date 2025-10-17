@@ -373,6 +373,33 @@ def _validate_device_command(command: Dict[str, Any]) -> Tuple[Optional[Dict[str
     return validated, None
 
 
+def _validate_device_command_sequence(
+    commands: Any,
+) -> Tuple[List[Dict[str, Any]], List[str]]:
+    if commands is None:
+        return [], []
+
+    if isinstance(commands, dict):
+        command_items: List[Any] = [commands]
+    elif isinstance(commands, list):
+        command_items = list(commands)
+    else:
+        return [], ["device_commands の形式が不正なため処理を中止しました。"]
+
+    validated_commands: List[Dict[str, Any]] = []
+    errors: List[str] = []
+
+    for index, raw_command in enumerate(command_items, start=1):
+        validated, error = _validate_device_command(raw_command)
+        if validated:
+            validated_commands.append(validated)
+            continue
+        message = error or "device_command の形式が不正なため処理を中止しました。"
+        errors.append(f"ステップ{index}: {message}")
+
+    return validated_commands, errors
+
+
 def _serialize_device(device: DeviceState) -> Dict[str, Any]:
     return {
         "device_id": device.device_id,
@@ -406,17 +433,19 @@ def _structured_llm_prompt(messages: List[Dict[str, str]]) -> Dict[str, Any]:
     system_prompt = (
         "You are an assistant that manages IoT devices for the user. "
         "Always respond with a strict JSON object containing the keys "
-        "'reply' and 'device_command'. The 'reply' field is a natural "
-        "language response to the user. The 'device_command' field must "
-        "be either null or an object with the keys 'device_id', 'name', "
-        "and 'args'. Do not wrap the JSON inside code fences. If no "
-        "device action is required, set 'device_command' to null. Only "
-        "use device IDs and capability names provided in the context. "
-        "When an action is required and multiple devices exist, you MUST "
-        "select the single most appropriate device_id by comparing the "
-        "roles and capabilities described. Never omit 'device_id' or use "
-        "an unknown value. If the correct device cannot be determined, "
-        "set 'device_command' to null and ask the user to clarify which "
+        "'reply' and 'device_commands'. The 'reply' field is a natural "
+        "language response to the user. The 'device_commands' field must "
+        "be either null, an empty array, or an array of objects with the "
+        "keys 'device_id', 'name', and 'args'. Each array element "
+        "represents one sequential task for the devices to execute. Do "
+        "not wrap the JSON inside code fences. If no device action is "
+        "required, set 'device_commands' to null. Only use device IDs and "
+        "capability names provided in the context. When an action is "
+        "required and multiple devices exist, you MUST select the single "
+        "most appropriate device_id for each step by comparing the roles "
+        "and capabilities described. Never omit 'device_id' or use an "
+        "unknown value. If the correct device cannot be determined, set "
+        "'device_commands' to null and ask the user to clarify which "
         "device should be used. Prefer devices tagged with the "
         f"'{AGENT_ROLE_VALUE}' role for complex or conversational tasks. "
         "The 'reply' value must be written in Japanese prose without "
@@ -452,10 +481,26 @@ def _call_llm_and_parse(client: OpenAI, messages: List[Dict[str, str]]) -> Dict[
     if not isinstance(reply_message, str):
         reply_message = reply_text.strip()
 
-    device_command = parsed.get("device_command")
+    device_commands_field = parsed.get("device_commands")
+    if isinstance(device_commands_field, dict):
+        device_commands: List[Dict[str, Any]] = [device_commands_field]
+    elif isinstance(device_commands_field, list):
+        device_commands = [
+            command
+            for command in device_commands_field
+            if isinstance(command, dict)
+        ]
+    else:
+        device_commands = []
+
+    if not device_commands:
+        single_command = parsed.get("device_command")
+        if isinstance(single_command, dict):
+            device_commands = [single_command]
+
     return {
         "reply": reply_message,
-        "device_command": device_command,
+        "device_commands": device_commands,
         "raw": reply_text,
     }
 
@@ -678,6 +723,59 @@ def _execute_standard_device_command(
     return _timeout_reply(command, DEVICE_RESULT_TIMEOUT)
 
 
+def _execute_device_command_sequence(
+    client: OpenAI,
+    messages: List[Dict[str, str]],
+    initial_reply: str,
+    commands: List[Dict[str, Any]],
+) -> Tuple[str, int]:
+    if not commands:
+        return initial_reply, 200
+
+    aggregated_replies: List[str] = []
+    current_initial = initial_reply
+
+    for command in commands:
+        device_id = command.get("device_id")
+        device = _DEVICES.get(device_id) if isinstance(device_id, str) else None
+
+        if device and _device_is_agent(device):
+            payload, status = _execute_agent_device_command(
+                client, device, messages, current_initial, command
+            )
+            reply_text = ""
+            if isinstance(payload, dict):
+                reply_text = str(payload.get("reply") or "").strip()
+                error_text = str(payload.get("error") or "").strip()
+            else:
+                reply_text = ""
+                error_text = ""
+
+            if status != 200:
+                final_message = error_text or reply_text or "デバイスコマンドの実行中にエラーが発生しました。"
+                if final_message:
+                    aggregated_replies.append(final_message)
+                return "\n\n".join(filter(None, aggregated_replies)), status
+
+            if reply_text:
+                aggregated_replies.append(reply_text)
+                current_initial = reply_text
+            continue
+
+        reply_message = _execute_standard_device_command(
+            client, messages, current_initial, command
+        )
+        reply_message = reply_message.strip()
+        if reply_message:
+            aggregated_replies.append(reply_message)
+            current_initial = reply_message
+
+    if aggregated_replies:
+        return "\n\n".join(aggregated_replies), 200
+
+    return initial_reply, 200
+
+
 def _execute_agent_device_command(
     client: OpenAI,
     agent: DeviceState,
@@ -759,22 +857,22 @@ def _chat_via_legacy(messages: List[Dict[str, str]]) -> Tuple[Dict[str, Any], in
     if not isinstance(reply_message, str):
         reply_message = parsed_response.get("raw", "").strip()
 
-    device_command = parsed_response.get("device_command")
-    if device_command:
-        validated_command, validation_error = _validate_device_command(device_command)
-    else:
-        validated_command, validation_error = (None, None)
+    validated_commands, validation_errors = _validate_device_command_sequence(
+        parsed_response.get("device_commands")
+    )
 
     final_reply = reply_message
 
-    if validation_error:
-        notice = f"(システム通知: {validation_error})"
+    if validation_errors:
+        notice = "\n".join(f"(システム通知: {error})" for error in validation_errors)
         final_reply = (reply_message + "\n" if reply_message else "") + notice
+        return {"reply": final_reply}, 200
 
-    if validated_command:
-        final_reply = _execute_standard_device_command(
-            client, messages, reply_message, validated_command
+    if validated_commands:
+        final_reply, status = _execute_device_command_sequence(
+            client, messages, reply_message, validated_commands
         )
+        return {"reply": final_reply}, status
 
     return {"reply": final_reply}, 200
 
@@ -846,34 +944,21 @@ def chat():
         if not isinstance(reply_message, str):
             reply_message = parsed_response.get("raw", "").strip()
 
-        device_command = parsed_response.get("device_command")
-        if device_command:
-            validated_command, validation_error = _validate_device_command(device_command)
-        else:
-            validated_command, validation_error = (None, None)
+        validated_commands, validation_errors = _validate_device_command_sequence(
+            parsed_response.get("device_commands")
+        )
 
         payload: Dict[str, Any] = {"reply": reply_message}
         status: int = 200
 
-        if validation_error:
-            notice = f"(システム通知: {validation_error})"
+        if validation_errors:
+            notice = "\n".join(f"(システム通知: {error})" for error in validation_errors)
             payload["reply"] = (reply_message + "\n" if reply_message else "") + notice
-
-        if validated_command:
-            target_device = _DEVICES.get(validated_command["device_id"])
-            if target_device and _device_is_agent(target_device):
-                payload, status = _execute_agent_device_command(
-                    client,
-                    target_device,
-                    formatted_messages,
-                    reply_message,
-                    validated_command,
-                )
-            else:
-                final_reply = _execute_standard_device_command(
-                    client, formatted_messages, reply_message, validated_command
-                )
-                payload, status = {"reply": final_reply}, 200
+        elif validated_commands:
+            final_reply, status = _execute_device_command_sequence(
+                client, formatted_messages, reply_message, validated_commands
+            )
+            payload = {"reply": final_reply}
     else:
         payload, status = _chat_via_legacy(formatted_messages)
 
