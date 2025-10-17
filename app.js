@@ -97,15 +97,17 @@ function formatMetaValue(value){
   }
 }
 
-function createField(label, value){
+function createStat(label, value){
   const wrapper = document.createElement("div");
-  wrapper.className = "device-field";
+  wrapper.className = "device-stat";
   const labelEl = document.createElement("div");
-  labelEl.className = "pill";
+  labelEl.className = "device-stat__label";
   labelEl.textContent = label;
   const valueEl = document.createElement("div");
-  valueEl.className = "device-field__value";
-  valueEl.textContent = value;
+  valueEl.className = "device-stat__value";
+  const textValue = value == null ? "-" : String(value);
+  valueEl.textContent = textValue;
+  valueEl.title = textValue;
   wrapper.appendChild(labelEl);
   wrapper.appendChild(valueEl);
   return wrapper;
@@ -115,61 +117,37 @@ function renderCapabilities(capabilities){
   if(!Array.isArray(capabilities) || capabilities.length === 0){
     return null;
   }
+  const names = [];
+  for(const cap of capabilities){
+    if(cap && typeof cap.name === "string" && cap.name.trim()){
+      names.push(cap.name.trim());
+    }
+  }
+  if(!names.length){
+    return null;
+  }
   const section = document.createElement("div");
   section.className = "device-section";
   const label = document.createElement("div");
-  label.className = "pill";
+  label.className = "device-section__label";
   label.textContent = "提供機能";
   section.appendChild(label);
 
-  const list = document.createElement("ul");
-  list.className = "capability-list";
-
-  for(const cap of capabilities){
-    const item = document.createElement("li");
-    item.className = "capability-list__item";
-
-    const name = document.createElement("div");
-    name.className = "capability-list__name";
-    name.textContent = typeof cap?.name === "string" && cap.name ? cap.name : "不明な機能";
-    item.appendChild(name);
-
-    if(typeof cap?.description === "string" && cap.description.trim()){
-      const desc = document.createElement("div");
-      desc.className = "capability-list__desc";
-      desc.textContent = cap.description.trim();
-      item.appendChild(desc);
-    }
-
-    if(Array.isArray(cap?.params) && cap.params.length){
-      const param = document.createElement("div");
-      param.className = "capability-list__params";
-      const parts = [];
-      for(const p of cap.params){
-        if(!p || typeof p.name !== "string") continue;
-        let text = p.name;
-        if(p.type){
-          text += ` (${p.type})`;
-        }
-        const extras = [];
-        if(p.required){
-          extras.push("必須");
-        }
-        if(Object.prototype.hasOwnProperty.call(p, "default")){
-          extras.push(`既定=${p.default}`);
-        }
-        if(extras.length){
-          text += ` [${extras.join(", ")}]`;
-        }
-        parts.push(text);
-      }
-      if(parts.length){
-        param.textContent = parts.join(" / ");
-        item.appendChild(param);
-      }
-    }
-
-    list.appendChild(item);
+  const list = document.createElement("div");
+  list.className = "chip-list";
+  const maxChips = 6;
+  names.slice(0, maxChips).forEach((name) => {
+    const chip = document.createElement("span");
+    chip.className = "chip";
+    chip.textContent = name;
+    list.appendChild(chip);
+  });
+  if(names.length > maxChips){
+    const restChip = document.createElement("span");
+    restChip.className = "chip chip--muted";
+    restChip.textContent = `+${names.length - maxChips}`;
+    restChip.title = names.slice(maxChips).join(", ");
+    list.appendChild(restChip);
   }
 
   section.appendChild(list);
@@ -180,8 +158,9 @@ function renderMeta(meta){
   if(!meta || typeof meta !== "object"){
     return null;
   }
+  const hiddenKeys = new Set(["display_name", "action_catalog", "firmware", "registered_via", "ua"]);
   const entries = Object.entries(meta).filter(([key, value]) =>
-    key !== "display_name" && value !== "" && value !== null && value !== undefined
+    !hiddenKeys.has(key) && value !== "" && value !== null && value !== undefined
   );
   if(!entries.length){
     return null;
@@ -189,21 +168,23 @@ function renderMeta(meta){
   const section = document.createElement("div");
   section.className = "device-section";
   const label = document.createElement("div");
-  label.className = "pill";
+  label.className = "device-section__label";
   label.textContent = "メタ情報";
   section.appendChild(label);
 
-  const list = document.createElement("ul");
-  list.className = "meta-list";
+  const list = document.createElement("div");
+  list.className = "device-meta";
   for(const [key, value] of entries){
-    const item = document.createElement("li");
-    item.className = "meta-list__item";
+    const item = document.createElement("div");
+    item.className = "device-meta__item";
     const keyEl = document.createElement("div");
-    keyEl.className = "meta-list__key";
+    keyEl.className = "device-meta__key";
     keyEl.textContent = key;
     const valueEl = document.createElement("div");
-    valueEl.className = "meta-list__value";
-    valueEl.textContent = formatMetaValue(value);
+    valueEl.className = "device-meta__value";
+    const textValue = formatMetaValue(value);
+    valueEl.textContent = textValue;
+    valueEl.title = textValue;
     item.appendChild(keyEl);
     item.appendChild(valueEl);
     list.appendChild(item);
@@ -219,7 +200,7 @@ function renderLastResult(result){
   const section = document.createElement("div");
   section.className = "device-section";
   const label = document.createElement("div");
-  label.className = "pill";
+  label.className = "device-section__label";
   label.textContent = "最後のジョブ";
   section.appendChild(label);
 
@@ -232,18 +213,36 @@ function renderLastResult(result){
 
   const detail = document.createElement("div");
   detail.className = "device-result__detail";
-  const detailLines = [];
   if(result.job_id){
-    detailLines.push(`<div>ジョブID: ${escapeHtml(result.job_id)}</div>`);
+    const jobLine = document.createElement("div");
+    jobLine.className = "device-result__line";
+    jobLine.textContent = "ジョブID";
+    jobLine.appendChild(document.createTextNode(" "));
+    const jobValue = document.createElement("span");
+    jobValue.className = "device-result__value";
+    jobValue.textContent = result.job_id;
+    jobValue.title = result.job_id;
+    jobLine.appendChild(jobValue);
+    detail.appendChild(jobLine);
   }
   if(Object.prototype.hasOwnProperty.call(result, "return_value")){
-    const valueStr = escapeHtml(formatMetaValue(result.return_value));
-    detailLines.push(`<div>戻り値: ${valueStr}</div>`);
+    const valueLine = document.createElement("div");
+    valueLine.className = "device-result__line";
+    valueLine.textContent = "戻り値";
+    valueLine.appendChild(document.createTextNode(" "));
+    const valueEl = document.createElement("span");
+    valueEl.className = "device-result__value";
+    const valueStr = formatMetaValue(result.return_value);
+    valueEl.textContent = valueStr;
+    valueEl.title = valueStr;
+    valueLine.appendChild(valueEl);
+    detail.appendChild(valueLine);
   }
-  if(detailLines.length){
-    detail.innerHTML = detailLines.join("");
-  }else{
-    detail.textContent = "結果の詳細はありません。";
+  if(!detail.children.length){
+    const emptyLine = document.createElement("div");
+    emptyLine.className = "device-result__line";
+    emptyLine.textContent = "結果の詳細はありません";
+    detail.appendChild(emptyLine);
   }
   box.appendChild(detail);
   section.appendChild(box);
@@ -326,9 +325,15 @@ function renderDevices(){
 
     const body = document.createElement("div");
     body.className = "card__body";
-    body.appendChild(createField("最終アクセス", formatRelativeTime(device.last_seen)));
-    body.appendChild(createField("登録日時", formatTimestamp(device.registered_at)));
-    body.appendChild(createField("待機ジョブ", `${device.queue_depth || 0}件`));
+
+    const stats = document.createElement("div");
+    stats.className = "device-stats";
+    stats.appendChild(createStat("最終アクセス", formatRelativeTime(device.last_seen)));
+    stats.appendChild(createStat("登録日時", formatTimestamp(device.registered_at)));
+    const queueRaw = Number(device.queue_depth);
+    const queueCount = Number.isFinite(queueRaw) ? queueRaw : 0;
+    stats.appendChild(createStat("待機ジョブ", `${queueCount}件`));
+    body.appendChild(stats);
 
     const capSection = renderCapabilities(device.capabilities);
     if(capSection){
