@@ -1,350 +1,513 @@
 /* =========================================================
- * IoT ダッシュボード（グリーンテーマ）
- * - 初期デバイス4種（温度/湿度/ランプ/ファン）
- * - 追加・削除、校正（センサー値ランダム化）、トグル操作
- * - チャットから自然言語で操作（例: ランプをオン）
- * - 状態を localStorage に保存
+ * IoT ダッシュボード（登録デバイス表示）
+ * - サーバーから登録済みデバイス一覧を取得して表示
+ * - デバイス登録ダイアログから任意のエッジデバイスを登録
+ * - チャットはサーバー連携 + 簡易フォールバック応答
  * ======================================================= */
 
-const LS_KEY = "iot_green_dashboard.devices.v1";
+// デバイス一覧の更新を定期的に行うためのポーリング間隔（ミリ秒）
+const FETCH_DEVICES_INTERVAL_MS = 5000;
 
 /** ---------- ユーティリティ ---------- */
+// DOM 要素を簡潔に取得するためのショートハンド関数
 const $ = (sel, parent = document) => parent.querySelector(sel);
-const $$ = (sel, parent = document) => Array.from(parent.querySelectorAll(sel));
+// 現在時刻を HH:MM の形式で文字列化するユーティリティ
 const nowTime = () => {
   const d = new Date();
   const hh = String(d.getHours()).padStart(2, "0");
   const mm = String(d.getMinutes()).padStart(2, "0");
   return `${hh}:${mm}`;
 };
-const uid = () => Math.random().toString(36).slice(2, 10);
+// チャットなどでユーザー入力を安全に表示するためのエスケープ処理
+const escapeHtml = (s) =>
+  String(s).replace(/[&<>"']/g, (m) => (
+    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" }[m]
+  ));
 
-/** ---------- デバイスモデル ---------- */
-const initialDevices = () => ([
-  {
-    id: uid(),
-    kind: "sensor-temp",
-    name: "温度センサー",
-    meta: "センサー",
-    value: 24.3,
-    unit: "℃"
-  },
-  {
-    id: uid(),
-    kind: "sensor-humid",
-    name: "湿度センサー",
-    meta: "センサー",
-    value: 55.4,
-    unit: "%"
-  },
-  {
-    id: uid(),
-    kind: "actuator-lamp",
-    name: "ランプ",
-    meta: "アクチュエータ",
-    on: false
-  },
-  {
-    id: uid(),
-    kind: "actuator-fan",
-    name: "ファン",
-    meta: "アクチュエータ",
-    on: false
-  }
-]);
-
-function loadDevices(){
-  try{
-    const raw = localStorage.getItem(LS_KEY);
-    if(!raw) return initialDevices();
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : initialDevices();
-  }catch(e){
-    console.warn("Failed to load devices:", e);
-    return initialDevices();
-  }
-}
-function saveDevices(devs){
-  localStorage.setItem(LS_KEY, JSON.stringify(devs));
-}
-
-/** ---------- アイコン ---------- */
-function iconFor(kind){
-  // シンプルなSVG（埋め込み）
-  switch(kind){
-    case "sensor-temp":
-      return `
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <path d="M10 13.5V5a2 2 0 1 1 4 0v8.5a4.5 4.5 0 1 1-4 0Z" stroke="currentColor" stroke-width="2"/>
-          <path d="M12 6h4" stroke="currentColor" stroke-width="2"/>
-        </svg>`;
-    case "sensor-humid":
-      return `
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <path d="M12 3s6 6.4 6 10a6 6 0 1 1-12 0c0-3.6 6-10 6-10Z" stroke="currentColor" stroke-width="2"/>
-        </svg>`;
-    case "actuator-lamp":
-      return `
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <path d="M12 3c4.4 0 8 3.6 8 8 0 3.3-2 6.1-5 7.3V21h-6v-2.7C6 17.1 4 14.3 4 11c0-4.4 3.6-8 8-8Z" stroke="currentColor" stroke-width="2"/>
-        </svg>`;
-    case "actuator-fan":
-      return `
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <circle cx="12" cy="12" r="2" stroke="currentColor" stroke-width="2"/>
-          <path d="M10 5c0 2 1.5 4 6 4-1 3-3.5 3-5 1m-3 9c0-2 1.5-4 6-4-1-3-3.5-3-5-1M5 10c2 0 4 1.5 4 6 3-1 3-3.5 1-5" stroke="currentColor" stroke-width="2"/>
-        </svg>`;
-    default: return "";
-  }
-}
-
-/** ---------- ビュー描画 ---------- */
+/** ---------- デバイス描画 ---------- */
+// デバイスカードを表示するグリッド要素
 const gridEl = $("#deviceGrid");
+// 登録成功・失敗などの通知を表示する領域
+const registerNoticeEl = $("#registerNotice");
 
-function render(){
-  const devices = loadDevices();
+// 取得したデバイス情報を保持するローカルキャッシュ
+let devices = [];
+// API 連携の同時実行を防ぐためのフラグ
+let isFetchingDevices = false;
+
+// デバイスの表示名を多段的に判定して返却するヘルパー
+function displayName(device){
+  if(!device) return "";
+  const meta = device.meta || {};
+  if(typeof meta.display_name === "string" && meta.display_name.trim()){
+    return meta.display_name.trim();
+  }
+  if(typeof meta.note === "string" && meta.note.trim()){
+    return meta.note.trim();
+  }
+  if(typeof meta.label === "string" && meta.label.trim()){
+    return meta.label.trim();
+  }
+  if(typeof meta.location === "string" && meta.location.trim()){
+    return `${device.device_id} @ ${meta.location.trim()}`;
+  }
+  return device.device_id;
+}
+
+// UNIX 時刻を日本語ローカライズした日付文字列に変換
+function formatTimestamp(ts){
+  if(!ts && ts !== 0) return "-";
+  const date = new Date(ts * 1000);
+  if(Number.isNaN(date.getTime())){
+    return String(ts);
+  }
+  return date.toLocaleString("ja-JP", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+}
+
+// 最終アクセス等のタイムスタンプを相対表示に変換
+function formatRelativeTime(ts){
+  if(!ts && ts !== 0) return "未記録";
+  const date = new Date(ts * 1000);
+  if(Number.isNaN(date.getTime())){
+    return String(ts);
+  }
+  const diff = Date.now() - date.getTime();
+  if(diff < 0){
+    return formatTimestamp(ts);
+  }
+  const sec = Math.floor(diff / 1000);
+  if(sec < 5) return "たった今";
+  if(sec < 60) return `${sec}秒前`;
+  const min = Math.floor(sec / 60);
+  if(min < 60) return `${min}分前`;
+  const hours = Math.floor(min / 60);
+  if(hours < 24) return `${hours}時間前`;
+  const days = Math.floor(hours / 24);
+  if(days < 7) return `${days}日前`;
+  return formatTimestamp(ts);
+}
+
+// オブジェクトや配列を含むメタ値をユーザーに見せる文字列に整形
+function formatMetaValue(value){
+  if(value === null) return "null";
+  if(value === undefined) return "-";
+  if(typeof value === "boolean") return value ? "true" : "false";
+  if(typeof value === "number") return String(value);
+  if(typeof value === "string") return value;
+  try{
+    return JSON.stringify(value);
+  }catch(_err){
+    return String(value);
+  }
+}
+
+// カード内で統計情報を表示する DOM 要素を生成
+function createStat(label, value){
+  const wrapper = document.createElement("div");
+  wrapper.className = "device-stat";
+  const labelEl = document.createElement("div");
+  labelEl.className = "device-stat__label";
+  labelEl.textContent = label;
+  const valueEl = document.createElement("div");
+  valueEl.className = "device-stat__value";
+  const textValue = value == null ? "-" : String(value);
+  valueEl.textContent = textValue;
+  valueEl.title = textValue;
+  wrapper.appendChild(labelEl);
+  wrapper.appendChild(valueEl);
+  return wrapper;
+}
+
+// 長文を折りたたみ表示するためのコンポーネントを組み立てる
+function createCollapsibleText(text, { maxLength = 180 } = {}){
+  const str = text == null ? "" : String(text);
+  const wrapper = document.createElement("div");
+  wrapper.className = "collapsible-text";
+  const content = document.createElement("div");
+  content.className = "collapsible-text__content";
+  content.textContent = str;
+  content.title = str;
+  wrapper.appendChild(content);
+
+  if(str.length <= maxLength){
+    wrapper.dataset.state = "expanded";
+    return wrapper;
+  }
+
+  const fullText = str;
+  const truncated = fullText.slice(0, maxLength).trimEnd() + "…";
+  let collapsed = true;
+
+  const toggleBtn = document.createElement("button");
+  toggleBtn.type = "button";
+  toggleBtn.className = "collapsible-text__toggle";
+  toggleBtn.textContent = "もっと見る";
+  toggleBtn.setAttribute("aria-expanded", "false");
+
+  const applyState = () => {
+    if(collapsed){
+      content.textContent = truncated;
+      wrapper.dataset.state = "collapsed";
+      toggleBtn.textContent = "もっと見る";
+      toggleBtn.setAttribute("aria-expanded", "false");
+      toggleBtn.setAttribute("aria-label", "全文を表示");
+    }else{
+      content.textContent = fullText;
+      wrapper.dataset.state = "expanded";
+      toggleBtn.textContent = "閉じる";
+      toggleBtn.setAttribute("aria-expanded", "true");
+      toggleBtn.setAttribute("aria-label", "折りたたむ");
+    }
+  };
+
+  toggleBtn.addEventListener("click", () => {
+    collapsed = !collapsed;
+    applyState();
+  });
+
+  wrapper.appendChild(toggleBtn);
+  applyState();
+  return wrapper;
+}
+
+// デバイスが宣言する機能一覧をバッジ表示用に整形
+function renderCapabilities(capabilities){
+  if(!Array.isArray(capabilities) || capabilities.length === 0){
+    return null;
+  }
+  const names = [];
+  for(const cap of capabilities){
+    if(cap && typeof cap.name === "string" && cap.name.trim()){
+      names.push(cap.name.trim());
+    }
+  }
+  if(!names.length){
+    return null;
+  }
+  const section = document.createElement("div");
+  section.className = "device-section";
+  const label = document.createElement("div");
+  label.className = "device-section__label";
+  label.textContent = "提供機能";
+  section.appendChild(label);
+
+  const list = document.createElement("div");
+  list.className = "chip-list";
+  const maxChips = 6;
+  names.slice(0, maxChips).forEach((name) => {
+    const chip = document.createElement("span");
+    chip.className = "chip";
+    chip.textContent = name;
+    list.appendChild(chip);
+  });
+  if(names.length > maxChips){
+    const restChip = document.createElement("span");
+    restChip.className = "chip chip--muted";
+    restChip.textContent = `+${names.length - maxChips}`;
+    restChip.title = names.slice(maxChips).join(", ");
+    list.appendChild(restChip);
+  }
+
+  section.appendChild(list);
+  return section;
+}
+
+// デバイスが直近で実行したジョブの結果をカード形式で表示
+function renderLastResult(result){
+  if(!result || typeof result !== "object"){
+    return null;
+  }
+  const section = document.createElement("div");
+  section.className = "device-section";
+  const label = document.createElement("div");
+  label.className = "device-section__label";
+  label.textContent = "最後のジョブ";
+  section.appendChild(label);
+
+  const box = document.createElement("div");
+  box.className = "device-result";
+  const status = document.createElement("span");
+  status.className = `device-result__status device-result__status--${result.ok ? "ok" : "error"}`;
+  status.textContent = result.ok ? "成功" : "失敗";
+  box.appendChild(status);
+
+  const detail = document.createElement("div");
+  detail.className = "device-result__detail";
+  if(result.job_id){
+    const jobLine = document.createElement("div");
+    jobLine.className = "device-result__line";
+    const jobLabel = document.createElement("span");
+    jobLabel.className = "device-result__label";
+    jobLabel.textContent = "ジョブID";
+    jobLine.appendChild(jobLabel);
+    const jobValue = document.createElement("span");
+    jobValue.className = "device-result__value";
+    jobValue.textContent = result.job_id;
+    jobValue.title = result.job_id;
+    jobLine.appendChild(jobValue);
+    detail.appendChild(jobLine);
+  }
+  if(Object.prototype.hasOwnProperty.call(result, "return_value")){
+    const valueLine = document.createElement("div");
+    valueLine.className = "device-result__line";
+    const valueLabel = document.createElement("span");
+    valueLabel.className = "device-result__label";
+    valueLabel.textContent = "戻り値";
+    valueLine.appendChild(valueLabel);
+    const valueEl = document.createElement("span");
+    valueEl.className = "device-result__value";
+    const valueStr = formatMetaValue(result.return_value);
+    valueEl.appendChild(createCollapsibleText(valueStr));
+    valueLine.appendChild(valueEl);
+    detail.appendChild(valueLine);
+  }
+  if(!detail.children.length){
+    const emptyLine = document.createElement("div");
+    emptyLine.className = "device-result__line";
+    emptyLine.textContent = "結果の詳細はありません";
+    detail.appendChild(emptyLine);
+  }
+  box.appendChild(detail);
+  section.appendChild(box);
+  return section;
+}
+
+// デバイスカードのヘッダーに表示する SVG アイコンを返す
+function iconForDevice(){
+  return `
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <rect x="3" y="5" width="18" height="14" rx="3" stroke="currentColor" stroke-width="2" />
+      <path d="M7 9h10M7 13h6" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+    </svg>`;
+}
+
+// ローカルで保持する devices 配列をもとにカード群を描画
+function renderDevices(){
+  if(!gridEl) return;
   gridEl.innerHTML = "";
-  for(const d of devices){
+
+  const hasDevices = devices.length > 0;
+  gridEl.classList.toggle("grid--empty", !hasDevices);
+
+  if(!hasDevices){
+    const empty = document.createElement("div");
+    empty.className = "empty-state";
+    empty.innerHTML = `
+      <p>登録されたデバイスがありません。</p>
+      <p class="empty-state__hint">右上の「デバイス登録」から登録してください。</p>
+    `;
+    gridEl.appendChild(empty);
+    return;
+  }
+
+  for(const device of devices){
     const card = document.createElement("article");
     card.className = "card";
-    card.dataset.id = d.id;
 
     const head = document.createElement("div");
     head.className = "card__head";
 
-    // Title + badge
     const title = document.createElement("div");
     title.className = "card__title";
     const badge = document.createElement("div");
     badge.className = "badge";
-    badge.innerHTML = iconFor(d.kind);
-    const ttl = document.createElement("div");
-    ttl.innerHTML = `<div>${d.name}</div><div class="card__meta">${d.meta}</div>`;
-    title.appendChild(badge); title.appendChild(ttl);
+    badge.innerHTML = iconForDevice();
+    const titleText = document.createElement("div");
+    const nameEl = document.createElement("div");
+    nameEl.textContent = displayName(device);
+    const metaEl = document.createElement("div");
+    metaEl.className = "card__meta";
+    metaEl.textContent = device.device_id;
+    titleText.appendChild(nameEl);
+    titleText.appendChild(metaEl);
+    title.appendChild(badge);
+    title.appendChild(titleText);
 
-    // Tools
+    head.appendChild(title);
+
     const tools = document.createElement("div");
     tools.className = "card__tools";
-    const edit = document.createElement("button");
-    edit.className = "iconbtn";
-    edit.title = "名前の変更";
-    edit.innerHTML = "✎";
-    edit.addEventListener("click", () => renameDevice(d.id));
-    const del = document.createElement("button");
-    del.className = "iconbtn";
-    del.title = "削除";
-    del.innerHTML = "🗑";
-    del.addEventListener("click", () => deleteDevice(d.id));
-    tools.appendChild(edit); tools.appendChild(del);
+    const renameBtn = document.createElement("button");
+    renameBtn.type = "button";
+    renameBtn.className = "iconbtn";
+    renameBtn.dataset.action = "rename";
+    renameBtn.dataset.deviceId = device.device_id;
+    renameBtn.title = "名前を変更";
+    const ariaLabel = displayName(device) || device.device_id;
+    renameBtn.setAttribute("aria-label", `${ariaLabel} の名前を変更`);
+    renameBtn.textContent = "✏️";
+    tools.appendChild(renameBtn);
 
-    head.appendChild(title); head.appendChild(tools);
+    const deleteBtn = document.createElement("button");
+    deleteBtn.type = "button";
+    deleteBtn.className = "iconbtn iconbtn--danger";
+    deleteBtn.dataset.action = "delete";
+    deleteBtn.dataset.deviceId = device.device_id;
+    deleteBtn.title = "デバイスを削除";
+    deleteBtn.setAttribute("aria-label", `${ariaLabel} を削除`);
+    deleteBtn.textContent = "🗑️";
+    tools.appendChild(deleteBtn);
 
-    // Body
+    head.appendChild(tools);
+    card.appendChild(head);
+
     const body = document.createElement("div");
     body.className = "card__body";
 
-    if(d.kind.startsWith("sensor")){
-      // センサー UI
-      const label = document.createElement("div");
-      label.className = "pill";
-      label.textContent = "現在値";
+    const stats = document.createElement("div");
+    stats.className = "device-stats";
+    stats.appendChild(createStat("最終アクセス", formatRelativeTime(device.last_seen)));
+    stats.appendChild(createStat("登録日時", formatTimestamp(device.registered_at)));
+    const queueRaw = Number(device.queue_depth);
+    const queueCount = Number.isFinite(queueRaw) ? queueRaw : 0;
+    stats.appendChild(createStat("待機ジョブ", `${queueCount}件`));
+    body.appendChild(stats);
 
-      const value = document.createElement("div");
-      value.className = "sensor__value";
-      value.textContent = `${Number(d.value).toFixed(1)}${d.unit || ""}`;
-
-      const row = document.createElement("div");
-      row.className = "row";
-      const calib = document.createElement("button");
-      calib.className = "btn btn--tiny btn--ghost";
-      calib.textContent = "校正";
-      calib.addEventListener("click", () => calibrateSensor(d.id));
-
-      row.appendChild(calib);
-      body.appendChild(label);
-      body.appendChild(value);
-      body.appendChild(row);
-    }else{
-      // アクチュエータ UI
-      const status = document.createElement("div");
-      status.className = "pill";
-      status.innerHTML = `<span>現在の状態</span>`;
-
-      const row = document.createElement("div");
-      row.className = "row";
-
-      const sw = document.createElement("label");
-      sw.className = "switch";
-      const input = document.createElement("input");
-      input.type = "checkbox";
-      input.checked = !!d.on;
-      input.setAttribute("aria-label", `${d.name} の電源`);
-      const dot = document.createElement("span");
-      dot.className = "state-dot";
-      sw.appendChild(input); sw.appendChild(dot);
-
-      const stateText = document.createElement("div");
-      stateText.className = "pill";
-      stateText.textContent = d.on ? "ON" : "OFF";
-      stateText.style.borderColor = "rgba(255,255,255,.10)";
-
-      input.addEventListener("change", () => {
-        toggleActuator(d.id, input.checked);
-      });
-
-      row.appendChild(sw);
-      row.appendChild(stateText);
-
-      body.appendChild(status);
-      body.appendChild(row);
+    const capSection = renderCapabilities(device.capabilities);
+    if(capSection){
+      body.appendChild(capSection);
+    }
+    const resultSection = renderLastResult(device.last_result);
+    if(resultSection){
+      body.appendChild(resultSection);
     }
 
-    card.appendChild(head);
     card.appendChild(body);
     gridEl.appendChild(card);
   }
 }
 
-/** ---------- 操作ハンドラ ---------- */
-function renameDevice(id){
-  const devices = loadDevices();
-  const t = devices.find(x => x.id === id);
-  if(!t) return;
-  const name = prompt("新しい名前を入力:", t.name);
-  if(!name) return;
-  t.name = name.trim();
-  saveDevices(devices);
-  render();
-}
-
-function deleteDevice(id){
-  const devices = loadDevices().filter(x => x.id !== id);
-  saveDevices(devices);
-  render();
-}
-
-function toggleActuator(id, on){
-  const devices = loadDevices();
-  const t = devices.find(x => x.id === id);
-  if(!t) return;
-  t.on = !!on;
-  saveDevices(devices);
-  // 表示の更新（テキストだけ即時更新）
-  const card = gridEl.querySelector(`.card[data-id="${id}"]`);
-  if(card){
-    const pill = card.querySelector(".card__body .row .pill");
-    if(pill) pill.textContent = on ? "ON" : "OFF";
-  }
-}
-
-function calibrateSensor(id){
-  const devices = loadDevices();
-  const t = devices.find(x => x.id === id);
-  if(!t) return;
-  if(t.kind === "sensor-temp"){
-    t.value = Math.round((18 + Math.random() * 12) * 10) / 10; // 18〜30℃
-    t.unit = "℃";
-  }else if(t.kind === "sensor-humid"){
-    t.value = Math.round((35 + Math.random() * 45) * 10) / 10; // 35〜80%
-    t.unit = "%";
-  }
-  saveDevices(devices);
-  render();
-}
-
-function addDevice(kind, name){
-  const devices = loadDevices();
-  const id = uid();
-  const d = { id, kind, name: name || defaultName(kind) };
-  if(kind.startsWith("sensor")){
-    if(kind === "sensor-temp"){
-      d.meta = "センサー"; d.value = 24.0; d.unit = "℃";
-    }else{
-      d.meta = "センサー"; d.value = 50.0; d.unit = "%";
+// サーバーの REST API からデバイス一覧を取得し UI を更新
+async function fetchDevices({ silent = false } = {}){
+  if(isFetchingDevices) return;
+  isFetchingDevices = true;
+  try{
+    const res = await fetch("/api/devices", { cache: "no-store" });
+    if(!res.ok){
+      throw new Error(`HTTP ${res.status}`);
     }
-  }else{
-    d.meta = "アクチュエータ"; d.on = false;
+    const data = await res.json();
+    if(Array.isArray(data.devices)){
+      devices = data.devices;
+    }else{
+      devices = [];
+    }
+    renderDevices();
+    if(registerNoticeEl?.dataset.kind === "error"){
+      hideRegisterNotice();
+    }
+  }catch(err){
+    console.error("Failed to fetch devices", err);
+    if(!silent){
+      showRegisterNotice(`デバイス一覧の取得に失敗しました: ${err.message}`, "error");
+    }
+  }finally{
+    isFetchingDevices = false;
   }
-  devices.push(d);
-  saveDevices(devices);
-  render();
 }
-function defaultName(kind){
-  switch(kind){
-    case "sensor-temp": return "温度センサー";
-    case "sensor-humid": return "湿度センサー";
-    case "actuator-lamp": return "ランプ";
-    case "actuator-fan": return "ファン";
-    default: return "デバイス";
+
+// 指定 ID のデバイス表示名を PATCH API 経由で更新
+async function updateDeviceDisplayName(deviceId, displayName){
+  const payload = { display_name: displayName || null };
+  const res = await fetch(`/api/devices/${encodeURIComponent(deviceId)}/name`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+  const text = await res.text();
+  let data = null;
+  if(text){
+    try{
+      data = JSON.parse(text);
+    }catch(_err){
+      // ignore
+    }
   }
+
+  if(!res.ok){
+    const message = (data && (data.error || data.message)) || text || `HTTP ${res.status}`;
+    throw new Error(message);
+  }
+
+  return data?.device || null;
 }
 
-/** ---------- 追加/リセット UI ---------- */
-const addBtn = $("#addDeviceBtn");
-const resetBtn = $("#resetBtn");
-const dlg = $("#addDialog");
-const addForm = $("#addDeviceForm");
-const deviceKindSel = $("#deviceKind");
-const deviceNameInp = $("#deviceName");
+// デバイスを削除する REST API を呼び出しローカル状態を調整
+async function deleteDevice(deviceId){
+  const res = await fetch(`/api/devices/${encodeURIComponent(deviceId)}`, {
+    method: "DELETE",
+  });
 
-addBtn.addEventListener("click", () => {
-  deviceKindSel.value = "sensor-temp";
-  deviceNameInp.value = "";
-  dlg.showModal();
-});
-
-addForm.addEventListener("close", (e) => {
-  // nothing
-});
-addForm.addEventListener("submit", (e) => e.preventDefault());
-dlg.addEventListener("close", () => {
-  if(dlg.returnValue === "confirm"){
-    const kind = deviceKindSel.value;
-    const name = deviceNameInp.value.trim();
-    addDevice(kind, name);
+  const text = await res.text();
+  let data = null;
+  if(text){
+    try{
+      data = JSON.parse(text);
+    }catch(_err){
+      // ignore
+    }
   }
-});
 
-resetBtn.addEventListener("click", () => {
-  if(confirm("ダッシュボードを初期化しますか？（保存データは削除されます）")){
-    saveDevices(initialDevices());
-    render();
+  if(!res.ok){
+    const message = (data && (data.error || data.message)) || text || `HTTP ${res.status}`;
+    throw new Error(message);
   }
-});
 
-/** ---------- エッジデバイス登録 ---------- */
-const registerBtn = $("#registerEdgeBtn");
+  return data;
+}
+
+/** ---------- デバイス登録モーダル ---------- */
+// 登録モーダル関連のボタンや入力フィールドへの参照を取得
+const registerBtn = $("#registerDeviceBtn");
 const registerDialog = $("#registerDialog");
 const registerForm = $("#registerDeviceForm");
 const registerDeviceIdInput = $("#registerDeviceId");
+const registerNameInput = $("#registerDeviceName");
 const registerNoteInput = $("#registerDeviceNote");
 const registerDialogMessageEl = $("#registerDialogMessage");
 const registerCancelBtn = $("#registerCancelBtn");
 const registerSubmitBtn = $("#registerSubmitBtn");
-const registerNoticeEl = $("#registerNotice");
 
 const REGISTER_DIALOG_DEFAULT = registerDialogMessageEl
   ? registerDialogMessageEl.textContent.trim()
-  : "Pico W の device_id.txt に保存された ID を入力し、ダッシュボードから登録します。";
-let cachedPicoCapabilities = null;
+  : "エッジデバイスで使用する識別子を入力し、必要に応じて表示名やメモを設定します。";
+// 成功通知用に直近で登録したデバイス ID と名称を保持
 let lastRegisteredDeviceId = null;
+let lastRegisteredDeviceName = null;
 
-async function loadPicoCapabilities(){
-  if(cachedPicoCapabilities){
-    return cachedPicoCapabilities;
+// 登録処理の結果を画面上部の通知領域に表示
+function showRegisterNotice(message, kind = "info"){
+  if(!registerNoticeEl) return;
+  registerNoticeEl.hidden = false;
+  registerNoticeEl.textContent = message;
+  registerNoticeEl.className = "main__notice";
+  registerNoticeEl.dataset.kind = kind;
+  if(kind === "error"){
+    registerNoticeEl.classList.add("main__notice--error");
+  }else if(kind === "success"){
+    registerNoticeEl.classList.add("main__notice--success");
   }
-  const res = await fetch("/pico_capabilities.json", { cache: "no-cache" });
-  if(!res.ok){
-    throw new Error(`capabilities の取得に失敗しました (HTTP ${res.status})`);
-  }
-  const data = await res.json();
-  if(!Array.isArray(data)){
-    throw new Error("capabilities の形式が不正です");
-  }
-  cachedPicoCapabilities = data;
-  return data;
 }
 
+// 通知をクリアして非表示に戻す
+function hideRegisterNotice(){
+  if(!registerNoticeEl) return;
+  registerNoticeEl.hidden = true;
+  registerNoticeEl.textContent = "";
+  registerNoticeEl.className = "main__notice";
+  delete registerNoticeEl.dataset.kind;
+}
+
+// モーダル内の案内テキストを更新し、状態に応じたスタイルを適用
 function setRegisterDialogMessage(message, kind = "info"){
   if(!registerDialogMessageEl) return;
   registerDialogMessageEl.textContent = message;
@@ -356,18 +519,7 @@ function setRegisterDialogMessage(message, kind = "info"){
   }
 }
 
-function showRegisterNotice(message, kind = "info"){
-  if(!registerNoticeEl) return;
-  registerNoticeEl.hidden = false;
-  registerNoticeEl.textContent = message;
-  registerNoticeEl.className = "main__notice";
-  if(kind === "error"){
-    registerNoticeEl.classList.add("main__notice--error");
-  }else if(kind === "success"){
-    registerNoticeEl.classList.add("main__notice--success");
-  }
-}
-
+// フォームやボタン状態を初期化し、メッセージを既定に戻す
 function clearRegisterDialog(){
   if(registerForm){
     registerForm.reset();
@@ -379,11 +531,13 @@ function clearRegisterDialog(){
   setRegisterDialogMessage(REGISTER_DIALOG_DEFAULT);
 }
 
+// 登録フォーム送信時に API へリクエストを飛ばし成功・失敗を制御
 async function handleRegisterSubmit(event){
   event.preventDefault();
   if(!registerSubmitBtn) return;
 
   const deviceId = registerDeviceIdInput ? registerDeviceIdInput.value.trim() : "";
+  const displayNameInput = registerNameInput ? registerNameInput.value.trim() : "";
   const note = registerNoteInput ? registerNoteInput.value.trim() : "";
 
   if(!deviceId){
@@ -394,26 +548,29 @@ async function handleRegisterSubmit(event){
     return;
   }
 
+  const capabilities = [];
+
   registerSubmitBtn.disabled = true;
   registerSubmitBtn.textContent = "登録中…";
   setRegisterDialogMessage("サーバーへ登録しています…");
 
   try{
-    const capabilities = await loadPicoCapabilities();
     const payload = {
       device_id: deviceId,
       capabilities,
       meta: {
-        firmware: "pico_w_agent/1.1.0",
-        ua: "PicoW-MicroPython-Agent/1.1",
         registered_via: "dashboard",
       },
+      approved: true,
     };
+    if(displayNameInput){
+      payload.meta.display_name = displayNameInput;
+    }
     if(note){
       payload.meta.note = note;
     }
 
-    const res = await fetch("/pico-w/register", {
+    const res = await fetch("/api/devices/register", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -435,8 +592,19 @@ async function handleRegisterSubmit(event){
     }
 
     const registeredId = data && typeof data.device_id === "string" ? data.device_id : deviceId;
+    const registeredDevice = data && data.device && typeof data.device === "object" ? data.device : null;
     lastRegisteredDeviceId = registeredId;
-    setRegisterDialogMessage(`デバイス ${registeredId} を登録しました。`, "success");
+    if(registeredDevice){
+      lastRegisteredDeviceName = displayName(registeredDevice);
+    }else if(displayNameInput){
+      lastRegisteredDeviceName = displayNameInput;
+    }else{
+      lastRegisteredDeviceName = null;
+    }
+    const successLabel = lastRegisteredDeviceName
+      ? `${lastRegisteredDeviceName} (ID: ${registeredId})`
+      : registeredId;
+    setRegisterDialogMessage(`デバイス ${successLabel} を登録しました。`, "success");
     registerDialog?.close("success");
   }catch(err){
     const message = err instanceof Error ? err.message : String(err);
@@ -447,6 +615,7 @@ async function handleRegisterSubmit(event){
   }
 }
 
+// 「デバイス登録」ボタン押下でモーダルを開き初期化
 if(registerBtn && registerDialog){
   registerBtn.addEventListener("click", () => {
     clearRegisterDialog();
@@ -457,38 +626,110 @@ if(registerBtn && registerDialog){
   });
 }
 
+// キャンセルボタンでモーダルを閉じる
 if(registerCancelBtn && registerDialog){
   registerCancelBtn.addEventListener("click", () => {
     registerDialog.close("cancel");
   });
 }
 
+// フォーム送信時は独自処理にフック
 if(registerForm){
   registerForm.addEventListener("submit", handleRegisterSubmit);
 }
 
+// モーダルが閉じられた際に通知表示や状態リセットを行う
 if(registerDialog){
   registerDialog.addEventListener("close", () => {
     if(registerDialog.returnValue === "success" && lastRegisteredDeviceId){
-      showRegisterNotice(`デバイス「${lastRegisteredDeviceId}」を登録しました。Pico W を起動するとジョブの取得を開始できます。`, "success");
+      const label = lastRegisteredDeviceName || lastRegisteredDeviceId;
+      const idSuffix = lastRegisteredDeviceName ? ` (ID: ${lastRegisteredDeviceId})` : "";
+      showRegisterNotice(`デバイス「${label}」${idSuffix}を登録しました。エッジデバイスをオンラインにするとジョブの取得を開始できます。`, "success");
+      fetchDevices();
     }
     lastRegisteredDeviceId = null;
+    lastRegisteredDeviceName = null;
     clearRegisterDialog();
   });
 }
 
+// デバイスカード上のボタン操作（名称変更・削除）に対応
+if(gridEl){
+  gridEl.addEventListener("click", async (event) => {
+    const target = event.target instanceof Element ? event.target.closest("button[data-action]") : null;
+    if(!target) return;
+    const action = target.dataset.action;
+    const deviceId = target.dataset.deviceId;
+    if(!deviceId) return;
+    event.preventDefault();
+
+    if(action === "rename"){
+      const device = devices.find((d) => d.device_id === deviceId);
+      const currentName = device?.meta?.display_name && typeof device.meta.display_name === "string"
+        ? device.meta.display_name
+        : "";
+      const promptLabel = currentName || displayName(device) || deviceId;
+      const newName = window.prompt(`「${promptLabel}」の新しい名前を入力してください。`, currentName);
+      if(newName === null) return;
+
+      const trimmed = newName.trim();
+      if(trimmed === (currentName || "").trim()){
+        return;
+      }
+      try{
+        const updatedDevice = await updateDeviceDisplayName(deviceId, trimmed);
+        if(updatedDevice){
+          const idx = devices.findIndex((d) => d.device_id === deviceId);
+          if(idx !== -1){
+            devices[idx] = updatedDevice;
+          }
+          const label = displayName(updatedDevice) || updatedDevice.device_id;
+          renderDevices();
+          showRegisterNotice(`デバイス名を「${label}」に更新しました。`, "success");
+          fetchDevices({ silent: true });
+        }else{
+          throw new Error("サーバーから更新後のデバイス情報が取得できませんでした。");
+        }
+      }catch(err){
+        const message = err instanceof Error ? err.message : String(err);
+        showRegisterNotice(`名前の更新に失敗しました: ${message}`, "error");
+      }
+      return;
+    }
+
+    if(action === "delete"){
+      const device = devices.find((d) => d.device_id === deviceId);
+      const label = displayName(device) || deviceId;
+      const confirmed = window.confirm(`デバイス「${label}」を削除しますか？\nジョブキューや履歴も失われます。`);
+      if(!confirmed) return;
+      try{
+        await deleteDevice(deviceId);
+        devices = devices.filter((d) => d.device_id !== deviceId);
+        renderDevices();
+        showRegisterNotice(`デバイス「${label}」を削除しました。`, "success");
+        fetchDevices({ silent: true });
+      }catch(err){
+        const message = err instanceof Error ? err.message : String(err);
+        showRegisterNotice(`デバイスの削除に失敗しました: ${message}`, "error");
+      }
+    }
+  });
+}
+
 /** ---------- チャット：超軽量LLMもどき（デモ用） ---------- */
+// チャット UI の各要素を取得し、初期メッセージなどの状態を保持
 const logEl = $("#chatLog");
 const formEl = $("#chatForm");
 const inputEl = $("#chatInput");
 const sendBtn = $("#sendBtn");
 const pauseBtn = $("#pauseBtn");
 const chatResetBtn = $("#chatResetBtn");
-const INITIAL_GREETING = "こんにちは！右側のカードを直接操作するか、チャットで指示してください。例:「ランプをオン」「温度を25にして」";
+const INITIAL_GREETING = "こんにちは！登録済みデバイスの状況を確認したり、チャットで質問できます。";
 let isPaused = false;
 let isSending = false;
 const chatHistory = [];
 
+// 送信ボタンや入力欄の有効・無効を現在の状態に合わせて切り替え
 function updateChatControls(){
   if(!sendBtn || !inputEl) return;
   const disableSend = isPaused || isSending;
@@ -500,6 +741,7 @@ function updateChatControls(){
   }
 }
 
+// 役割（ユーザー/アシスタント）に応じた吹き出しをログへ追加
 function pushMessage(role, text){
   chatHistory.push({ role, content: text });
   const item = document.createElement("div");
@@ -515,99 +757,43 @@ function pushMessage(role, text){
   logEl.scrollTop = logEl.scrollHeight;
 }
 
-function escapeHtml(s){
-  return s.replace(/[&<>"']/g, m => ({
-    "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#039;"
-  }[m]));
+// 登録済みデバイスの要約テキストを生成（フォールバック応答用）
+function summarizeDevices(){
+  if(!devices.length){
+    return "登録済みのデバイスはありません。";
+  }
+  const summaries = devices.map((device) => {
+    const caps = Array.isArray(device.capabilities)
+      ? device.capabilities.map((cap) => cap?.name).filter(Boolean)
+      : [];
+    const capText = caps.length ? `（機能: ${caps.join(", ")})` : "";
+    return `${displayName(device)}${capText}`;
+  });
+  return summaries.join(" / ");
 }
 
-// 簡易NLU：日本語/かな混じり指示を解析
+// 単純なキーワード判定でチャット入力からデバイス状態要求を解釈
 function applyDeviceCommand(text){
-  const t = text.replace(/\s+/g, "");
+  const t = text.trim();
+  if(!t) return null;
 
-  // ランプ
-  if(/ランプ.*(オン|つけ|点け|起動)/.test(t)) {
-    setActuatorByName(/ランプ/, true);
-    return "ランプをオンにしました。";
-  }
-  if(/ランプ.*(オフ|消|停止)/.test(t)) {
-    setActuatorByName(/ランプ/, false);
-    return "ランプをオフにしました。";
-  }
-
-  // ファン
-  if(/ファン.*(オン|つけ|回|起動)/.test(t)) {
-    setActuatorByName(/ファン/, true);
-    return "ファンをオンにしました。";
-  }
-  if(/ファン.*(オフ|止|停止|消)/.test(t)) {
-    setActuatorByName(/ファン/, false);
-    return "ファンをオフにしました。";
-  }
-
-  // 温度値の設定（例: 温度を25にして, 温度25.4）
-  const tempMatch = t.match(/温度(を)?([0-9]+(?:\.[0-9]+)?)?/);
-  if(tempMatch && tempMatch[2]){
-    const v = parseFloat(tempMatch[2]);
-    setSensorValue("sensor-temp", v, "℃");
-    return `温度を ${v.toFixed(1)}℃ に設定しました。`;
-  }
-
-  // 湿度
-  const humMatch = t.match(/湿度(を)?([0-9]+(?:\.[0-9]+)?)?/);
-  if(humMatch && humMatch[2]){
-    const v = parseFloat(humMatch[2]);
-    setSensorValue("sensor-humid", v, "%");
-    return `湿度を ${v.toFixed(1)}% に設定しました。`;
-  }
-
-  // 状態の読み上げ
   if(/状態|ステータス|確認|教えて/.test(t)){
-    const s = summarizeState();
-    return s;
+    return summarizeDevices();
   }
 
   return null;
 }
 
-function setActuatorByName(regex, on){
-  const ds = loadDevices();
-  const target = ds.find(d => d.kind.startsWith("actuator") && regex.test(d.name));
-  if(target){ target.on = !!on; saveDevices(ds); render(); }
-}
-
-function setSensorValue(kind, value, unit){
-  const ds = loadDevices();
-  const target = ds.find(d => d.kind === kind);
-  if(target){
-    target.value = Number(value); target.unit = unit;
-    saveDevices(ds); render();
-  }
-}
-
-function summarizeState(){
-  const ds = loadDevices();
-  const t = ds.find(d => d.kind === "sensor-temp");
-  const h = ds.find(d => d.kind === "sensor-humid");
-  const lamp = ds.find(d => d.kind === "actuator-lamp");
-  const fan = ds.find(d => d.kind === "actuator-fan");
-  const parts = [];
-  if(t) parts.push(`温度 ${t.value.toFixed(1)}℃`);
-  if(h) parts.push(`湿度 ${h.value.toFixed(1)}%`);
-  if(lamp) parts.push(`ランプ ${lamp.on ? "ON" : "OFF"}`);
-  if(fan) parts.push(`ファン ${fan.on ? "ON" : "OFF"}`);
-  return parts.join(" ・ ");
-}
-
+// サーバー側のエージェント API にチャット履歴を送信して応答を取得
 async function requestAssistantResponse(){
   const payload = {
-    messages: chatHistory.map(({ role, content }) => ({ role, content }))
+    messages: chatHistory.map(({ role, content }) => ({ role, content })),
   };
 
   const res = await fetch("/api/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
   });
 
   if(!res.ok){
@@ -619,7 +805,7 @@ async function requestAssistantResponse(){
   return typeof data.reply === "string" ? data.reply : "";
 }
 
-// フォーム送信
+// チャット送信時の処理。入力テキストを履歴に追加し、API 応答を待機
 formEl.addEventListener("submit", async (e) => {
   e.preventDefault();
   if(isPaused || isSending) return;
@@ -632,28 +818,29 @@ formEl.addEventListener("submit", async (e) => {
 
   const localFallback = applyDeviceCommand(text);
 
-  try {
+  try{
     const reply = await requestAssistantResponse();
     const cleanReply = reply && reply.trim();
     if(cleanReply){
       pushMessage("assistant", cleanReply);
-    } else if(localFallback){
+    }else if(localFallback){
       pushMessage("assistant", localFallback);
-    } else {
+    }else{
       pushMessage("assistant", "了解しました。");
     }
-  } catch(err){
+  }catch(err){
     if(localFallback){
       pushMessage("assistant", localFallback);
-    } else {
+    }else{
       pushMessage("assistant", `エラーが発生しました: ${err.message}`);
     }
-  } finally {
+  }finally{
     isSending = false;
     updateChatControls();
   }
 });
 
+// 「一時停止」ボタンで送信可否を切り替える
 if(pauseBtn){
   pauseBtn.addEventListener("click", () => {
     isPaused = !isPaused;
@@ -664,6 +851,7 @@ if(pauseBtn){
   });
 }
 
+// チャット履歴をリセットし初期状態へ戻す
 if(chatResetBtn){
   chatResetBtn.addEventListener("click", () => {
     logEl.innerHTML = "";
@@ -676,13 +864,12 @@ if(chatResetBtn){
 }
 
 /** ---------- 初期化 ---------- */
-(function init(){
-  if(!localStorage.getItem(LS_KEY)){
-    saveDevices(initialDevices());
-  }
-  render();
-
-  // 初期メッセージ
+// ページ読み込み時の初期化処理：挨拶メッセージ、UI 更新、デバイス取得
+(async function init(){
   pushMessage("assistant", INITIAL_GREETING);
   updateChatControls();
+  await fetchDevices();
+  setInterval(() => {
+    fetchDevices({ silent: true });
+  }, FETCH_DEVICES_INTERVAL_MS);
 })();
