@@ -42,6 +42,13 @@ SERVER_BASE_URL = os.getenv(
 REQUEST_TIMEOUT = float(os.getenv("IOT_AGENT_HTTP_TIMEOUT", "120"))
 POLL_INTERVAL = float(os.getenv("IOT_AGENT_POLL_INTERVAL", "2.0"))
 
+AUTO_REGISTER = os.getenv("IOT_AGENT_AUTO_REGISTER", "false").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+
 OPEN_WEATHER_API_KEY = os.getenv("OPEN_WEATHER_API_KEY")
 OPEN_WEATHER_BASE_URL = os.getenv(
     "OPEN_WEATHER_BASE_URL", "https://api.openweathermap.org/data/2.5/weather"
@@ -195,11 +202,19 @@ def _create_llm() -> Llama:
     )
 
 
-def _register_device(session: requests.Session, device_id: str) -> bool:
+def _log_dict(label: str, value: Dict[str, Any], *, level: int = logging.INFO) -> None:
+    try:
+        message = json.dumps(value, ensure_ascii=False, sort_keys=True)
+    except TypeError:
+        message = repr(value)
+    logging.log(level, "%s: %s", label, message)
+
+
+def _register_device(session: requests.Session, device_id: str) -> Tuple[bool, bool]:
     payload = {
         "device_id": device_id,
         "capabilities": CAPABILITIES,
-        "approved": True,
+        **({"approved": True} if AUTO_REGISTER else {}),
         "meta": {
             "display_name": DISPLAY_NAME,
             "role": AGENT_ROLE_VALUE,
@@ -215,16 +230,24 @@ def _register_device(session: requests.Session, device_id: str) -> bool:
             json=payload,
             timeout=REQUEST_TIMEOUT,
         )
+        if resp.status_code == 403 and not AUTO_REGISTER:
+            logging.warning(
+                "Device not yet approved on server. Register the device ID '%s' manually via the dashboard.",
+                device_id,
+            )
+            return False, True
+
         resp.raise_for_status()
         try:
             data = resp.json()
         except ValueError:
             data = {}
-        logging.info("Device registered: %s", data.get("status", "ok"))
-        return True
+        logging.info("Device registration acknowledged: status=%s", data.get("status", "ok"))
+        _log_dict("Server device snapshot", data.get("device") or {})
+        return True, False
     except Exception as exc:
         logging.error("Registration failed: %s", exc)
-        return False
+        return False, False
 
 
 def _poll_next_job(session: requests.Session, device_id: str) -> Optional[Dict[str, Any]]:
@@ -242,7 +265,11 @@ def _poll_next_job(session: requests.Session, device_id: str) -> Optional[Dict[s
 
     if resp.status_code == 404:
         logging.warning("Device not registered on server. Re-registering...")
-        _register_device(session, device_id)
+        registered, manual_required = _register_device(session, device_id)
+        if not registered and manual_required:
+            logging.warning(
+                "Server still waiting for manual approval of device '%s'.", device_id
+            )
         return None
 
     if resp.status_code != 200:
@@ -275,6 +302,11 @@ def _post_result(
         try:
             response = session.post(url, json=payload, timeout=REQUEST_TIMEOUT)
             if 200 <= response.status_code < 300:
+                logging.info(
+                    "Reported job %s result successfully (status=%s)",
+                    payload.get("job_id"),
+                    response.status_code,
+                )
                 return True
 
             body_preview = response.text[:200] if response.text else ""
@@ -326,6 +358,17 @@ def _build_result_payload(
 
 
 # ==== Task execution =======================================================
+
+
+def _format_for_log(value: Any, *, max_length: int = 500) -> str:
+    try:
+        text = json.dumps(value, ensure_ascii=False, sort_keys=True)
+    except TypeError:
+        text = repr(value)
+
+    if len(text) > max_length:
+        return text[: max_length - 20] + "...<truncated>"
+    return text
 
 
 JOKES = [
@@ -470,6 +513,11 @@ def _get_weather(params: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _execute_action(action: str, parameters: Dict[str, Any]) -> Tuple[bool, Any, Optional[str]]:
+    logging.info(
+        "Executing action '%s' with parameters=%s",
+        action,
+        _format_for_log(parameters or {}),
+    )
     try:
         if action == "play_rock_paper_scissors":
             return True, _play_rock_paper_scissors(parameters or {}), None
@@ -486,6 +534,7 @@ def _execute_action(action: str, parameters: Dict[str, Any]) -> Tuple[bool, Any,
 
         return False, None, f"Unsupported action: {action}"
     except Exception as exc:
+        logging.exception("Action '%s' raised an exception", action)
         return False, None, str(exc)
 
 
@@ -531,6 +580,7 @@ def _plan_from_instruction(llm: Llama, instruction: str) -> Dict[str, Any]:
             plan["parameters"] = fallback.get("parameters", {})
             plan.pop("message", None)
 
+    logging.info("LLM plan resolved: %s", _format_for_log(plan))
     return plan
 
 
@@ -737,6 +787,20 @@ def _process_job(
 
     ok, return_value, error_message = _execute_action(action, parameters)
 
+    if ok:
+        logging.info(
+            "Action '%s' succeeded for job %s", action, job_id
+        )
+        logging.info("Result payload: %s", _format_for_log(return_value))
+    else:
+        logging.error("Action '%s' failed for job %s: %s", action, job_id, error_message)
+        if return_value is not None:
+            logging.error(
+                "Partial result for failed action '%s': %s",
+                action,
+                _format_for_log(return_value),
+            )
+
     result_payload = _build_result_payload(
         device_id=device_id,
         job_id=job_id,
@@ -756,6 +820,9 @@ def _process_job(
         error_message,
     )
 
+    if message:
+        logging.info("Job %s agent message: %s", job_id, message)
+
     if not _post_result(session, result_payload):
         logging.error("Failed to deliver result for job %s", job_id)
 
@@ -771,12 +838,31 @@ def main() -> None:
     device_id = _load_device_id()
     llm = _create_llm()
 
+    if AUTO_REGISTER:
+        logging.info(
+            "Auto registration is enabled. The device will request approval automatically."
+        )
+    else:
+        logging.info(
+            "Auto registration is disabled. Add device '%s' from the dashboard to approve it.",
+            device_id,
+        )
+
+    manual_approval_required_logged = False
     while True:
-        if _register_device(session, device_id):
+        registered, manual_required = _register_device(session, device_id)
+        if registered:
             break
 
-        logging.error("Unable to register device. Retrying in 10 seconds...")
-        time.sleep(10)
+        if manual_required and not manual_approval_required_logged:
+            logging.warning(
+                "Waiting for manual approval of device '%s'. Once approved, registration will complete automatically.",
+                device_id,
+            )
+            manual_approval_required_logged = True
+
+        logging.error("Unable to register device. Retrying in 30 seconds...")
+        time.sleep(30 if manual_required else 10)
 
     logging.info("Starting polling loop as %s", device_id)
 

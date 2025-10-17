@@ -116,6 +116,20 @@ _RECV_CHUNK = 1024
 RESULT_MAX_ATTEMPTS = 4
 RESULT_RETRY_BASE_DELAY = 2
 
+def _format_for_log(value, max_length=400):
+    """Convert arbitrary value to a short printable string."""
+    try:
+        text = json.dumps(value)
+    except Exception:
+        try:
+            text = str(value)
+        except Exception:
+            text = "<unprintable>"
+
+    if text and len(text) > max_length:
+        return text[: max_length - 16] + "...<truncated>"
+    return text
+
 # =========================
 # ハードウェア初期化
 # =========================
@@ -637,6 +651,7 @@ def agent_loop():
                     max_attempts=1,
                 )
                 if success:
+                    print("[agent] result delivery confirmed for job {}".format(job_id))
                     pending_result = None
                     pending_attempt = 0
                     gc.collect()
@@ -668,7 +683,14 @@ def agent_loop():
             name = (cmd.get("name") or "").strip().lower()
             args = cmd.get("args") or {}
 
-            print("[agent] job received: id={} name={} args={}".format(job_id, name, args))
+            print("[agent] job received: id={} name={} args={}".format(
+                job_id,
+                name,
+                _format_for_log(args),
+            ))
+
+            if cmd.get("message"):
+                print("[agent] job note: {}".format(_format_for_log(cmd.get("message"))))
 
             ok, ret, out, err = _exec_with_capture(
                 _call_function_by_name, {"name": name, "args": args}
@@ -680,7 +702,11 @@ def agent_loop():
             if err and len(err) > HTTP_BODY_PREVIEW_LEN:
                 err = err[:HTTP_BODY_PREVIEW_LEN] + "\n...[truncated]"
 
-            print("[agent] exec ok={} ret={}".format(ok, ret))
+            print("[agent] exec finished: ok={} return={}".format(ok, _format_for_log(ret)))
+            if out:
+                print("[agent] captured stdout:\n{}".format(out))
+            if err:
+                print("[agent] captured stderr:\n{}".format(err))
             backoff = 0
             pending_result = (job_id, ok, ret, out, err)
             pending_attempt = 0
