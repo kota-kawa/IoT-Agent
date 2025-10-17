@@ -616,6 +616,79 @@ def _format_return_value_for_user(value: Any) -> str:
     if isinstance(value, dict):
         if not value:
             return "詳細データは空でした。"
+
+        action_name = value.get("action") if isinstance(value.get("action"), str) else None
+        has_result_field = "result" in value
+        if action_name and has_result_field:
+            parameters = value.get("parameters")
+            message = value.get("message") if isinstance(value.get("message"), str) else None
+            result_payload = value.get("result")
+
+            if (
+                action_name == "multi_action_sequence"
+                and isinstance(result_payload, dict)
+            ):
+                steps = result_payload.get("steps")
+                formatted_steps: List[str] = []
+                if isinstance(steps, list) and steps:
+                    for index, raw_step in enumerate(steps, start=1):
+                        if not isinstance(raw_step, dict):
+                            formatted_steps.append(f"{index}. {raw_step}")
+                            continue
+                        label = str(
+                            raw_step.get("action")
+                            or raw_step.get("label")
+                            or raw_step.get("name")
+                            or f"ステップ{index}"
+                        )
+                        status = "成功" if raw_step.get("ok") else "失敗"
+                        details: List[str] = []
+                        if raw_step.get("parameters"):
+                            details.append(
+                                "パラメータ: "
+                                + _format_return_value_for_user(raw_step.get("parameters"))
+                            )
+                        if "result" in raw_step:
+                            details.append(
+                                "結果: "
+                                + _format_return_value_for_user(raw_step.get("result"))
+                            )
+                        plan_note = raw_step.get("plan_message")
+                        if isinstance(plan_note, str) and plan_note.strip():
+                            details.append(f"メモ: {plan_note.strip()}")
+                        if raw_step.get("error"):
+                            details.append(f"エラー: {raw_step.get('error')}")
+                        detail_text = " / ".join(details)
+                        step_no = raw_step.get("step")
+                        prefix = f"{step_no}. " if isinstance(step_no, int) else f"{index}. "
+                        formatted_steps.append(
+                            (prefix + f"{label}（{status}）" + (f" {detail_text}" if detail_text else "")).strip()
+                        )
+
+                extras: List[str] = []
+                if isinstance(parameters, dict) and parameters:
+                    extras.append(
+                        "サマリ: " + _format_return_value_for_user(parameters)
+                    )
+                if message:
+                    extras.append(f"メッセージ: {message}")
+
+                combined = " / ".join(filter(None, [" / ".join(formatted_steps), *extras]))
+                return combined or "マルチステップ結果が空でした。"
+
+            parts: List[str] = [f"アクション: {action_name}"]
+            if parameters:
+                parts.append(
+                    "パラメータ: " + _format_return_value_for_user(parameters)
+                )
+            if "result" in value:
+                parts.append(
+                    "結果: " + _format_return_value_for_user(result_payload)
+                )
+            if message:
+                parts.append(f"メッセージ: {message}")
+            return " / ".join(parts)
+
         parts = []
         for key, val in value.items():
             formatted = _format_return_value_for_user(val)
