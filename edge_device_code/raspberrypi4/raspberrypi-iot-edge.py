@@ -21,7 +21,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import requests
 from dotenv import load_dotenv
@@ -678,6 +678,107 @@ def _plan_from_instruction(llm: Llama, instruction: str) -> Dict[str, Any]:
     return plan
 
 
+def _build_multi_action_plan(llm: Llama, instruction: str) -> List[Dict[str, Any]]:
+    heuristic = _heuristic_multi_plan(instruction)
+    if heuristic:
+        return heuristic
+
+    plan = _plan_from_instruction(llm, instruction)
+    if isinstance(plan, dict) and plan:
+        return [plan]
+
+    return []
+
+
+def _execute_plan_sequence(
+    plans: List[Dict[str, Any]]
+) -> Tuple[bool, Any, Optional[str], Optional[str], str, Dict[str, Any]]:
+    if not plans:
+        message = "No executable actions resolved from instruction."
+        return False, None, message, message, "no_action", {}
+
+    if len(plans) == 1:
+        plan = plans[0]
+        action = str(plan.get("action") or "no_action")
+        parameters = dict(plan.get("parameters") or {})
+        message = plan.get("message") if isinstance(plan.get("message"), str) else None
+        ok, result, error = _execute_action(action, parameters)
+        return ok, result, message, error, action, parameters
+
+    executed_steps: List[Dict[str, Any]] = []
+    status_parts: List[str] = []
+    plan_messages: List[str] = []
+    error_messages: List[str] = []
+
+    for index, plan in enumerate(plans, start=1):
+        action = str(plan.get("action") or "no_action")
+        parameters = dict(plan.get("parameters") or {})
+        message = plan.get("message") if isinstance(plan.get("message"), str) else None
+
+        ok, result, error = _execute_action(action, parameters)
+
+        step_record: Dict[str, Any] = {
+            "step": index,
+            "action": action,
+            "ok": ok,
+            "parameters": parameters,
+        }
+
+        if result is not None:
+            step_record["result"] = result
+
+        if message:
+            plan_messages.append(message)
+            step_record["plan_message"] = message
+
+        if error:
+            error_entry = f"{action}: {error}"
+            error_messages.append(error_entry)
+            step_record["error"] = error
+
+        status_parts.append(f"{action}: {'成功' if ok else '失敗'}")
+        executed_steps.append(step_record)
+
+    overall_ok = all(step["ok"] for step in executed_steps)
+
+    summary: Dict[str, Any] = {
+        "actions": [step["action"] for step in executed_steps],
+        "total_steps": len(executed_steps),
+        "successful_steps": sum(1 for step in executed_steps if step["ok"]),
+        "success": overall_ok,
+    }
+
+    if not overall_ok:
+        summary["failed_steps"] = [step["step"] for step in executed_steps if not step["ok"]]
+
+    message_parts: List[str] = list(dict.fromkeys(status_parts))
+    if plan_messages:
+        message_parts.extend(part for part in plan_messages if part)
+
+    message_text = " / ".join(part for part in message_parts if part) or None
+
+    error_text = " / ".join(dict.fromkeys(error_messages)) or None
+    if error_text:
+        message_text = (message_text + " / " if message_text else "") + f"エラー: {error_text}"
+
+    result_value: Dict[str, Any] = {
+        "summary": summary,
+        "steps": executed_steps,
+    }
+
+    logging.info("Multi-action plan summary: %s", _format_for_log(summary))
+    for step in executed_steps:
+        logging.info(
+            "Step %s/%s '%s' -> %s",
+            step["step"],
+            summary["total_steps"],
+            step["action"],
+            "success" if step["ok"] else "failure",
+        )
+
+    return overall_ok, result_value, message_text, error_text, "multi_action_sequence", summary
+
+
 def _extract_json(text: str) -> Optional[Any]:
     try:
         return json.loads(text)
@@ -730,33 +831,64 @@ def _extract_weather_location(instruction: str) -> Optional[str]:
 
 
 def _keyword_plan(instruction: str) -> Optional[Dict[str, Any]]:
+    plans = _heuristic_multi_plan(instruction)
+    return plans[0] if plans else None
+
+
+def _heuristic_multi_plan(instruction: str) -> List[Dict[str, Any]]:
+    """Resolve an instruction into a deterministic sequence of actions."""
+
     text = instruction.strip()
     if not text:
-        return None
+        return []
 
     lowered = text.lower()
-    if "rock paper scissors" in lowered or "janken" in lowered or "じゃんけん" in text:
-        return {"action": "play_rock_paper_scissors", "parameters": {}}
+    plans: List[Dict[str, Any]] = []
+    seen: Set[str] = set()
 
-    if any(keyword in lowered for keyword in ["tell me a joke", "joke", "ジョーク", "冗談"]):
-        return {"action": "tell_joke", "parameters": {}}
+    def _add(action: str, parameters: Dict[str, Any], message: Optional[str] = None) -> None:
+        if action not in SUPPORTED_ACTIONS:
+            return
+        if action in seen:
+            return
+        seen.add(action)
+        entry: Dict[str, Any] = {"action": action, "parameters": dict(parameters or {})}
+        if message:
+            entry["message"] = message
+        plans.append(entry)
 
-    if any(keyword in lowered for keyword in ["what time", "current time", "time is it", "clock", "時刻", "今何時"]):
-        return {"action": "get_current_time", "parameters": {}}
+    if (
+        "rock paper scissors" in lowered
+        or "janken" in lowered
+        or "じゃんけん" in text
+        or "グー" in text
+    ):
+        _add("play_rock_paper_scissors", {})
+
+    if any(
+        keyword in lowered
+        for keyword in ["tell me a joke", "joke", "ジョーク", "冗談", "笑い"]
+    ):
+        _add("tell_joke", {})
+
+    if any(
+        keyword in lowered
+        for keyword in ["what time", "current time", "time is it", "clock", "時刻", "今何時"]
+    ):
+        _add("get_current_time", {})
 
     if "weather" in lowered or "temperature" in lowered or "forecast" in lowered or "天気" in text:
         location = _extract_weather_location(instruction)
         if not location and LOCATION and LOCATION.lower() != "lab":
             location = LOCATION
-        if not location:
-            return None
-        params: Dict[str, Any] = {"location": location}
-        units = _infer_units_from_instruction(instruction)
-        if units:
-            params["units"] = units
-        return {"action": "get_weather", "parameters": params}
+        if location:
+            params: Dict[str, Any] = {"location": location}
+            units = _infer_units_from_instruction(instruction)
+            if units:
+                params["units"] = units
+            _add("get_weather", params)
 
-    return None
+    return plans
 
 
 # ==== Main loop ============================================================
@@ -827,9 +959,12 @@ def _process_job(
             logging.error("Failed to report missing command for job %s", job_id)
         return
 
-    action: Optional[str] = None
-    parameters: Dict[str, Any] = {}
-    message: Optional[str] = None
+    resolved_action: Optional[str] = None
+    resolved_parameters: Dict[str, Any] = {}
+    resolved_message: Optional[str] = None
+    ok = False
+    return_value: Any = None
+    error_message: Optional[str] = None
     if command_name == AGENT_COMMAND_NAME:
         instruction_value = args.get("instruction") if isinstance(args, dict) else None
         instruction = instruction_value.strip() if isinstance(instruction_value, str) else None
@@ -858,25 +993,66 @@ def _process_job(
             )
         )
 
-        plan = _plan_from_instruction(llm, instruction)
-        action = plan.get("action", "no_action")
-        parameters = (
-            plan.get("parameters") if isinstance(plan.get("parameters"), dict) else {}
-        )
-        message = plan.get("message") if isinstance(plan.get("message"), str) else None
+        plans = _build_multi_action_plan(llm, instruction)
+        (
+            ok,
+            return_value,
+            resolved_message,
+            error_message,
+            resolved_action,
+            resolved_parameters,
+        ) = _execute_plan_sequence(plans)
+
+        if resolved_action == "multi_action_sequence" and isinstance(return_value, dict):
+            steps = return_value.get("steps") if isinstance(return_value.get("steps"), list) else []
+            for step in steps:
+                if not isinstance(step, dict):
+                    continue
+                step_no = step.get("step")
+                step_action = step.get("action") or "unknown"
+                status = "成功" if step.get("ok") else "失敗"
+                _console(
+                    "Job {} step {} '{}' 結果: {}".format(
+                        job_id,
+                        step_no if step_no is not None else "?",
+                        step_action,
+                        status,
+                    )
+                )
+
+            summary_info = (
+                return_value.get("summary")
+                if isinstance(return_value.get("summary"), dict)
+                else {}
+            )
+            if summary_info:
+                _console(
+                    "Job {} multi-action summary: {}".format(
+                        job_id,
+                        _format_for_log(summary_info),
+                    )
+                )
     else:
-        action = command_name
-        parameters = args if isinstance(args, dict) else {}
-        logging.info("Processing job %s with direct action: %s", job_id, action)
+        resolved_action = command_name
+        resolved_parameters = args if isinstance(args, dict) else {}
+        logging.info(
+            "Processing job %s with direct action: %s",
+            job_id,
+            resolved_action,
+        )
         _console(
             "Job {} direct action request: {} with parameters {}.".format(
                 job_id,
-                action,
-                _format_for_log(parameters),
+                resolved_action,
+                _format_for_log(resolved_parameters),
             )
         )
+        ok, return_value, error_message = _execute_action(
+            resolved_action,
+            resolved_parameters,
+        )
 
-    if not isinstance(action, str) or not action:
+    if not isinstance(resolved_action, str) or not resolved_action:
         error_message = "Resolved action is invalid."
         payload = _build_result_payload(
             device_id=device_id,
@@ -895,39 +1071,50 @@ def _process_job(
         )
         return
 
-    ok, return_value, error_message = _execute_action(action, parameters)
-    _console(
-        "Job {} executing action '{}' with parameters {}.".format(
-            job_id,
-            action,
-            _format_for_log(parameters),
-        )
-    )
-
-    if ok:
-        logging.info(
-            "Action '%s' succeeded for job %s", action, job_id
-        )
-        logging.info("Result payload: %s", _format_for_log(return_value))
+    if command_name == AGENT_COMMAND_NAME and resolved_action != "multi_action_sequence":
         _console(
-            "Job {} action '{}' succeeded. Result: {}".format(
+            "Job {} executing action '{}' with parameters {}.".format(
                 job_id,
-                action,
-                _format_for_log(return_value),
+                resolved_action,
+                _format_for_log(resolved_parameters),
             )
         )
+
+    if ok:
+        if resolved_action == "multi_action_sequence":
+            logging.info("All actions succeeded for job %s", job_id)
+            _console(
+                "Job {} multi-action sequence completed successfully.".format(job_id)
+            )
+        else:
+            logging.info(
+                "Action '%s' succeeded for job %s", resolved_action, job_id
+            )
+            logging.info("Result payload: %s", _format_for_log(return_value))
+            _console(
+                "Job {} action '{}' succeeded. Result: {}".format(
+                    job_id,
+                    resolved_action,
+                    _format_for_log(return_value),
+                )
+            )
     else:
-        logging.error("Action '%s' failed for job %s: %s", action, job_id, error_message)
+        logging.error(
+            "Action '%s' failed for job %s: %s",
+            resolved_action,
+            job_id,
+            error_message,
+        )
         if return_value is not None:
             logging.error(
                 "Partial result for failed action '%s': %s",
-                action,
+                resolved_action,
                 _format_for_log(return_value),
             )
         _console(
             "Job {} action '{}' failed: {}".format(
                 job_id,
-                action,
+                resolved_action,
                 error_message or "unknown error",
             )
         )
@@ -943,9 +1130,9 @@ def _process_job(
         device_id=device_id,
         job_id=job_id,
         ok=bool(ok),
-        action=action,
-        parameters=parameters,
-        message=message,
+        action=resolved_action,
+        parameters=resolved_parameters,
+        message=resolved_message,
         result=return_value,
         error=error_message,
     )
