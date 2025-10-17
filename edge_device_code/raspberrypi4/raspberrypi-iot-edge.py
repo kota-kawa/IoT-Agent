@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import random
+import re
 import sys
 import time
 import uuid
@@ -136,12 +137,20 @@ LLM_SYSTEM_PROMPT = (
     "Valid actions are: "
     + ", ".join(sorted(SUPPORTED_ACTIONS.keys()))
     + ".\n"
-    "If the instruction cannot be completed with the available actions, set action to 'no_action' and provide a short reason in 'message'.\n"
+    "Always choose the action that best fulfills the instruction.\n"
+    "Only respond with 'no_action' when the request is impossible or unrelated to the available actions.\n"
+    "Include all required parameters.\n"
     "Examples:\n"
     "Instruction: Let's play rock paper scissors, I choose rock.\n"
     "{\"action\": \"play_rock_paper_scissors\", \"parameters\": {\"player_move\": \"rock\"}}\n"
-    "Instruction: I just wanted to say thanks.\n"
-    "{\"action\": \"no_action\", \"parameters\": {}, \"message\": \"Gratitude only.\"}"
+    "Instruction: What's the weather in Tokyo in metric units?\n"
+    "{\"action\": \"get_weather\", \"parameters\": {\"location\": \"Tokyo\", \"units\": \"metric\"}}\n"
+    "Instruction: What time is it right now?\n"
+    "{\"action\": \"get_current_time\", \"parameters\": {}}\n"
+    "Instruction: Tell me a joke.\n"
+    "{\"action\": \"tell_joke\", \"parameters\": {}}\n"
+    "Instruction: Just saying thank you!\n"
+    "{\"action\": \"no_action\", \"parameters\": {}, \"message\": \"No task requested.\"}"
 )
 
 # ==== Helpers ==============================================================
@@ -502,6 +511,11 @@ def _plan_from_instruction(llm: Llama, instruction: str) -> Dict[str, Any]:
     if not isinstance(plan, dict):
         plan = {}
 
+    if not plan:
+        fallback = _keyword_plan(instruction)
+        if fallback:
+            plan = dict(fallback)
+
     action = plan.get("action")
     if action not in SUPPORTED_ACTIONS:
         plan["action"] = "no_action"
@@ -509,6 +523,13 @@ def _plan_from_instruction(llm: Llama, instruction: str) -> Dict[str, Any]:
         plan.setdefault("message", "Model returned an unsupported action.")
     else:
         plan.setdefault("parameters", {})
+
+    if plan.get("action") == "no_action":
+        fallback = _keyword_plan(instruction)
+        if fallback:
+            plan["action"] = fallback["action"]
+            plan["parameters"] = fallback.get("parameters", {})
+            plan.pop("message", None)
 
     return plan
 
@@ -527,6 +548,70 @@ def _extract_json(text: str) -> Optional[Any]:
             return json.loads(candidate)
         except json.JSONDecodeError:
             return None
+    return None
+
+
+def _infer_units_from_instruction(instruction: str) -> Optional[str]:
+    text = instruction.lower()
+    if "fahrenheit" in text or "imperial" in text:
+        return "imperial"
+    if "celsius" in text or "metric" in text:
+        return "metric"
+    if "kelvin" in text or "standard" in text:
+        return "standard"
+    return None
+
+
+def _extract_weather_location(instruction: str) -> Optional[str]:
+    patterns = [
+        r"\bweather\s+(?:in|for)\s+([A-Za-z0-9 ,'-]+)",
+        r"\btemperature\s+(?:in|for)\s+([A-Za-z0-9 ,'-]+)",
+        r"([A-Za-z0-9 ,'-]+)\s+weather",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, instruction, re.IGNORECASE)
+        if match:
+            candidate = match.group(1).strip()
+            candidate = re.split(r"[\.?!,]", candidate)[0].strip()
+            if candidate:
+                return candidate
+
+    jp_match = re.search(r"([\w\u3040-\u30ff\u4e00-\u9faf\s]+?)の天気", instruction)
+    if jp_match:
+        candidate = jp_match.group(1).strip()
+        if candidate:
+            return candidate
+
+    return None
+
+
+def _keyword_plan(instruction: str) -> Optional[Dict[str, Any]]:
+    text = instruction.strip()
+    if not text:
+        return None
+
+    lowered = text.lower()
+    if "rock paper scissors" in lowered or "janken" in lowered or "じゃんけん" in text:
+        return {"action": "play_rock_paper_scissors", "parameters": {}}
+
+    if any(keyword in lowered for keyword in ["tell me a joke", "joke", "ジョーク", "冗談"]):
+        return {"action": "tell_joke", "parameters": {}}
+
+    if any(keyword in lowered for keyword in ["what time", "current time", "time is it", "clock", "時刻", "今何時"]):
+        return {"action": "get_current_time", "parameters": {}}
+
+    if "weather" in lowered or "temperature" in lowered or "forecast" in lowered or "天気" in text:
+        location = _extract_weather_location(instruction)
+        if not location and LOCATION and LOCATION.lower() != "lab":
+            location = LOCATION
+        if not location:
+            return None
+        params: Dict[str, Any] = {"location": location}
+        units = _infer_units_from_instruction(instruction)
+        if units:
+            params["units"] = units
+        return {"action": "get_weather", "parameters": params}
+
     return None
 
 
