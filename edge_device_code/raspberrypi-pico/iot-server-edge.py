@@ -421,6 +421,24 @@ def get_capabilities():
         })
     return caps
 
+
+def get_action_catalog():
+    """ダッシュボード/LLM向けに提供する操作リストを生成"""
+    actions = []
+    for name, spec in FUNCTIONS.items():
+        entry = {
+            "name": name,
+            "capability": name,
+        }
+        description = spec.get("description")
+        if isinstance(description, str) and description:
+            entry["description"] = description
+        params = spec.get("params", [])
+        if isinstance(params, list) and params:
+            entry["params"] = params
+        actions.append(entry)
+    return actions
+
 # =========================
 # LLMエージェント連携
 # =========================
@@ -432,6 +450,7 @@ def register_device(base_url: str, device_id: str):
         "meta": {
             "firmware": "iot_edge_agent/1.1.0",
             "ua": USER_AGENT,
+            "action_catalog": get_action_catalog(),
         },
     }
     if DEVICE_LABEL:
