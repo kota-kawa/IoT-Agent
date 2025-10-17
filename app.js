@@ -154,45 +154,6 @@ function renderCapabilities(capabilities){
   return section;
 }
 
-function renderMeta(meta){
-  if(!meta || typeof meta !== "object"){
-    return null;
-  }
-  const hiddenKeys = new Set(["display_name", "action_catalog", "firmware", "registered_via", "ua"]);
-  const entries = Object.entries(meta).filter(([key, value]) =>
-    !hiddenKeys.has(key) && value !== "" && value !== null && value !== undefined
-  );
-  if(!entries.length){
-    return null;
-  }
-  const section = document.createElement("div");
-  section.className = "device-section";
-  const label = document.createElement("div");
-  label.className = "device-section__label";
-  label.textContent = "メタ情報";
-  section.appendChild(label);
-
-  const list = document.createElement("div");
-  list.className = "device-meta";
-  for(const [key, value] of entries){
-    const item = document.createElement("div");
-    item.className = "device-meta__item";
-    const keyEl = document.createElement("div");
-    keyEl.className = "device-meta__key";
-    keyEl.textContent = key;
-    const valueEl = document.createElement("div");
-    valueEl.className = "device-meta__value";
-    const textValue = formatMetaValue(value);
-    valueEl.textContent = textValue;
-    valueEl.title = textValue;
-    item.appendChild(keyEl);
-    item.appendChild(valueEl);
-    list.appendChild(item);
-  }
-  section.appendChild(list);
-  return section;
-}
-
 function renderLastResult(result){
   if(!result || typeof result !== "object"){
     return null;
@@ -338,10 +299,6 @@ function renderDevices(){
     const capSection = renderCapabilities(device.capabilities);
     if(capSection){
       body.appendChild(capSection);
-    }
-    const metaSection = renderMeta(device.meta);
-    if(metaSection){
-      body.appendChild(metaSection);
     }
     const resultSection = renderLastResult(device.last_result);
     if(resultSection){
