@@ -57,9 +57,9 @@ DEVICE_ID_PATH = Path(
 DISPLAY_NAME = os.getenv("IOT_AGENT_DISPLAY_NAME", "Raspberry Pi 4 Agent")
 LOCATION = os.getenv("IOT_AGENT_LOCATION", "Lab")
 
-REGISTER_PATH = "/pico-w/register"
-NEXT_PATH = "/pico-w/next"
-RESULT_PATH = "/pico-w/result"
+REGISTER_PATH = "/api/edge/register"
+NEXT_PATH = "/api/edge/next"
+RESULT_PATH = "/api/edge/result"
 
 AGENT_ROLE_VALUE = "raspberrypi-agent"
 AGENT_COMMAND_NAME = "agent_instruction"

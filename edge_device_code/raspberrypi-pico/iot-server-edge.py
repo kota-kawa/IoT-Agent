@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Raspberry Pi Pico W (MicroPython) - LLMエージェント連携クライアント（デバイス側のみ）
+MicroPython ベースのエッジデバイス向け - LLMエージェント連携クライアント（デバイス側のみ）
 
 変更点（2025-10-10）:
   * MicroPython の一部ビルドに sys.stdout / sys.stderr が無いため、
@@ -79,9 +79,9 @@ from machine import Pin, ADC, unique_id  # type: ignore
 # 設定
 # =========================
 BASE_URL = "https://iot-agent.project-kk.com"
-REGISTER_PATH = "/pico-w/register"
-NEXT_PATH = "/pico-w/next"
-RESULT_PATH = "/pico-w/result"
+REGISTER_PATH = "/api/edge/register"
+NEXT_PATH = "/api/edge/next"
+RESULT_PATH = "/api/edge/result"
 
 # Wi-Fi 認証情報は secrets.py から読み込み（無ければ未設定扱い）
 WIFI_SSID = ""
@@ -109,7 +109,7 @@ except Exception:
 POLL_INTERVAL_SEC = 1  # 1秒間隔でサーバーをポーリング
 AUTO_REGISTER_ON_BOOT = False  # True にすると起動時に自動登録
 
-USER_AGENT = "PicoW-MicroPython-Agent/1.1"
+USER_AGENT = "MicroPython-Edge-Agent/1.1"
 HTTP_BODY_PREVIEW_LEN = 512
 HTTP_TIMEOUT_SEC = 15
 _RECV_CHUNK = 1024
@@ -317,7 +317,7 @@ def _load_device_id(path: str = "device_id.txt") -> str:
         did = "".join("{:02x}".format(b) for b in raw)
     except Exception:
         rnd = random.getrandbits(64)
-        did = "pico-" + "{:016x}".format(rnd)
+        did = "edge-" + "{:016x}".format(rnd)
 
     try:
         with open(path, "w") as f:
@@ -414,7 +414,7 @@ def register_device(base_url: str, device_id: str):
         "device_id": device_id,
         "capabilities": get_capabilities(),
         "meta": {
-            "firmware": "pico_w_agent/1.1.0",
+            "firmware": "micropython-edge-agent/1.1.0",
             "ua": USER_AGENT,
         },
     }

@@ -54,7 +54,7 @@
       <header class="main__header">
         <div>
           <h2 class="main__title">IoT ダッシュボード</h2>
-          <p class="main__subtitle">登録された Pico W デバイスの状態と提供機能を確認できます。</p>
+          <p class="main__subtitle">登録されたエッジデバイスの状態と提供機能を確認できます。</p>
         </div>
         <div class="main__actions">
           <button class="btn btn--primary" id="registerDeviceBtn">デバイス登録</button>
@@ -77,10 +77,10 @@
         <h3 id="registerDialogTitle">デバイスを登録</h3>
       </header>
       <div class="dialog__body">
-        <p class="form__hint" id="registerDialogMessage">Pico W の <code>device_id.txt</code> に保存された ID を入力し、ダッシュボードから登録します。</p>
+        <p class="form__hint" id="registerDialogMessage">デバイスIDを入力し、必要に応じて機能情報を追加してダッシュボードから登録します。</p>
         <div class="form__row">
           <label class="form__label" for="registerDeviceId">デバイスID</label>
-          <input id="registerDeviceId" class="form__control" type="text" name="device_id" placeholder="例: pico-abc123" autocomplete="off" required />
+          <input id="registerDeviceId" class="form__control" type="text" name="device_id" placeholder="例: sensor-abc123" autocomplete="off" required />
         </div>
         <div class="form__row">
           <label class="form__label" for="registerDeviceName">表示名（任意）</label>
@@ -89,6 +89,17 @@
         <div class="form__row">
           <label class="form__label" for="registerDeviceNote">メモ（任意）</label>
           <input id="registerDeviceNote" class="form__control" type="text" name="note" placeholder="設置場所など" autocomplete="off" />
+        </div>
+        <div class="form__row">
+          <label class="form__label" for="registerDeviceCapabilities">提供機能（JSON、任意）</label>
+          <textarea
+            id="registerDeviceCapabilities"
+            class="form__control"
+            name="capabilities"
+            rows="4"
+            placeholder='例: [{"name": "toggle_led", "description": "LEDを切り替える"}]'
+          ></textarea>
+          <p class="form__hint">JSON配列でデバイスが提供する機能を指定できます。未入力の場合は空のリストとして登録されます。</p>
         </div>
       </div>
       <footer class="dialog__footer">

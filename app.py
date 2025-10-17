@@ -661,8 +661,8 @@ def logout():
     return redirect(url_for("login"))
 
 
-@app.get("/pico-w-test")
-def pico_w_test():
+@app.get("/api/edge/test")
+def edge_device_test():
     return jsonify({"message": "Successful!"})
 
 
@@ -735,20 +735,24 @@ def chat():
     return jsonify(payload), status
 
 
-@app.post("/pico-w/register")
+@app.post("/api/edge/register")
 def register_device():
     payload = request.get_json(silent=True) or {}
     device_id = payload.get("device_id")
-    capabilities = payload.get("capabilities")
+    capabilities_value = payload.get("capabilities")
     meta = payload.get("meta") or {}
 
     if not isinstance(device_id, str) or not device_id.strip():
         return jsonify({"error": "device_id is required"}), 400
-    if not isinstance(capabilities, list):
+    if capabilities_value is None:
+        capabilities = []
+    elif isinstance(capabilities_value, list):
+        capabilities = capabilities_value
+    else:
         return jsonify({"error": "capabilities must be a list"}), 400
     cleaned_id = device_id.strip()
     now = time.time()
-    metadata = meta if isinstance(meta, dict) else {}
+    metadata = meta.copy() if isinstance(meta, dict) else {}
     manual_registration = metadata.get("registered_via") == "dashboard" or bool(
         payload.get("approved")
     )
@@ -881,7 +885,7 @@ def delete_device(device_id: str):
     return jsonify({"status": "deleted", "device_id": cleaned_id})
 
 
-@app.get("/pico-w/next")
+@app.get("/api/edge/next")
 def next_job():
     device_id = request.args.get("device_id", "").strip()
     if not device_id:
@@ -900,7 +904,7 @@ def next_job():
     return jsonify(job)
 
 
-@app.post("/pico-w/result")
+@app.post("/api/edge/result")
 def post_result():
     payload = request.get_json(silent=True)
     if payload is None:

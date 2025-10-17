@@ -1,7 +1,7 @@
 /* =========================================================
  * IoT ダッシュボード（登録デバイス表示）
  * - サーバーから登録済みデバイス一覧を取得して表示
- * - デバイス登録ダイアログから Pico W を登録
+ * - デバイス登録ダイアログから任意のエッジデバイスを登録
  * - チャットはサーバー連携 + 簡易フォールバック応答
  * ======================================================= */
 
@@ -435,11 +435,11 @@ const registerNoteInput = $("#registerDeviceNote");
 const registerDialogMessageEl = $("#registerDialogMessage");
 const registerCancelBtn = $("#registerCancelBtn");
 const registerSubmitBtn = $("#registerSubmitBtn");
+const registerCapabilitiesInput = $("#registerDeviceCapabilities");
 
 const REGISTER_DIALOG_DEFAULT = registerDialogMessageEl
   ? registerDialogMessageEl.textContent.trim()
-  : "Pico W の device_id.txt に保存された ID を入力し、ダッシュボードから登録します。";
-let cachedPicoCapabilities = null;
+  : "デバイスIDを入力し、必要に応じて機能情報を追加してダッシュボードから登録します。";
 let lastRegisteredDeviceId = null;
 let lastRegisteredDeviceName = null;
 
@@ -464,22 +464,6 @@ function hideRegisterNotice(){
   delete registerNoticeEl.dataset.kind;
 }
 
-async function loadPicoCapabilities(){
-  if(cachedPicoCapabilities){
-    return cachedPicoCapabilities;
-  }
-  const res = await fetch("/pico_capabilities.json", { cache: "no-cache" });
-  if(!res.ok){
-    throw new Error(`capabilities の取得に失敗しました (HTTP ${res.status})`);
-  }
-  const data = await res.json();
-  if(!Array.isArray(data)){
-    throw new Error("capabilities の形式が不正です");
-  }
-  cachedPicoCapabilities = data;
-  return data;
-}
-
 function setRegisterDialogMessage(message, kind = "info"){
   if(!registerDialogMessageEl) return;
   registerDialogMessageEl.textContent = message;
@@ -499,6 +483,9 @@ function clearRegisterDialog(){
     registerSubmitBtn.disabled = false;
     registerSubmitBtn.textContent = "登録";
   }
+  if(registerCapabilitiesInput){
+    registerCapabilitiesInput.value = "";
+  }
   setRegisterDialogMessage(REGISTER_DIALOG_DEFAULT);
 }
 
@@ -509,6 +496,9 @@ async function handleRegisterSubmit(event){
   const deviceId = registerDeviceIdInput ? registerDeviceIdInput.value.trim() : "";
   const displayNameInput = registerNameInput ? registerNameInput.value.trim() : "";
   const note = registerNoteInput ? registerNoteInput.value.trim() : "";
+  const capabilitiesRaw = registerCapabilitiesInput
+    ? registerCapabilitiesInput.value.trim()
+    : "";
 
   if(!deviceId){
     setRegisterDialogMessage("デバイスIDを入力してください。", "error");
@@ -518,18 +508,32 @@ async function handleRegisterSubmit(event){
     return;
   }
 
+  let capabilities = [];
+  if(capabilitiesRaw){
+    try{
+      const parsed = JSON.parse(capabilitiesRaw);
+      if(!Array.isArray(parsed)){
+        throw new Error();
+      }
+      capabilities = parsed;
+    }catch(_err){
+      setRegisterDialogMessage("提供機能はJSON配列で入力してください。", "error");
+      if(registerCapabilitiesInput){
+        registerCapabilitiesInput.focus();
+      }
+      return;
+    }
+  }
+
   registerSubmitBtn.disabled = true;
   registerSubmitBtn.textContent = "登録中…";
   setRegisterDialogMessage("サーバーへ登録しています…");
 
   try{
-    const capabilities = await loadPicoCapabilities();
     const payload = {
       device_id: deviceId,
       capabilities,
       meta: {
-        firmware: "pico_w_agent/1.1.0",
-        ua: "PicoW-MicroPython-Agent/1.1",
         registered_via: "dashboard",
       },
     };
@@ -540,7 +544,7 @@ async function handleRegisterSubmit(event){
       payload.meta.note = note;
     }
 
-    const res = await fetch("/pico-w/register", {
+    const res = await fetch("/api/edge/register", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -610,7 +614,7 @@ if(registerDialog){
     if(registerDialog.returnValue === "success" && lastRegisteredDeviceId){
       const label = lastRegisteredDeviceName || lastRegisteredDeviceId;
       const idSuffix = lastRegisteredDeviceName ? ` (ID: ${lastRegisteredDeviceId})` : "";
-      showRegisterNotice(`デバイス「${label}」${idSuffix}を登録しました。Pico W を起動するとジョブの取得を開始できます。`, "success");
+      showRegisterNotice(`デバイス「${label}」${idSuffix}を登録しました。デバイスを起動するとジョブの取得を開始できます。`, "success");
       fetchDevices();
     }
     lastRegisteredDeviceId = null;
