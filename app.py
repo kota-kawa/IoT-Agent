@@ -734,6 +734,19 @@ def _manual_result_reply(
     return "\n".join(lines)
 
 
+@dataclass
+class _CommandExecutionSummary:
+    device_id: Optional[str]
+    command_name: str
+    args: Dict[str, Any] = field(default_factory=dict)
+    manual_reply: str = ""
+    result: Optional[Dict[str, Any]] = None
+    instruction: Optional[str] = None
+    is_agent: bool = False
+    status: int = 200
+    error_text: Optional[str] = None
+
+
 def _timeout_reply(command: Dict[str, Any], timeout_seconds: float) -> str:
     device_id = command.get("device_id")
     device_label = _device_label_for_prompt(device_id) if device_id else "対象デバイス"
@@ -759,71 +772,53 @@ def _timeout_reply(command: Dict[str, Any], timeout_seconds: float) -> str:
     )
 
 
-def _finalize_reply_with_result(
-    client: OpenAI,
-    base_messages: List[Dict[str, str]],
-    initial_reply: str,
-    command: Dict[str, Any],
-    result: Dict[str, Any],
-) -> str:
-    device_id = command.get("device_id")
-    device_label = _device_label_for_prompt(device_id) if device_id else "対象デバイス"
-    command_name = command.get("name", "不明なコマンド")
-    instruction = (
-        "The previous device command has completed.\n"
-        f"Device: {device_label}\n"
-        f"Command: {command_name}\n"
-        f"Arguments: {json.dumps(command.get('args') or {}, ensure_ascii=False, default=str)}\n"
-        f"Result details (internal): {_format_result_for_prompt(result)}\n"
-        "Provide a concise Japanese reply for the user that summarises this outcome. "
-        "Do not create a new device_command unless the user explicitly asked for more actions. "
-        "Do not mention JSON, code snippets, or expose structured literals in the reply; "
-        "respond in natural prose."
-    )
-
-    followup_messages: List[Dict[str, str]] = [*base_messages]
-    if initial_reply:
-        followup_messages.append({"role": "assistant", "content": initial_reply})
-    followup_messages.append({"role": "system", "content": instruction})
-
-    try:
-        followup = _call_llm_and_parse(client, followup_messages)
-    except Exception:
-        return _manual_result_reply(device_label, command_name, result)
-
-    followup_reply = followup.get("reply")
-    if isinstance(followup_reply, str) and followup_reply.strip():
-        return followup_reply.strip()
-
-    return _manual_result_reply(device_label, command_name, result)
-
-
 def _execute_standard_device_command(
     client: OpenAI,
     messages: List[Dict[str, str]],
     initial_reply: str,
     command: Dict[str, Any],
-) -> str:
-    command_payload = {
-        "name": command["name"],
-        "args": command["args"],
-    }
-    job_id = _enqueue_device_command(command["device_id"], command_payload)
+) -> _CommandExecutionSummary:
+    device_id = command.get("device_id")
+    command_name = (
+        str(command.get("name")) if isinstance(command.get("name"), str) else "不明なコマンド"
+    )
+    args_dict = command.get("args") if isinstance(command.get("args"), dict) else {}
+
+    command_payload = {"name": command_name, "args": args_dict}
+    job_id = _enqueue_device_command(device_id, command_payload)
     if job_id is None:
         notice = "(注意: デバイスにコマンドを送信できませんでした。)"
-        return (initial_reply + "\n" if initial_reply else "") + notice
-
-    result = _await_device_result(command["device_id"], job_id, timeout=DEVICE_RESULT_TIMEOUT)
-    if result:
-        return _finalize_reply_with_result(
-            client,
-            messages,
-            initial_reply,
-            command,
-            result,
+        combined = (initial_reply + "\n" if initial_reply else "") + notice
+        return _CommandExecutionSummary(
+            device_id=device_id,
+            command_name=command_name,
+            args=args_dict,
+            manual_reply=combined,
         )
 
-    return _timeout_reply(command, DEVICE_RESULT_TIMEOUT)
+    result = _await_device_result(device_id, job_id, timeout=DEVICE_RESULT_TIMEOUT)
+    device_label = _device_label_for_prompt(device_id) if device_id else "対象デバイス"
+
+    if result:
+        manual_reply = _manual_result_reply(device_label, command_name, result)
+        return _CommandExecutionSummary(
+            device_id=device_id,
+            command_name=command_name,
+            args=args_dict,
+            manual_reply=manual_reply,
+            result=result,
+        )
+
+    timeout_reply = _timeout_reply(
+        {"device_id": device_id, "name": command_name, "args": args_dict},
+        DEVICE_RESULT_TIMEOUT,
+    )
+    return _CommandExecutionSummary(
+        device_id=device_id,
+        command_name=command_name,
+        args=args_dict,
+        manual_reply=timeout_reply,
+    )
 
 
 def _execute_device_command_sequence(
@@ -835,7 +830,7 @@ def _execute_device_command_sequence(
     if not commands:
         return initial_reply, 200
 
-    aggregated_replies: List[str] = []
+    summaries: List[_CommandExecutionSummary] = []
     current_initial = initial_reply
 
     for command in commands:
@@ -843,40 +838,46 @@ def _execute_device_command_sequence(
         device = _DEVICES.get(device_id) if isinstance(device_id, str) else None
 
         if device and _device_is_agent(device):
-            payload, status = _execute_agent_device_command(
+            summary = _execute_agent_device_command(
                 client, device, messages, current_initial, command
             )
-            reply_text = ""
-            if isinstance(payload, dict):
-                reply_text = str(payload.get("reply") or "").strip()
-                error_text = str(payload.get("error") or "").strip()
-            else:
-                reply_text = ""
-                error_text = ""
+        else:
+            summary = _execute_standard_device_command(
+                client, messages, current_initial, command
+            )
 
-            if status != 200:
-                final_message = error_text or reply_text or "デバイスコマンドの実行中にエラーが発生しました。"
-                if final_message:
-                    aggregated_replies.append(final_message)
-                return "\n\n".join(filter(None, aggregated_replies)), status
+        if summary.status != 200:
+            failure_messages: List[str] = []
+            for existing in summaries:
+                if isinstance(existing.manual_reply, str):
+                    text = existing.manual_reply.strip()
+                    if text:
+                        failure_messages.append(text)
 
-            if reply_text:
-                aggregated_replies.append(reply_text)
-                current_initial = reply_text
-            continue
+            candidate = ""
+            if isinstance(summary.manual_reply, str) and summary.manual_reply.strip():
+                candidate = summary.manual_reply.strip()
+            elif isinstance(summary.error_text, str) and summary.error_text.strip():
+                candidate = summary.error_text.strip()
 
-        reply_message = _execute_standard_device_command(
-            client, messages, current_initial, command
-        )
-        reply_message = reply_message.strip()
-        if reply_message:
-            aggregated_replies.append(reply_message)
-            current_initial = reply_message
+            if candidate:
+                failure_messages.append(candidate)
 
-    if aggregated_replies:
-        return "\n\n".join(aggregated_replies), 200
+            if failure_messages:
+                return "\n\n".join(failure_messages), summary.status
+            return initial_reply, summary.status
 
-    return initial_reply, 200
+        summaries.append(summary)
+        if isinstance(summary.manual_reply, str) and summary.manual_reply.strip():
+            current_initial = summary.manual_reply
+
+    if not summaries:
+        return initial_reply, 200
+
+    final_reply = _summarize_device_command_sequence(
+        client, messages, initial_reply, summaries
+    )
+    return final_reply, 200
 
 
 def _execute_agent_device_command(
@@ -885,7 +886,7 @@ def _execute_agent_device_command(
     messages: List[Dict[str, str]],
     initial_reply: str,
     command: Dict[str, Any],
-) -> Tuple[Dict[str, Any], int]:
+) -> _CommandExecutionSummary:
     args = command.get("args") if isinstance(command, dict) else {}
     args_dict = args if isinstance(args, dict) else {}
     raw_instruction = args_dict.get("instruction")
@@ -899,10 +900,30 @@ def _execute_agent_device_command(
                 client, _structured_agent_instruction_prompt(messages)
             ).strip()
         except Exception as exc:  # pragma: no cover - network/SDK errors
-            return {"error": str(exc)}, 500
+            message = str(exc)
+            return _CommandExecutionSummary(
+                device_id=agent.device_id,
+                command_name=AGENT_COMMAND_NAME,
+                args=args_dict,
+                manual_reply=message,
+                instruction=None,
+                is_agent=True,
+                status=500,
+                error_text=message,
+            )
 
         if not english_instruction:
-            return {"error": "Failed to build instruction for device."}, 500
+            message = "Failed to build instruction for device."
+            return _CommandExecutionSummary(
+                device_id=agent.device_id,
+                command_name=AGENT_COMMAND_NAME,
+                args=args_dict,
+                manual_reply=message,
+                instruction=None,
+                is_agent=True,
+                status=500,
+                error_text=message,
+            )
 
     command_args = dict(args_dict)
     command_args["instruction"] = english_instruction
@@ -916,35 +937,144 @@ def _execute_agent_device_command(
     if job_id is None:
         failure_message = "指示を送信できませんでした。デバイスの接続状態を確認してください。"
         combined = (initial_reply + "\n" if initial_reply else "") + failure_message
-        return {"reply": combined}, 200
+        return _CommandExecutionSummary(
+            device_id=agent.device_id,
+            command_name=AGENT_COMMAND_NAME,
+            args=command_args,
+            manual_reply=combined,
+            instruction=english_instruction,
+            is_agent=True,
+        )
 
     result = _await_device_result(agent.device_id, job_id, timeout=DEVICE_RESULT_TIMEOUT)
+    device_label = _device_label_for_prompt(agent.device_id)
     if result:
-        try:
-            final_reply = _call_llm_text(
-                client,
-                _structured_agent_followup_prompt(messages, english_instruction, result),
-            )
-        except Exception:  # pragma: no cover - network/SDK errors
-            final_reply = ""
-
-        reply_text = final_reply.strip() if isinstance(final_reply, str) else ""
-        if not reply_text:
-            reply_text = _manual_result_reply(
-                _device_label_for_prompt(agent.device_id), english_instruction, result
-            )
-
-        return {"reply": reply_text}, 200
+        manual_reply = _manual_result_reply(
+            device_label,
+            english_instruction or command_payload["name"],
+            result,
+        )
+        return _CommandExecutionSummary(
+            device_id=agent.device_id,
+            command_name=AGENT_COMMAND_NAME,
+            args=command_args,
+            manual_reply=manual_reply,
+            result=result,
+            instruction=english_instruction,
+            is_agent=True,
+        )
 
     timeout_reply = _timeout_reply(
         {
             "device_id": agent.device_id,
-            "name": english_instruction,
+            "name": english_instruction or command_payload["name"],
             "args": command_args,
         },
         DEVICE_RESULT_TIMEOUT,
     )
-    return {"reply": timeout_reply}, 200
+    return _CommandExecutionSummary(
+        device_id=agent.device_id,
+        command_name=AGENT_COMMAND_NAME,
+        args=command_args,
+        manual_reply=timeout_reply,
+        instruction=english_instruction,
+        is_agent=True,
+    )
+
+
+def _summarize_device_command_sequence(
+    client: Optional[OpenAI],
+    base_messages: List[Dict[str, str]],
+    initial_reply: str,
+    summaries: List[_CommandExecutionSummary],
+) -> str:
+    fallback_parts = [
+        summary.manual_reply.strip()
+        for summary in summaries
+        if isinstance(summary.manual_reply, str) and summary.manual_reply.strip()
+    ]
+    fallback_reply = "\n\n".join(fallback_parts) if fallback_parts else initial_reply
+
+    if client is None:
+        return fallback_reply
+
+    try:
+        prompt_payload = _structured_multi_command_followup_prompt(
+            base_messages, initial_reply, summaries
+        )
+        llm_reply = _call_llm_text(client, prompt_payload)
+    except Exception:
+        return fallback_reply
+
+    cleaned_reply = llm_reply.strip() if isinstance(llm_reply, str) else ""
+    return cleaned_reply or fallback_reply
+
+
+def _structured_multi_command_followup_prompt(
+    base_messages: List[Dict[str, str]],
+    initial_reply: str,
+    summaries: List[_CommandExecutionSummary],
+) -> Dict[str, Any]:
+    device_context = _build_device_context()
+    step_descriptions: List[str] = []
+
+    for index, summary in enumerate(summaries, start=1):
+        device_label = (
+            _device_label_for_prompt(summary.device_id)
+            if summary.device_id
+            else "対象デバイス"
+        )
+        args_text = json.dumps(summary.args, ensure_ascii=False, default=str)
+        if summary.result is not None:
+            result_text = _format_result_for_prompt(summary.result)
+        else:
+            result_text = "No structured result was reported."
+
+        manual = summary.manual_reply.strip() if isinstance(summary.manual_reply, str) else ""
+
+        lines = [
+            f"Step {index}:",
+            f"  Device: {device_label}",
+            f"  Command or instruction: {summary.instruction or summary.command_name}",
+            f"  Arguments: {args_text}",
+            f"  Result details (internal): {result_text}",
+        ]
+        if manual:
+            lines.append(f"  Suggested phrasing: {manual}")
+
+        step_descriptions.append("\n".join(lines))
+
+    step_block = "\n\n".join(step_descriptions)
+
+    guidance = (
+        "All queued device commands have now completed. Use the step information provided "
+        "below to craft the final assistant reply in Japanese.\n"
+        "Write one concise paragraph per step, keep the steps in order, and separate "
+        "paragraphs with a blank line.\n"
+        "Clearly mention the device, what was attempted, and the outcome for each step.\n"
+        "Do not invent new steps or request further actions unless explicitly requested "
+        "by the user."
+    )
+
+    if initial_reply:
+        guidance += f"\nThe assistant previously told the user: {initial_reply}"
+
+    messages: List[Dict[str, str]] = [
+        {"role": "system", "content": "You are an assistant supporting IoT devices."},
+    ]
+    if device_context:
+        messages.append({"role": "system", "content": "Available device information:\n" + device_context})
+
+    messages.extend(base_messages)
+
+    if initial_reply:
+        messages.append({"role": "assistant", "content": initial_reply})
+
+    messages.append({"role": "system", "content": guidance})
+    messages.append({"role": "system", "content": "Step summaries:\n" + step_block})
+    messages.append({"role": "system", "content": "Respond now with the final Japanese reply."})
+
+    return {"model": "gpt-4.1-2025-04-14", "input": messages}
 
 
 def _chat_via_legacy(messages: List[Dict[str, str]]) -> Tuple[Dict[str, Any], int]:
