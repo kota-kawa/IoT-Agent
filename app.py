@@ -418,7 +418,10 @@ def _structured_llm_prompt(messages: List[Dict[str, str]]) -> Dict[str, Any]:
         "an unknown value. If the correct device cannot be determined, "
         "set 'device_command' to null and ask the user to clarify which "
         "device should be used. Prefer devices tagged with the "
-        f"'{AGENT_ROLE_VALUE}' role for complex or conversational tasks."
+        f"'{AGENT_ROLE_VALUE}' role for complex or conversational tasks. "
+        "The 'reply' value must be written in Japanese prose without "
+        "including JSON syntax, code formatting, or explicit mentions of "
+        "'JSON'. Summarise any structured information conversationally."
     )
 
     context_message = (
@@ -508,11 +511,13 @@ def _structured_agent_followup_prompt(
     summary_instruction = (
         "The edge device executed the request using the following simple "
         f"English instruction: {english_instruction}\n"
-        f"Device response JSON: {_format_result_for_prompt(result)}\n"
+        f"Device response details (internal): {_format_result_for_prompt(result)}\n"
         "Write a concise Japanese message for the user that summarises the "
         "outcome. Mention success or failure clearly and include key "
         "details from the result when helpful. Do not request further "
-        "actions unless the user explicitly asked."
+        "actions unless the user explicitly asked. Never display JSON, "
+        "code snippets, or mention that JSON was processed; keep the "
+        "message purely conversational."
     )
 
     messages: List[Dict[str, str]] = [
@@ -533,10 +538,20 @@ def _format_return_value_for_user(value: Any) -> str:
         return "値は返されませんでした。"
     if isinstance(value, (str, int, float, bool)):
         return str(value)
-    try:
-        return json.dumps(value, ensure_ascii=False, default=str)
-    except TypeError:
-        return str(value)
+    if isinstance(value, dict):
+        if not value:
+            return "詳細データは空でした。"
+        parts = []
+        for key, val in value.items():
+            formatted = _format_return_value_for_user(val)
+            parts.append(f"{key}: {formatted}")
+        return " / ".join(parts)
+    if isinstance(value, (list, tuple, set)):
+        items = [_format_return_value_for_user(item) for item in value]
+        if not items:
+            return "詳細データは空でした。"
+        return "、".join(items)
+    return str(value)
 
 
 def _manual_result_reply(
@@ -611,9 +626,11 @@ def _finalize_reply_with_result(
         f"Device: {device_label}\n"
         f"Command: {command_name}\n"
         f"Arguments: {json.dumps(command.get('args') or {}, ensure_ascii=False, default=str)}\n"
-        f"Result JSON: {_format_result_for_prompt(result)}\n"
+        f"Result details (internal): {_format_result_for_prompt(result)}\n"
         "Provide a concise Japanese reply for the user that summarises this outcome. "
-        "Do not create a new device_command unless the user explicitly asked for more actions."
+        "Do not create a new device_command unless the user explicitly asked for more actions. "
+        "Do not mention JSON, code snippets, or expose structured literals in the reply; "
+        "respond in natural prose."
     )
 
     followup_messages: List[Dict[str, str]] = [*base_messages]
