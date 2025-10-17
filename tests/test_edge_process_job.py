@@ -3,11 +3,13 @@ import logging
 import sys
 from pathlib import Path
 
+# エッジデバイス用スクリプトの動作を検証するテスト群
 import pytest
 
 
 @pytest.fixture(scope="module")
 def edge_agent_module():
+    # 実際のエージェントモジュールをテスト用に読み込み、外部依存をスタブ化
     module_name = "raspberrypi_iot_edge_testmodule"
     module_path = (
         Path(__file__).resolve().parents[1]
@@ -18,6 +20,7 @@ def edge_agent_module():
     import types
 
     if "requests" not in sys.modules:
+        # HTTP 通信を行う requests が無くても動作するようスタブを登録
         fake_requests = types.ModuleType("requests")
 
         class _FakeSession:
@@ -33,6 +36,7 @@ def edge_agent_module():
         sys.modules["requests"] = fake_requests
 
     if "llama_cpp" not in sys.modules:
+        # ローカル LLM 実装が無い環境向けにダミーのクラスを提供
         fake_llama = types.ModuleType("llama_cpp")
 
         class _FakeLlama:  # pragma: no cover - simple stub
@@ -51,6 +55,7 @@ def edge_agent_module():
 
 @pytest.fixture(autouse=True)
 def disable_console(monkeypatch, edge_agent_module):
+    # コンソール出力を捕捉し、ログ内容をテストで検証可能にする
     messages = []
 
     def _capture(message: str) -> None:
@@ -61,6 +66,7 @@ def disable_console(monkeypatch, edge_agent_module):
 
 
 def _capture_posts(monkeypatch, edge_agent_module):
+    # _post_result 呼び出しをフックし、送信されるペイロードを記録
     posted = []
 
     def _fake_post(session, payload, **kwargs):
@@ -72,6 +78,7 @@ def _capture_posts(monkeypatch, edge_agent_module):
 
 
 def test_process_job_direct_action_success(monkeypatch, caplog, edge_agent_module):
+    # 通常アクション成功時に正常な結果が送信されることを確認
     posted = _capture_posts(monkeypatch, edge_agent_module)
 
     def fake_execute(action, params):
@@ -99,6 +106,7 @@ def test_process_job_direct_action_success(monkeypatch, caplog, edge_agent_modul
 
 
 def test_process_job_direct_action_failure(monkeypatch, caplog, edge_agent_module):
+    # アクション失敗時にエラーメッセージが送信されることを検証
     posted = _capture_posts(monkeypatch, edge_agent_module)
 
     def fake_execute(action, params):
@@ -128,6 +136,7 @@ def test_process_job_direct_action_failure(monkeypatch, caplog, edge_agent_modul
 
 
 def test_process_job_instruction_logs_message(monkeypatch, caplog, edge_agent_module):
+    # エージェント指示ジョブがログと返却メッセージを残すことを確認
     posted = _capture_posts(monkeypatch, edge_agent_module)
 
     def fake_build_plan(llm, instruction):
@@ -169,6 +178,7 @@ def test_process_job_instruction_logs_message(monkeypatch, caplog, edge_agent_mo
 
 
 def test_process_job_other_device(monkeypatch, edge_agent_module):
+    # 別デバイス宛てのジョブはスキップされることを確認
     posted = _capture_posts(monkeypatch, edge_agent_module)
 
     def fail_execute(*args, **kwargs):
@@ -194,6 +204,7 @@ def test_process_job_other_device(monkeypatch, edge_agent_module):
 
 
 def test_process_job_missing_command(monkeypatch, edge_agent_module):
+    # コマンド情報が欠落しているジョブを適切にエラー化するか検証
     posted = _capture_posts(monkeypatch, edge_agent_module)
 
     job = {

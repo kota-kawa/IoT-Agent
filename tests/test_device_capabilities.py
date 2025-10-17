@@ -1,8 +1,10 @@
 from pathlib import Path
 import sys
 
+# Flask アプリの機能テストに必要なモジュールを読み込む
 import pytest
 
+# プロジェクトルートを Python パスへ追加し、アプリをインポートできるようにする
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -12,6 +14,7 @@ from app import app, _DEVICES, _PENDING_JOBS
 
 @pytest.fixture(autouse=True)
 def clear_state():
+    # 各テストの前後でグローバル状態をクリーンにする
     _DEVICES.clear()
     _PENDING_JOBS.clear()
     yield
@@ -21,11 +24,13 @@ def clear_state():
 
 @pytest.fixture
 def client():
+    # Flask のテストクライアントを用意し、HTTP リクエストをシミュレート
     with app.test_client() as client:
         yield client
 
 
 def _manual_register(client, device_id: str) -> None:
+    # ダッシュボード登録相当のリクエストを送り、デバイスを登録済みにする
     payload = {
         "device_id": device_id,
         "capabilities": [],
@@ -37,6 +42,7 @@ def _manual_register(client, device_id: str) -> None:
 
 
 def test_capabilities_are_normalised(client):
+    # 不正な余白や欠損を含む機能定義がサーバー側で整形されることを検証
     device_id = "test-device"
     _manual_register(client, device_id)
 
