@@ -75,6 +75,51 @@ def _agent_device() -> Optional[DeviceState]:
     return None
 
 
+def _action_catalog_for_device(device: DeviceState) -> List[Dict[str, Any]]:
+    meta = device.meta if isinstance(device.meta, dict) else {}
+    catalog = meta.get("action_catalog") if isinstance(meta, dict) else None
+
+    valid_entries: List[Dict[str, Any]] = []
+    if isinstance(catalog, list):
+        for entry in catalog:
+            if not isinstance(entry, dict):
+                continue
+            raw_name = entry.get("name")
+            if not isinstance(raw_name, str):
+                continue
+            name = raw_name.strip()
+            if not name:
+                continue
+            cleaned = dict(entry)
+            cleaned["name"] = name
+            valid_entries.append(cleaned)
+    if valid_entries:
+        return valid_entries
+
+    fallback_catalog: List[Dict[str, Any]] = []
+    for capability in device.capabilities:
+        if not isinstance(capability, dict):
+            continue
+        raw_name = capability.get("name")
+        if not isinstance(raw_name, str):
+            continue
+        name = raw_name.strip()
+        if not name:
+            continue
+        fallback_entry: Dict[str, Any] = {
+            "name": name,
+            "capability": name,
+        }
+        description = capability.get("description")
+        if isinstance(description, str) and description.strip():
+            fallback_entry["description"] = description.strip()
+        params = capability.get("params")
+        if isinstance(params, list) and params:
+            fallback_entry["params"] = params
+        fallback_catalog.append(fallback_entry)
+    return fallback_catalog
+
+
 def _describe_device_role(device: DeviceState) -> List[str]:
     lines: List[str] = []
     meta = device.meta if isinstance(device.meta, dict) else {}
@@ -102,14 +147,14 @@ def _describe_device_role(device: DeviceState) -> List[str]:
             "explicit capabilities listed below."
         )
 
-    action_catalog = meta.get("action_catalog") if isinstance(meta, dict) else None
-    if isinstance(action_catalog, list):
+    action_catalog = _action_catalog_for_device(device)
+    if action_catalog:
         action_names = [
-            str(entry.get("name")).strip()
+            str(entry.get("name"))
             for entry in action_catalog
             if isinstance(entry, dict) and entry.get("name")
         ]
-        filtered = [name for name in action_names if name]
+        filtered = [name.strip() for name in action_names if isinstance(name, str) and name.strip()]
         if filtered:
             lines.append("  Agent predefined actions: " + ", ".join(filtered))
 
@@ -251,6 +296,7 @@ def _serialize_device(device: DeviceState) -> Dict[str, Any]:
         "device_id": device.device_id,
         "capabilities": device.capabilities,
         "meta": device.meta,
+        "action_catalog": _action_catalog_for_device(device),
         "queue_depth": len(device.job_queue),
         "last_seen": device.last_seen,
         "registered_at": device.registered_at,
