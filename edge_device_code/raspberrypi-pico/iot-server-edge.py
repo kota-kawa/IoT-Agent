@@ -716,6 +716,12 @@ def agent_loop():
 
             if pending_result is not None:
                 job_id, ok, ret, out, err = pending_result
+                print(
+                    "[agent] retrying result delivery for job {} (attempt {}).".format(
+                        job_id,
+                        pending_attempt + 1,
+                    )
+                )
                 success = post_result(
                     BASE_URL,
                     device_id,
@@ -728,6 +734,12 @@ def agent_loop():
                 )
                 if success:
                     print("[agent] result delivery confirmed for job {}".format(job_id))
+                    print(
+                        "[agent] job {} final return payload: {}".format(
+                            job_id,
+                            _format_for_log(ret),
+                        )
+                    )
                     pending_result = None
                     pending_attempt = 0
                     gc.collect()
@@ -778,11 +790,26 @@ def agent_loop():
             if err and len(err) > HTTP_BODY_PREVIEW_LEN:
                 err = err[:HTTP_BODY_PREVIEW_LEN] + "\n...[truncated]"
 
-            print("[agent] exec finished: ok={} return={}".format(ok, _format_for_log(ret)))
+            print(
+                "[agent] exec finished for job {}: ok={} return={}".format(
+                    job_id,
+                    ok,
+                    _format_for_log(ret),
+                )
+            )
             if out:
-                print("[agent] captured stdout:\n{}".format(out))
+                print("[agent] job {} captured stdout:\n{}".format(job_id, out))
             if err:
-                print("[agent] captured stderr:\n{}".format(err))
+                print("[agent] job {} captured stderr:\n{}".format(job_id, err))
+            print(
+                "[agent] job {} result summary -> ok={} return={} stdout_len={} stderr_len={}".format(
+                    job_id,
+                    ok,
+                    _format_for_log(ret),
+                    len(out or ""),
+                    len(err or ""),
+                )
+            )
             backoff = 0
             pending_result = (job_id, ok, ret, out, err)
             pending_attempt = 0

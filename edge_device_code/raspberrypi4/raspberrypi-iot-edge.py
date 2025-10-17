@@ -158,6 +158,15 @@ CAPABILITIES = [
     *ACTION_CATALOG,
 ]
 
+
+def _console(message: str) -> None:
+    """Emit a human-readable status line to the terminal."""
+
+    try:
+        print(f"[agent] {message}", flush=True)
+    except Exception:  # pragma: no cover - printing should never fail, but stay safe
+        pass
+
 LLM_SYSTEM_PROMPT = (
     "You convert simple English instructions into JSON commands for a Raspberry Pi automation agent.\n"
     "Return ONLY a JSON object with the keys 'action', 'parameters', and optional 'message'.\n"
@@ -243,6 +252,13 @@ def _register_device(session: requests.Session, device_id: str) -> Tuple[bool, b
         },
     }
 
+    _console(
+        "Attempting to register device '{}' (display='{}', location='{}').".format(
+            device_id,
+            DISPLAY_NAME,
+            LOCATION,
+        )
+    )
     try:
         resp = session.post(
             _build_url(REGISTER_PATH),
@@ -254,6 +270,11 @@ def _register_device(session: requests.Session, device_id: str) -> Tuple[bool, b
                 "Device not yet approved on server. Register the device ID '%s' manually via the dashboard.",
                 device_id,
             )
+            _console(
+                "Registration pending approval for device '{}'. Approve it from the dashboard.".format(
+                    device_id
+                )
+            )
             return False, True
 
         resp.raise_for_status()
@@ -263,9 +284,17 @@ def _register_device(session: requests.Session, device_id: str) -> Tuple[bool, b
             data = {}
         logging.info("Device registration acknowledged: status=%s", data.get("status", "ok"))
         _log_dict("Server device snapshot", data.get("device") or {})
+        status_text = data.get("status") or "ok"
+        _console(
+            "Device '{}' registration succeeded with status '{}'.".format(
+                device_id,
+                status_text,
+            )
+        )
         return True, False
     except Exception as exc:
         logging.error("Registration failed: %s", exc)
+        _console("Device '{}' registration failed: {}".format(device_id, exc))
         return False, False
 
 
@@ -284,21 +313,41 @@ def _poll_next_job(session: requests.Session, device_id: str) -> Optional[Dict[s
 
     if resp.status_code == 404:
         logging.warning("Device not registered on server. Re-registering...")
+        _console(
+            "Server returned 404 for device '{}'. Triggering re-registration.".format(
+                device_id
+            )
+        )
         registered, manual_required = _register_device(session, device_id)
         if not registered and manual_required:
             logging.warning(
                 "Server still waiting for manual approval of device '%s'.", device_id
             )
+            _console(
+                "Device '{}' still awaiting manual approval on server.".format(device_id)
+            )
         return None
 
     if resp.status_code != 200:
         logging.error("Unexpected status from job endpoint: %s", resp.status_code)
+        _console(
+            "Polling jobs failed with status {} for device '{}'.".format(
+                resp.status_code,
+                device_id,
+            )
+        )
         return None
 
     try:
-        return resp.json()
+        job = resp.json()
+        job_id = job.get("job_id") or job.get("id")
+        _console(
+            "Received job {} from server.".format(job_id if job_id is not None else "<unknown>")
+        )
+        return job
     except json.JSONDecodeError:
         logging.error("Job payload is not valid JSON: %s", resp.text[:200])
+        _console("Received invalid job payload from server (JSON decode error).")
     return None
 
 
@@ -326,6 +375,12 @@ def _post_result(
                     payload.get("job_id"),
                     response.status_code,
                 )
+                _console(
+                    "Result for job {} delivered successfully (status {}).".format(
+                        payload.get("job_id"),
+                        response.status_code,
+                    )
+                )
                 return True
 
             body_preview = response.text[:200] if response.text else ""
@@ -335,14 +390,34 @@ def _post_result(
                 response.status_code,
                 body_preview,
             )
+            _console(
+                "Attempt {} to send result for job {} failed with status {}.".format(
+                    attempt,
+                    payload.get("job_id"),
+                    response.status_code,
+                )
+            )
         except Exception as exc:
             logging.error("Result post attempt %s raised error: %s", attempt, exc)
+            _console(
+                "Attempt {} to send result for job {} raised error: {}.".format(
+                    attempt,
+                    payload.get("job_id"),
+                    exc,
+                )
+            )
 
         if attempt >= max_attempts:
             break
 
         sleep_for = min(backoff_seconds * (2 ** (attempt - 1)), 30.0)
         logging.info("Retrying result post in %.1f seconds", sleep_for)
+        _console(
+            "Retrying result delivery for job {} in {:.1f} seconds.".format(
+                payload.get("job_id"),
+                sleep_for,
+            )
+        )
         time.sleep(sleep_for)
 
     return False
@@ -776,6 +851,12 @@ def _process_job(
             return
 
         logging.info("Processing job %s with instruction: %s", job_id, instruction)
+        _console(
+            "Job {} instruction received: {}".format(
+                job_id,
+                instruction,
+            )
+        )
 
         plan = _plan_from_instruction(llm, instruction)
         action = plan.get("action", "no_action")
@@ -787,6 +868,13 @@ def _process_job(
         action = command_name
         parameters = args if isinstance(args, dict) else {}
         logging.info("Processing job %s with direct action: %s", job_id, action)
+        _console(
+            "Job {} direct action request: {} with parameters {}.".format(
+                job_id,
+                action,
+                _format_for_log(parameters),
+            )
+        )
 
     if not isinstance(action, str) or not action:
         error_message = "Resolved action is invalid."
@@ -802,15 +890,32 @@ def _process_job(
         )
         if not _post_result(session, payload):
             logging.error("Failed to report invalid action for job %s", job_id)
+        _console(
+            "Job {} failed: resolved action invalid, notified server.".format(job_id)
+        )
         return
 
     ok, return_value, error_message = _execute_action(action, parameters)
+    _console(
+        "Job {} executing action '{}' with parameters {}.".format(
+            job_id,
+            action,
+            _format_for_log(parameters),
+        )
+    )
 
     if ok:
         logging.info(
             "Action '%s' succeeded for job %s", action, job_id
         )
         logging.info("Result payload: %s", _format_for_log(return_value))
+        _console(
+            "Job {} action '{}' succeeded. Result: {}".format(
+                job_id,
+                action,
+                _format_for_log(return_value),
+            )
+        )
     else:
         logging.error("Action '%s' failed for job %s: %s", action, job_id, error_message)
         if return_value is not None:
@@ -818,6 +923,20 @@ def _process_job(
                 "Partial result for failed action '%s': %s",
                 action,
                 _format_for_log(return_value),
+            )
+        _console(
+            "Job {} action '{}' failed: {}".format(
+                job_id,
+                action,
+                error_message or "unknown error",
+            )
+        )
+        if return_value is not None:
+            _console(
+                "Job {} partial result: {}".format(
+                    job_id,
+                    _format_for_log(return_value),
+                )
             )
 
     result_payload = _build_result_payload(
@@ -841,9 +960,11 @@ def _process_job(
 
     if message:
         logging.info("Job %s agent message: %s", job_id, message)
+        _console("Job {} message to user: {}".format(job_id, message))
 
     if not _post_result(session, result_payload):
         logging.error("Failed to deliver result for job %s", job_id)
+        _console("Job {} result delivery failed after retries.".format(job_id))
 
 
 def main() -> None:
@@ -855,16 +976,30 @@ def main() -> None:
 
     session = requests.Session()
     device_id = _load_device_id()
+    _console("Device ID resolved: {}".format(device_id))
     llm = _create_llm()
+    _console(
+        "Model ready (path='{}', threads={}, context={}).".format(
+            MODEL_PATH,
+            LLAMA_THREADS,
+            LLAMA_CONTEXT,
+        )
+    )
 
     if AUTO_REGISTRATION_REQUESTED:
         logging.warning(
             "IOT_AGENT_AUTO_REGISTER is deprecated. Manual approval is now required;"
             " the device will not auto-register with the server."
         )
+        _console(
+            "AUTO_REGISTER flag detected but manual approval workflow is in effect."
+        )
     logging.info(
         "Manual registration is required. Add device '%s' from the dashboard to approve it.",
         device_id,
+    )
+    _console(
+        "Manual approval required on dashboard for device '{}'.".format(device_id)
     )
 
     manual_approval_required_logged = False
@@ -879,11 +1014,18 @@ def main() -> None:
                 device_id,
             )
             manual_approval_required_logged = True
+            _console(
+                "Waiting for manual approval of device '{}' on server.".format(device_id)
+            )
 
         logging.error("Unable to register device. Retrying in 30 seconds...")
+        _console(
+            "Device '{}' registration attempt failed. Retrying soon...".format(device_id)
+        )
         time.sleep(30 if manual_required else 10)
 
     logging.info("Starting polling loop as %s", device_id)
+    _console("Entering polling loop as device '{}'.".format(device_id))
 
     try:
         while True:
@@ -894,6 +1036,7 @@ def main() -> None:
                 time.sleep(POLL_INTERVAL)
     except KeyboardInterrupt:
         logging.info("Stopping agent")
+        _console("Keyboard interrupt received. Stopping agent loop.")
 
 
 if __name__ == "__main__":
