@@ -11,6 +11,13 @@ The implementation avoids hardware-specific features so that it runs on a
 plain Raspberry Pi 4 without additional peripherals.
 """
 
+"""使う候補のモデル
+Llama-3.2-3B-Instruct-Q3_K_M.gguf 1min 25sec 
+Phi-3-mini-4k-instruct-q4 1min 20sec 
+tinyllama-1.1b-chat-v1.0.Q3_K_M 1min
+tinyllama-1.1b-chat-v1.0.Q4_K_M 1min
+"""
+
 import json
 import logging
 import os
@@ -41,7 +48,7 @@ load_dotenv(override=False)
 
 # ==== Configuration ========================================================
 
-MODEL_PATH = os.getenv("LLAMA_MODEL_PATH", "tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf")
+MODEL_PATH = os.getenv("LLAMA_MODEL_PATH", "Llama-3.2-3B-Instruct-Q3_K_M.gguf")
 LLAMA_THREADS = int(os.getenv("LLAMA_THREADS", "4"))
 LLAMA_CONTEXT = int(os.getenv("LLAMA_CONTEXT", "1024"))
 LLAMA_TEMPERATURE = float(os.getenv("LLAMA_TEMPERATURE", "0.2"))
