@@ -77,10 +77,10 @@
         <h3 id="registerDialogTitle">デバイスを登録</h3>
       </header>
       <div class="dialog__body">
-        <p class="form__hint" id="registerDialogMessage">Pico W の <code>device_id.txt</code> に保存された ID を入力し、ダッシュボードから登録します。</p>
+        <p class="form__hint" id="registerDialogMessage">エッジデバイスで使用する識別子を入力し、必要に応じて表示名やメタ情報を設定します。capabilities や追加メタデータは JSON として登録できます。</p>
         <div class="form__row">
           <label class="form__label" for="registerDeviceId">デバイスID</label>
-          <input id="registerDeviceId" class="form__control" type="text" name="device_id" placeholder="例: pico-abc123" autocomplete="off" required />
+          <input id="registerDeviceId" class="form__control" type="text" name="device_id" placeholder="例: device-abc123" autocomplete="off" required />
         </div>
         <div class="form__row">
           <label class="form__label" for="registerDeviceName">表示名（任意）</label>
@@ -89,6 +89,16 @@
         <div class="form__row">
           <label class="form__label" for="registerDeviceNote">メモ（任意）</label>
           <input id="registerDeviceNote" class="form__control" type="text" name="note" placeholder="設置場所など" autocomplete="off" />
+        </div>
+        <div class="form__row">
+          <label class="form__label" for="registerDeviceCapabilities">capabilities 定義（JSON / 任意）</label>
+          <textarea id="registerDeviceCapabilities" class="form__control form__control--textarea" name="capabilities" placeholder='例: [{"name": "blink_led", "description": "LED を点滅させる", "params": []}]'></textarea>
+          <p class="form__hint">ダッシュボードからのジョブを制御する場合は、提供する関数の仕様を JSON 配列で入力してください。空欄の場合は空の配列が登録されます。</p>
+        </div>
+        <div class="form__row">
+          <label class="form__label" for="registerDeviceMeta">追加メタデータ（JSON オブジェクト / 任意）</label>
+          <textarea id="registerDeviceMeta" class="form__control form__control--textarea" name="meta" placeholder='例: {"location": "server-room", "device_role": "sensor"}'></textarea>
+          <p class="form__hint">display_name / note 以外に付加したいプロパティがある場合に利用します。</p>
         </div>
       </div>
       <footer class="dialog__footer">
