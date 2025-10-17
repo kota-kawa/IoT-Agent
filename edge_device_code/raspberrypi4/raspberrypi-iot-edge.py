@@ -24,7 +24,20 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 import requests
+from dotenv import load_dotenv
 from llama_cpp import Llama
+
+# Load environment variables from potential .env locations before reading them.
+_ENV_CANDIDATES = [
+    Path(__file__).resolve().parent / ".env",
+    Path(__file__).resolve().parent.parent / ".env",
+    Path.cwd() / ".env",
+]
+for _env_file in _ENV_CANDIDATES:
+    if _env_file.exists():
+        load_dotenv(_env_file, override=False)
+# Also respect a .env in the current working directory if one exists.
+load_dotenv(override=False)
 
 # ==== Configuration ========================================================
 
@@ -42,12 +55,16 @@ SERVER_BASE_URL = os.getenv(
 REQUEST_TIMEOUT = float(os.getenv("IOT_AGENT_HTTP_TIMEOUT", "120"))
 POLL_INTERVAL = float(os.getenv("IOT_AGENT_POLL_INTERVAL", "2.0"))
 
-AUTO_REGISTER = os.getenv("IOT_AGENT_AUTO_REGISTER", "false").strip().lower() in {
-    "1",
-    "true",
-    "yes",
-    "on",
-}
+_AUTO_REGISTER_RAW = os.getenv("IOT_AGENT_AUTO_REGISTER")
+AUTO_REGISTRATION_REQUESTED = (
+    (_AUTO_REGISTER_RAW or "").strip().lower()
+    in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+)
 
 OPEN_WEATHER_API_KEY = os.getenv("OPEN_WEATHER_API_KEY")
 OPEN_WEATHER_BASE_URL = os.getenv(
@@ -214,7 +231,6 @@ def _register_device(session: requests.Session, device_id: str) -> Tuple[bool, b
     payload = {
         "device_id": device_id,
         "capabilities": CAPABILITIES,
-        **({"approved": True} if AUTO_REGISTER else {}),
         "meta": {
             "display_name": DISPLAY_NAME,
             "role": AGENT_ROLE_VALUE,
@@ -230,7 +246,7 @@ def _register_device(session: requests.Session, device_id: str) -> Tuple[bool, b
             json=payload,
             timeout=REQUEST_TIMEOUT,
         )
-        if resp.status_code == 403 and not AUTO_REGISTER:
+        if resp.status_code == 403:
             logging.warning(
                 "Device not yet approved on server. Register the device ID '%s' manually via the dashboard.",
                 device_id,
@@ -838,15 +854,15 @@ def main() -> None:
     device_id = _load_device_id()
     llm = _create_llm()
 
-    if AUTO_REGISTER:
-        logging.info(
-            "Auto registration is enabled. The device will request approval automatically."
+    if AUTO_REGISTRATION_REQUESTED:
+        logging.warning(
+            "IOT_AGENT_AUTO_REGISTER is deprecated. Manual approval is now required;"
+            " the device will not auto-register with the server."
         )
-    else:
-        logging.info(
-            "Auto registration is disabled. Add device '%s' from the dashboard to approve it.",
-            device_id,
-        )
+    logging.info(
+        "Manual registration is required. Add device '%s' from the dashboard to approve it.",
+        device_id,
+    )
 
     manual_approval_required_logged = False
     while True:
