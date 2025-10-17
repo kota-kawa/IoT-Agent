@@ -62,6 +62,8 @@ body{
   display: flex;
   flex-direction: column;
   min-height: calc(100vh - 48px);
+  max-height: calc(100vh - 48px);
+  overflow: hidden;
 }
 
 .sidebar__header{
@@ -82,7 +84,8 @@ body{
 .chat{
   display: flex;
   flex-direction: column;
-  flex: 1;
+  flex: 1 1 auto;
+  min-height: 0;
   padding: 0 16px;
 }
 .chat__log{
@@ -91,8 +94,9 @@ body{
   border: 1px solid rgba(255,255,255,.06);
   padding: 18px 12px 12px;
   overflow: auto;
-  min-height: 220px;
   margin-bottom: 16px;
+  flex: 1 1 220px;
+  min-height: 0;
 }
 .message{
   display: grid;
