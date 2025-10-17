@@ -108,6 +108,8 @@ except Exception:
 
 POLL_INTERVAL_SEC = 1  # 1秒間隔でサーバーをポーリング
 AUTO_REGISTER_ON_BOOT = False  # True にすると起動時に自動登録
+CAPABILITY_SYNC_ENABLED = True  # 手動登録後でも機能一覧をサーバーへ同期する
+CAPABILITY_RESYNC_INTERVAL_SEC = 30  # 同期失敗時の再試行間隔（秒）
 
 USER_AGENT = "MicroPython-IoT-Edge-Agent/1.1"
 HTTP_BODY_PREVIEW_LEN = 512
@@ -622,22 +624,77 @@ def agent_loop():
     device_id = _load_device_id()
     print("[agent] device_id={}".format(device_id))
 
-    if AUTO_REGISTER_ON_BOOT:
+    def _current_seconds():
         try:
-            register_device(BASE_URL, device_id)
-        except Exception as e:
-            print("[agent] register error: {}".format(e))
+            return float(time.time())
+        except Exception:
+            try:
+                return float(time.ticks_ms()) / 1000.0
+            except Exception:
+                return 0.0
+
+    capability_synced = False
+    next_capability_sync = 0.0
+
+    def _schedule_capability_sync(delay_sec: float):
+        nonlocal next_capability_sync
+        if delay_sec <= 0:
+            next_capability_sync = 0.0
+            return
+        try:
+            next_capability_sync = _current_seconds() + float(delay_sec)
+        except Exception:
+            next_capability_sync = float(delay_sec)
+
+    def _attempt_capability_sync(reason: str) -> bool:
+        nonlocal capability_synced
+        if not CAPABILITY_SYNC_ENABLED:
+            return True
+        print("[agent] syncing capabilities ({}).".format(reason))
+        try:
+            status = register_device(BASE_URL, device_id)
+        except Exception as exc:
+            print("[agent] capability sync error ({}): {}".format(reason, exc))
+            return False
+
+        if 200 <= (status or 0) < 300:
+            capability_synced = True
+            print("[agent] capability sync succeeded (status {}).".format(status))
+            return True
+
+        if status == 403:
+            print(
+                "[agent] capability sync rejected (status 403). Register/approve this device "
+                "from the dashboard first."
+            )
+        else:
+            print("[agent] capability sync returned status {}.".format(status))
+        return False
+
+    if AUTO_REGISTER_ON_BOOT:
+        if not _attempt_capability_sync("auto-register"):
+            _schedule_capability_sync(CAPABILITY_RESYNC_INTERVAL_SEC)
     else:
         print(
             "[agent] auto registration is disabled. Register this device from the dashboard "
             "(https://iot-agent.project-kk.com/) before sending jobs."
         )
+        if not _attempt_capability_sync("capability-sync"):
+            _schedule_capability_sync(CAPABILITY_RESYNC_INTERVAL_SEC)
 
     backoff = 0
     pending_result = None
     pending_attempt = 0
     while True:
         try:
+            if CAPABILITY_SYNC_ENABLED and not capability_synced:
+                now_sec = _current_seconds()
+                if next_capability_sync <= 0 or now_sec >= next_capability_sync:
+                    if _attempt_capability_sync("scheduled"):
+                        next_capability_sync = 0.0
+                    else:
+                        _schedule_capability_sync(CAPABILITY_RESYNC_INTERVAL_SEC)
+
             if pending_result is not None:
                 job_id, ok, ret, out, err = pending_result
                 success = post_result(
