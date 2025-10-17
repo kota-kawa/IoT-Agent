@@ -391,25 +391,6 @@ body{
 .chip--muted{
   color: var(--text-dim);
 }
-.device-meta{
-  display: grid;
-  gap: 6px;
-}
-.device-meta__item{
-  display: flex;
-  gap: 8px;
-  align-items: baseline;
-}
-.device-meta__key{
-  font-size: 12px;
-  color: var(--text-dim);
-  min-width: 80px;
-}
-.device-meta__value{
-  font-size: 13px;
-  color: var(--text);
-  word-break: break-word;
-}
 .device-result{
   display: flex;
   align-items: center;
