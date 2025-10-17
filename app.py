@@ -43,6 +43,88 @@ _PENDING_JOBS: Dict[str, str] = {}
 DEVICE_RESULT_TIMEOUT = float(os.getenv("DEVICE_RESULT_TIMEOUT", "120"))
 
 
+def _normalise_capability_params(params: Any) -> List[Dict[str, Any]]:
+    if not isinstance(params, list):
+        return []
+
+    cleaned_params: List[Dict[str, Any]] = []
+    for raw_param in params:
+        if not isinstance(raw_param, dict):
+            continue
+
+        raw_name = raw_param.get("name")
+        if not isinstance(raw_name, str):
+            continue
+
+        name = raw_name.strip()
+        if not name:
+            continue
+
+        cleaned: Dict[str, Any] = {"name": name}
+
+        raw_type = raw_param.get("type")
+        if isinstance(raw_type, str):
+            type_name = raw_type.strip()
+            if type_name:
+                cleaned["type"] = type_name
+
+        if "required" in raw_param:
+            cleaned["required"] = bool(raw_param.get("required"))
+
+        if "default" in raw_param:
+            cleaned["default"] = raw_param.get("default")
+
+        raw_description = raw_param.get("description")
+        if isinstance(raw_description, str):
+            description = raw_description.strip()
+            if description:
+                cleaned["description"] = description
+
+        cleaned_params.append(cleaned)
+
+    return cleaned_params
+
+
+def _normalise_capabilities(raw_capabilities: Any) -> List[Dict[str, Any]]:
+    if not isinstance(raw_capabilities, list):
+        return []
+
+    cleaned_capabilities: List[Dict[str, Any]] = []
+    for raw_capability in raw_capabilities:
+        if not isinstance(raw_capability, dict):
+            continue
+
+        raw_name = raw_capability.get("name")
+        if not isinstance(raw_name, str):
+            continue
+
+        name = raw_name.strip()
+        if not name:
+            continue
+
+        cleaned: Dict[str, Any] = {"name": name}
+
+        raw_description = raw_capability.get("description")
+        if isinstance(raw_description, str):
+            description = raw_description.strip()
+            if description:
+                cleaned["description"] = description
+
+        capability_ref = raw_capability.get("capability")
+        if isinstance(capability_ref, str):
+            capability_name = capability_ref.strip()
+            if capability_name:
+                cleaned["capability"] = capability_name
+
+        params = _normalise_capability_params(raw_capability.get("params"))
+        if params:
+            cleaned["params"] = params
+
+        cleaned_capabilities.append(cleaned)
+
+    return cleaned_capabilities
+
+
 def _client() -> OpenAI:
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
@@ -792,6 +874,7 @@ def register_device():
         return jsonify({"error": "device_id is required"}), 400
     if not isinstance(capabilities, list):
         return jsonify({"error": "capabilities must be a list"}), 400
+    capabilities = _normalise_capabilities(capabilities)
     cleaned_id = device_id.strip()
     now = time.time()
     metadata = meta if isinstance(meta, dict) else {}
