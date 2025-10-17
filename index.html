@@ -54,63 +54,39 @@
       <header class="main__header">
         <div>
           <h2 class="main__title">IoT ダッシュボード</h2>
-          <p class="main__subtitle">ホーム内の仮想デバイスを確認・制御できます。</p>
+          <p class="main__subtitle">登録された Pico W デバイスの状態と提供機能を確認できます。</p>
         </div>
         <div class="main__actions">
-          <button class="btn btn--primary" id="registerEdgeBtn">エッジデバイス登録</button>
-          <button class="btn btn--ghost" id="addDeviceBtn">デバイス追加</button>
-          <button class="btn btn--danger" id="resetBtn">リセット</button>
+          <button class="btn btn--primary" id="registerDeviceBtn">デバイス登録</button>
         </div>
       </header>
 
       <div class="main__notice" id="registerNotice" role="status" aria-live="polite" hidden></div>
 
       <!-- デバイスのグリッド -->
-      <section class="grid" id="deviceGrid" aria-label="デバイス一覧">
-        <!-- JSでカードを描画 -->
-      </section>
+      <div class="grid-wrapper">
+        <section class="grid" id="deviceGrid" aria-label="デバイス一覧">
+          <!-- JSでカードを描画 -->
+        </section>
+      </div>
     </main>
   </div>
-
-  <!-- デバイス追加モーダル -->
-  <dialog id="addDialog" class="dialog">
-    <form method="dialog" class="dialog__panel" id="addDeviceForm">
-      <header class="dialog__header">
-        <h3>デバイスを追加</h3>
-      </header>
-      <div class="dialog__body">
-        <div class="form__row">
-          <label class="form__label" for="deviceKind">種別</label>
-          <select id="deviceKind" class="form__control">
-            <option value="sensor-temp">温度センサー</option>
-            <option value="sensor-humid">湿度センサー</option>
-            <option value="actuator-lamp">ランプ</option>
-            <option value="actuator-fan">ファン</option>
-          </select>
-        </div>
-        <div class="form__row">
-          <label class="form__label" for="deviceName">名前</label>
-          <input id="deviceName" class="form__control" type="text" placeholder="例: リビング温度" />
-        </div>
-      </div>
-      <footer class="dialog__footer">
-        <button class="btn btn--ghost" value="cancel">キャンセル</button>
-        <button class="btn btn--primary" value="confirm">追加</button>
-      </footer>
-    </form>
-  </dialog>
 
   <!-- エッジデバイス登録モーダル -->
   <dialog id="registerDialog" class="dialog" aria-labelledby="registerDialogTitle">
     <form class="dialog__panel" id="registerDeviceForm" novalidate>
       <header class="dialog__header">
-        <h3 id="registerDialogTitle">Pico W を登録</h3>
+        <h3 id="registerDialogTitle">デバイスを登録</h3>
       </header>
       <div class="dialog__body">
-        <p class="form__hint" id="registerDialogMessage">Pico W の <code>device_id.txt</code> に保存された ID を入力し、ダッシュボードから登録します。</p>
+        <p class="form__hint" id="registerDialogMessage">エッジデバイスで使用する識別子を入力し、必要に応じて表示名やメモを設定します。</p>
         <div class="form__row">
           <label class="form__label" for="registerDeviceId">デバイスID</label>
-          <input id="registerDeviceId" class="form__control" type="text" name="device_id" placeholder="例: pico-abc123" autocomplete="off" required />
+          <input id="registerDeviceId" class="form__control" type="text" name="device_id" placeholder="例: device-abc123" autocomplete="off" required />
+        </div>
+        <div class="form__row">
+          <label class="form__label" for="registerDeviceName">表示名（任意）</label>
+          <input id="registerDeviceName" class="form__control" type="text" name="display_name" placeholder="例: キッチンのセンサー" autocomplete="off" />
         </div>
         <div class="form__row">
           <label class="form__label" for="registerDeviceNote">メモ（任意）</label>
