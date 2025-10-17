@@ -7,9 +7,10 @@ from app import (
     AGENT_COMMAND_NAME,
     AGENT_ROLE_VALUE,
     DeviceState,
+    _CommandExecutionSummary,
     _DEVICES,
-    _format_return_value_for_user,
     _execute_device_command_sequence,
+    _format_return_value_for_user,
     _validate_device_command_sequence,
 )
 
@@ -90,14 +91,26 @@ def test_execute_device_command_sequence_mixed_types(monkeypatch):
             "initial": initial_reply,
             "command": command,
         })
-        return ({"reply": "Agent 完了"}, 200)
+        return _CommandExecutionSummary(
+            device_id=agent.device_id,
+            command_name=AGENT_COMMAND_NAME,
+            args=command.get("args", {}),
+            manual_reply="Agent 完了",
+            instruction=command.get("args", {}).get("instruction"),
+            is_agent=True,
+        )
 
     def fake_standard(client, messages, initial_reply, command):
         standard_calls.append({
             "initial": initial_reply,
             "command": command,
         })
-        return "Standard 完了"
+        return _CommandExecutionSummary(
+            device_id=command.get("device_id"),
+            command_name=command.get("name", ""),
+            args=command.get("args", {}),
+            manual_reply="Standard 完了",
+        )
 
     monkeypatch.setattr("app._execute_agent_device_command", fake_agent)
     monkeypatch.setattr("app._execute_standard_device_command", fake_standard)
@@ -129,7 +142,15 @@ def test_execute_device_command_sequence_agent_failure(monkeypatch):
     ]
 
     def fake_agent(client, agent, messages, initial_reply, command):
-        return ({"error": "失敗しました"}, 500)
+        return _CommandExecutionSummary(
+            device_id=agent.device_id,
+            command_name=AGENT_COMMAND_NAME,
+            args=command.get("args", {}),
+            manual_reply="失敗しました",
+            is_agent=True,
+            status=500,
+            error_text="失敗しました",
+        )
 
     monkeypatch.setattr("app._execute_agent_device_command", fake_agent)
 
@@ -165,7 +186,12 @@ def test_chat_executes_multiple_commands(monkeypatch, client):
 
     def fake_execute_standard(client_obj, messages, initial_reply, command):
         calls.append({"initial": initial_reply, "command": command})
-        return f"結果:{command['name']}"
+        return _CommandExecutionSummary(
+            device_id=command.get("device_id"),
+            command_name=command.get("name", ""),
+            args=command.get("args", {}),
+            manual_reply=f"結果:{command['name']}",
+        )
 
     def fake_llm_parse(client_obj, messages):
         return {
