@@ -113,6 +113,57 @@ function createStat(label, value){
   return wrapper;
 }
 
+function createCollapsibleText(text, { maxLength = 180 } = {}){
+  const str = text == null ? "" : String(text);
+  const wrapper = document.createElement("div");
+  wrapper.className = "collapsible-text";
+  const content = document.createElement("div");
+  content.className = "collapsible-text__content";
+  content.textContent = str;
+  content.title = str;
+  wrapper.appendChild(content);
+
+  if(str.length <= maxLength){
+    wrapper.dataset.state = "expanded";
+    return wrapper;
+  }
+
+  const fullText = str;
+  const truncated = fullText.slice(0, maxLength).trimEnd() + "…";
+  let collapsed = true;
+
+  const toggleBtn = document.createElement("button");
+  toggleBtn.type = "button";
+  toggleBtn.className = "collapsible-text__toggle";
+  toggleBtn.textContent = "もっと見る";
+  toggleBtn.setAttribute("aria-expanded", "false");
+
+  const applyState = () => {
+    if(collapsed){
+      content.textContent = truncated;
+      wrapper.dataset.state = "collapsed";
+      toggleBtn.textContent = "もっと見る";
+      toggleBtn.setAttribute("aria-expanded", "false");
+      toggleBtn.setAttribute("aria-label", "全文を表示");
+    }else{
+      content.textContent = fullText;
+      wrapper.dataset.state = "expanded";
+      toggleBtn.textContent = "閉じる";
+      toggleBtn.setAttribute("aria-expanded", "true");
+      toggleBtn.setAttribute("aria-label", "折りたたむ");
+    }
+  };
+
+  toggleBtn.addEventListener("click", () => {
+    collapsed = !collapsed;
+    applyState();
+  });
+
+  wrapper.appendChild(toggleBtn);
+  applyState();
+  return wrapper;
+}
+
 function renderCapabilities(capabilities){
   if(!Array.isArray(capabilities) || capabilities.length === 0){
     return null;
@@ -177,8 +228,10 @@ function renderLastResult(result){
   if(result.job_id){
     const jobLine = document.createElement("div");
     jobLine.className = "device-result__line";
-    jobLine.textContent = "ジョブID";
-    jobLine.appendChild(document.createTextNode(" "));
+    const jobLabel = document.createElement("span");
+    jobLabel.className = "device-result__label";
+    jobLabel.textContent = "ジョブID";
+    jobLine.appendChild(jobLabel);
     const jobValue = document.createElement("span");
     jobValue.className = "device-result__value";
     jobValue.textContent = result.job_id;
@@ -189,13 +242,14 @@ function renderLastResult(result){
   if(Object.prototype.hasOwnProperty.call(result, "return_value")){
     const valueLine = document.createElement("div");
     valueLine.className = "device-result__line";
-    valueLine.textContent = "戻り値";
-    valueLine.appendChild(document.createTextNode(" "));
+    const valueLabel = document.createElement("span");
+    valueLabel.className = "device-result__label";
+    valueLabel.textContent = "戻り値";
+    valueLine.appendChild(valueLabel);
     const valueEl = document.createElement("span");
     valueEl.className = "device-result__value";
     const valueStr = formatMetaValue(result.return_value);
-    valueEl.textContent = valueStr;
-    valueEl.title = valueStr;
+    valueEl.appendChild(createCollapsibleText(valueStr));
     valueLine.appendChild(valueEl);
     detail.appendChild(valueLine);
   }
@@ -222,7 +276,10 @@ function renderDevices(){
   if(!gridEl) return;
   gridEl.innerHTML = "";
 
-  if(!devices.length){
+  const hasDevices = devices.length > 0;
+  gridEl.classList.toggle("grid--empty", !hasDevices);
+
+  if(!hasDevices){
     const empty = document.createElement("div");
     empty.className = "empty-state";
     empty.innerHTML = `
