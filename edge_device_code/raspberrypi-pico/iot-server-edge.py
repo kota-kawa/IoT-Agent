@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Raspberry Pi Pico W (MicroPython) - LLMエージェント連携クライアント（デバイス側のみ）
+MicroPython エッジデバイス向け IoT サーバークライアント（デバイス側のみ）
 
 変更点（2025-10-10）:
   * MicroPython の一部ビルドに sys.stdout / sys.stderr が無いため、
@@ -24,10 +24,10 @@ Raspberry Pi Pico W (MicroPython) - LLMエージェント連携クライアン�
   - POST {BASE_URL}{REGISTER_PATH}
       req: {"device_id": "...", "capabilities": [...], "meta": {...}}
       res: 200/201 JSON
-  - GET  {BASE_URL}{NEXT_PATH}?device_id=...
+  - GET  {BASE_URL}{NEXT_PATH.format(device_id="...")}
       res: 204 (no job)
            200 {"job_id":"...", "command":{"name":"led","args":{"times":3,"interval_sec":0.1}}}
-  - POST {BASE_URL}{RESULT_PATH}
+  - POST {BASE_URL}{RESULT_PATH.format(device_id="...")}
       req: {"device_id":"...","job_id":"...","ok":true/false,
             "return_value":..., "stdout":"...", "stderr":"...","ts":123456789}
 """
@@ -79,9 +79,9 @@ from machine import Pin, ADC, unique_id  # type: ignore
 # 設定
 # =========================
 BASE_URL = "https://iot-agent.project-kk.com"
-REGISTER_PATH = "/pico-w/register"
-NEXT_PATH = "/pico-w/next"
-RESULT_PATH = "/pico-w/result"
+REGISTER_PATH = "/api/devices/register"
+NEXT_PATH = "/api/devices/{device_id}/jobs/next"
+RESULT_PATH = "/api/devices/{device_id}/jobs/result"
 
 # Wi-Fi 認証情報は secrets.py から読み込み（無ければ未設定扱い）
 WIFI_SSID = ""
@@ -109,7 +109,7 @@ except Exception:
 POLL_INTERVAL_SEC = 1  # 1秒間隔でサーバーをポーリング
 AUTO_REGISTER_ON_BOOT = False  # True にすると起動時に自動登録
 
-USER_AGENT = "PicoW-MicroPython-Agent/1.1"
+USER_AGENT = "MicroPython-IoT-Edge-Agent/1.1"
 HTTP_BODY_PREVIEW_LEN = 512
 HTTP_TIMEOUT_SEC = 15
 _RECV_CHUNK = 1024
@@ -317,7 +317,7 @@ def _load_device_id(path: str = "device_id.txt") -> str:
         did = "".join("{:02x}".format(b) for b in raw)
     except Exception:
         rnd = random.getrandbits(64)
-        did = "pico-" + "{:016x}".format(rnd)
+        did = "edge-" + "{:016x}".format(rnd)
 
     try:
         with open(path, "w") as f:
@@ -414,7 +414,7 @@ def register_device(base_url: str, device_id: str):
         "device_id": device_id,
         "capabilities": get_capabilities(),
         "meta": {
-            "firmware": "pico_w_agent/1.1.0",
+            "firmware": "iot_edge_agent/1.1.0",
             "ua": USER_AGENT,
         },
     }
@@ -433,7 +433,7 @@ def register_device(base_url: str, device_id: str):
 
 def fetch_next_job(base_url: str, device_id: str):
     global _NOT_REGISTERED_WARNED
-    url = "{}{}?device_id={}".format(base_url, NEXT_PATH, device_id)
+    url = "{}{}".format(base_url, NEXT_PATH.format(device_id=device_id))
     status, text = http_get_text(url, timeout=HTTP_TIMEOUT_SEC)
     if status == 204 or (status == 200 and not text.strip()):
         if _NOT_REGISTERED_WARNED:
@@ -478,10 +478,9 @@ def post_result(
     max_attempts: int = RESULT_MAX_ATTEMPTS,
     backoff_base: int = RESULT_RETRY_BASE_DELAY,
 ) -> bool:
-    # サーバー側で device_id をクエリパラメーターとして参照するケースがあり、
-    # ボディのみでは 400 ("device_id is required") が返る状況が確認された。
-    # 念のためクエリにも同じ値を付与して送信し、互換性を高める。
-    url = "{}{}?device_id={}".format(base_url, RESULT_PATH, device_id)
+    # サーバーはパスパラメーターで device_id を受け取るため URL に埋め込む。
+    # ボディとヘッダーにも同じ値を含めて送信し、整合性チェックに備える。
+    url = "{}{}".format(base_url, RESULT_PATH.format(device_id=device_id))
     payload = {
         "device_id": device_id,
         "job_id": job_id,
