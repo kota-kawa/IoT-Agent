@@ -41,6 +41,11 @@ SERVER_BASE_URL = os.getenv(
 REQUEST_TIMEOUT = float(os.getenv("IOT_AGENT_HTTP_TIMEOUT", "120"))
 POLL_INTERVAL = float(os.getenv("IOT_AGENT_POLL_INTERVAL", "2.0"))
 
+OPEN_WEATHER_API_KEY = os.getenv("OPEN_WEATHER_API_KEY")
+OPEN_WEATHER_BASE_URL = os.getenv(
+    "OPEN_WEATHER_BASE_URL", "https://api.openweathermap.org/data/2.5/weather"
+)
+
 DEVICE_ID_ENV = os.getenv("IOT_AGENT_DEVICE_ID")
 DEVICE_ID_PATH = Path(
     os.getenv(
@@ -74,6 +79,23 @@ SUPPORTED_ACTIONS: Dict[str, Dict[str, Any]] = {
     "get_current_time": {
         "description": "Return the current local time in ISO 8601 format.",
         "params": [],
+    },
+    "get_weather": {
+        "description": "Fetch current weather information for a given location using OpenWeather.",
+        "params": [
+            {
+                "name": "location",
+                "type": "string",
+                "required": True,
+                "description": "City name or query string accepted by OpenWeather (e.g. 'Tokyo,JP').",
+            },
+            {
+                "name": "units",
+                "type": "string",
+                "required": False,
+                "description": "Units system: standard, metric, or imperial (default: metric).",
+            },
+        ],
     },
     "tell_joke": {
         "description": "Tell one joke chosen from a predefined list.",
@@ -371,6 +393,72 @@ def _tell_joke() -> Dict[str, Any]:
     return {"joke": joke}
 
 
+def _get_weather(params: Dict[str, Any]) -> Dict[str, Any]:
+    if not OPEN_WEATHER_API_KEY:
+        raise RuntimeError("OpenWeather API key is not configured in the environment.")
+
+    if not isinstance(params, dict):
+        params = {}
+
+    location_value = params.get("location") or params.get("city")
+    if not isinstance(location_value, str) or not location_value.strip():
+        raise ValueError("location parameter must be provided as a non-empty string.")
+
+    location = location_value.strip()
+
+    units_value = "metric"
+    raw_units = params.get("units")
+    if isinstance(raw_units, str) and raw_units.strip():
+        candidate_units = raw_units.strip().lower()
+        if candidate_units not in {"standard", "metric", "imperial"}:
+            raise ValueError("units must be one of: standard, metric, imperial.")
+        units_value = candidate_units
+
+    query_params = {
+        "q": location,
+        "appid": OPEN_WEATHER_API_KEY,
+        "units": units_value,
+    }
+
+    try:
+        response = requests.get(
+            OPEN_WEATHER_BASE_URL,
+            params=query_params,
+            timeout=min(REQUEST_TIMEOUT, 30),
+        )
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        raise RuntimeError(f"Failed to fetch weather data: {exc}") from exc
+
+    try:
+        data = response.json()
+    except ValueError as exc:
+        raise RuntimeError("Weather service returned invalid JSON.") from exc
+
+    main_data = data.get("main") or {}
+    weather_list = data.get("weather") or []
+    weather_description = None
+    if weather_list and isinstance(weather_list, list):
+        first = weather_list[0]
+        if isinstance(first, dict):
+            weather_description = first.get("description")
+
+    sys_data = data.get("sys") or {}
+    wind_data = data.get("wind") or {}
+
+    return {
+        "query": location,
+        "location": data.get("name") or location,
+        "country": sys_data.get("country"),
+        "temperature": main_data.get("temp"),
+        "feels_like": main_data.get("feels_like"),
+        "humidity": main_data.get("humidity"),
+        "weather": weather_description,
+        "wind_speed": wind_data.get("speed"),
+        "units": units_value,
+    }
+
+
 def _execute_action(action: str, parameters: Dict[str, Any]) -> Tuple[bool, Any, Optional[str]]:
     try:
         if action == "play_rock_paper_scissors":
@@ -378,6 +466,8 @@ def _execute_action(action: str, parameters: Dict[str, Any]) -> Tuple[bool, Any,
         if action == "get_current_time":
             now = datetime.now(timezone.utc).astimezone()
             return True, {"current_time": now.isoformat()}, None
+        if action == "get_weather":
+            return True, _get_weather(parameters or {}), None
         if action == "tell_joke":
             return True, _tell_joke(), None
         if action == "no_action":
