@@ -469,17 +469,47 @@ def _structured_llm_prompt(messages: List[Dict[str, str]]) -> Dict[str, Any]:
     }
 
 
+def _extract_json_object(text: str) -> Tuple[Optional[Any], Optional[str]]:
+    if not text:
+        return None, ""
+
+    stripped = text.strip()
+    decoder = json.JSONDecoder()
+
+    try:
+        obj, end = decoder.raw_decode(stripped)
+        cleaned = stripped[end:].strip()
+        return obj, cleaned
+    except json.JSONDecodeError:
+        pass
+
+    for index, char in enumerate(text):
+        if char not in "{[":
+            continue
+        try:
+            obj, end = decoder.raw_decode(text[index:])
+        except json.JSONDecodeError:
+            continue
+        cleaned = (text[:index] + text[index + end :]).strip()
+        return obj, cleaned
+
+    return None, text.strip()
+
+
 def _call_llm_and_parse(client: OpenAI, messages: List[Dict[str, str]]) -> Dict[str, Any]:
     response = client.responses.create(**_structured_llm_prompt(messages))
     reply_text = getattr(response, "output_text", None) or ""
-    try:
-        parsed = json.loads(reply_text)
-    except json.JSONDecodeError:
-        parsed = {"reply": reply_text.strip(), "device_command": None}
+
+    parsed_obj, cleaned_text = _extract_json_object(reply_text)
+
+    if isinstance(parsed_obj, dict):
+        parsed = parsed_obj
+    else:
+        parsed = {"reply": cleaned_text or reply_text.strip(), "device_command": None}
 
     reply_message = parsed.get("reply")
     if not isinstance(reply_message, str):
-        reply_message = reply_text.strip()
+        reply_message = (cleaned_text or reply_text).strip()
 
     device_commands_field = parsed.get("device_commands")
     if isinstance(device_commands_field, dict):
