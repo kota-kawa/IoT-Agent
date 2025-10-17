@@ -8,6 +8,7 @@ from app import (
     AGENT_ROLE_VALUE,
     DeviceState,
     _DEVICES,
+    _format_return_value_for_user,
     _execute_device_command_sequence,
     _validate_device_command_sequence,
 )
@@ -195,3 +196,50 @@ def test_chat_executes_multiple_commands(monkeypatch, client):
     assert len(calls) == 2
     assert calls[0]["initial"] == "了解しました"
     assert calls[1]["initial"] == "結果:read_temp"
+
+
+def test_format_return_value_for_multi_action():
+    payload = {
+        "action": "multi_action_sequence",
+        "parameters": {
+            "actions": ["get_current_time", "tell_joke"],
+            "total_steps": 2,
+            "successful_steps": 1,
+            "success": False,
+            "failed_steps": [2],
+        },
+        "message": "get_current_time: 成功 / tell_joke: 失敗 / エラー: tell_joke: ネットワークエラー",
+        "result": {
+            "summary": {
+                "actions": ["get_current_time", "tell_joke"],
+                "total_steps": 2,
+                "successful_steps": 1,
+                "success": False,
+                "failed_steps": [2],
+            },
+            "steps": [
+                {
+                    "step": 1,
+                    "action": "get_current_time",
+                    "ok": True,
+                    "parameters": {},
+                    "result": {"current_time": "2025-01-01T00:00:00+00:00"},
+                },
+                {
+                    "step": 2,
+                    "action": "tell_joke",
+                    "ok": False,
+                    "parameters": {},
+                    "error": "ネットワークエラー",
+                },
+            ],
+        },
+    }
+
+    formatted = _format_return_value_for_user(payload)
+
+    assert "1. get_current_time" in formatted
+    assert "成功" in formatted
+    assert "2. tell_joke" in formatted
+    assert "失敗" in formatted
+    assert "メッセージ" in formatted
