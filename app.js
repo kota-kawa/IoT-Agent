@@ -5,28 +5,37 @@
  * - チャットはサーバー連携 + 簡易フォールバック応答
  * ======================================================= */
 
+// デバイス一覧の更新を定期的に行うためのポーリング間隔（ミリ秒）
 const FETCH_DEVICES_INTERVAL_MS = 5000;
 
 /** ---------- ユーティリティ ---------- */
+// DOM 要素を簡潔に取得するためのショートハンド関数
 const $ = (sel, parent = document) => parent.querySelector(sel);
+// 現在時刻を HH:MM の形式で文字列化するユーティリティ
 const nowTime = () => {
   const d = new Date();
   const hh = String(d.getHours()).padStart(2, "0");
   const mm = String(d.getMinutes()).padStart(2, "0");
   return `${hh}:${mm}`;
 };
+// チャットなどでユーザー入力を安全に表示するためのエスケープ処理
 const escapeHtml = (s) =>
   String(s).replace(/[&<>"']/g, (m) => (
     { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" }[m]
   ));
 
 /** ---------- デバイス描画 ---------- */
+// デバイスカードを表示するグリッド要素
 const gridEl = $("#deviceGrid");
+// 登録成功・失敗などの通知を表示する領域
 const registerNoticeEl = $("#registerNotice");
 
+// 取得したデバイス情報を保持するローカルキャッシュ
 let devices = [];
+// API 連携の同時実行を防ぐためのフラグ
 let isFetchingDevices = false;
 
+// デバイスの表示名を多段的に判定して返却するヘルパー
 function displayName(device){
   if(!device) return "";
   const meta = device.meta || {};
@@ -45,6 +54,7 @@ function displayName(device){
   return device.device_id;
 }
 
+// UNIX 時刻を日本語ローカライズした日付文字列に変換
 function formatTimestamp(ts){
   if(!ts && ts !== 0) return "-";
   const date = new Date(ts * 1000);
@@ -62,6 +72,7 @@ function formatTimestamp(ts){
   });
 }
 
+// 最終アクセス等のタイムスタンプを相対表示に変換
 function formatRelativeTime(ts){
   if(!ts && ts !== 0) return "未記録";
   const date = new Date(ts * 1000);
@@ -84,6 +95,7 @@ function formatRelativeTime(ts){
   return formatTimestamp(ts);
 }
 
+// オブジェクトや配列を含むメタ値をユーザーに見せる文字列に整形
 function formatMetaValue(value){
   if(value === null) return "null";
   if(value === undefined) return "-";
@@ -97,6 +109,7 @@ function formatMetaValue(value){
   }
 }
 
+// カード内で統計情報を表示する DOM 要素を生成
 function createStat(label, value){
   const wrapper = document.createElement("div");
   wrapper.className = "device-stat";
@@ -113,6 +126,7 @@ function createStat(label, value){
   return wrapper;
 }
 
+// 長文を折りたたみ表示するためのコンポーネントを組み立てる
 function createCollapsibleText(text, { maxLength = 180 } = {}){
   const str = text == null ? "" : String(text);
   const wrapper = document.createElement("div");
@@ -164,6 +178,7 @@ function createCollapsibleText(text, { maxLength = 180 } = {}){
   return wrapper;
 }
 
+// デバイスが宣言する機能一覧をバッジ表示用に整形
 function renderCapabilities(capabilities){
   if(!Array.isArray(capabilities) || capabilities.length === 0){
     return null;
@@ -205,6 +220,7 @@ function renderCapabilities(capabilities){
   return section;
 }
 
+// デバイスが直近で実行したジョブの結果をカード形式で表示
 function renderLastResult(result){
   if(!result || typeof result !== "object"){
     return null;
@@ -264,6 +280,7 @@ function renderLastResult(result){
   return section;
 }
 
+// デバイスカードのヘッダーに表示する SVG アイコンを返す
 function iconForDevice(){
   return `
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -272,6 +289,7 @@ function iconForDevice(){
     </svg>`;
 }
 
+// ローカルで保持する devices 配列をもとにカード群を描画
 function renderDevices(){
   if(!gridEl) return;
   gridEl.innerHTML = "";
@@ -367,6 +385,7 @@ function renderDevices(){
   }
 }
 
+// サーバーの REST API からデバイス一覧を取得し UI を更新
 async function fetchDevices({ silent = false } = {}){
   if(isFetchingDevices) return;
   isFetchingDevices = true;
@@ -395,6 +414,7 @@ async function fetchDevices({ silent = false } = {}){
   }
 }
 
+// 指定 ID のデバイス表示名を PATCH API 経由で更新
 async function updateDeviceDisplayName(deviceId, displayName){
   const payload = { display_name: displayName || null };
   const res = await fetch(`/api/devices/${encodeURIComponent(deviceId)}/name`, {
@@ -421,6 +441,7 @@ async function updateDeviceDisplayName(deviceId, displayName){
   return data?.device || null;
 }
 
+// デバイスを削除する REST API を呼び出しローカル状態を調整
 async function deleteDevice(deviceId){
   const res = await fetch(`/api/devices/${encodeURIComponent(deviceId)}`, {
     method: "DELETE",
@@ -445,6 +466,7 @@ async function deleteDevice(deviceId){
 }
 
 /** ---------- デバイス登録モーダル ---------- */
+// 登録モーダル関連のボタンや入力フィールドへの参照を取得
 const registerBtn = $("#registerDeviceBtn");
 const registerDialog = $("#registerDialog");
 const registerForm = $("#registerDeviceForm");
@@ -458,9 +480,11 @@ const registerSubmitBtn = $("#registerSubmitBtn");
 const REGISTER_DIALOG_DEFAULT = registerDialogMessageEl
   ? registerDialogMessageEl.textContent.trim()
   : "エッジデバイスで使用する識別子を入力し、必要に応じて表示名やメモを設定します。";
+// 成功通知用に直近で登録したデバイス ID と名称を保持
 let lastRegisteredDeviceId = null;
 let lastRegisteredDeviceName = null;
 
+// 登録処理の結果を画面上部の通知領域に表示
 function showRegisterNotice(message, kind = "info"){
   if(!registerNoticeEl) return;
   registerNoticeEl.hidden = false;
@@ -474,6 +498,7 @@ function showRegisterNotice(message, kind = "info"){
   }
 }
 
+// 通知をクリアして非表示に戻す
 function hideRegisterNotice(){
   if(!registerNoticeEl) return;
   registerNoticeEl.hidden = true;
@@ -482,6 +507,7 @@ function hideRegisterNotice(){
   delete registerNoticeEl.dataset.kind;
 }
 
+// モーダル内の案内テキストを更新し、状態に応じたスタイルを適用
 function setRegisterDialogMessage(message, kind = "info"){
   if(!registerDialogMessageEl) return;
   registerDialogMessageEl.textContent = message;
@@ -493,6 +519,7 @@ function setRegisterDialogMessage(message, kind = "info"){
   }
 }
 
+// フォームやボタン状態を初期化し、メッセージを既定に戻す
 function clearRegisterDialog(){
   if(registerForm){
     registerForm.reset();
@@ -504,6 +531,7 @@ function clearRegisterDialog(){
   setRegisterDialogMessage(REGISTER_DIALOG_DEFAULT);
 }
 
+// 登録フォーム送信時に API へリクエストを飛ばし成功・失敗を制御
 async function handleRegisterSubmit(event){
   event.preventDefault();
   if(!registerSubmitBtn) return;
@@ -587,6 +615,7 @@ async function handleRegisterSubmit(event){
   }
 }
 
+// 「デバイス登録」ボタン押下でモーダルを開き初期化
 if(registerBtn && registerDialog){
   registerBtn.addEventListener("click", () => {
     clearRegisterDialog();
@@ -597,16 +626,19 @@ if(registerBtn && registerDialog){
   });
 }
 
+// キャンセルボタンでモーダルを閉じる
 if(registerCancelBtn && registerDialog){
   registerCancelBtn.addEventListener("click", () => {
     registerDialog.close("cancel");
   });
 }
 
+// フォーム送信時は独自処理にフック
 if(registerForm){
   registerForm.addEventListener("submit", handleRegisterSubmit);
 }
 
+// モーダルが閉じられた際に通知表示や状態リセットを行う
 if(registerDialog){
   registerDialog.addEventListener("close", () => {
     if(registerDialog.returnValue === "success" && lastRegisteredDeviceId){
@@ -621,6 +653,7 @@ if(registerDialog){
   });
 }
 
+// デバイスカード上のボタン操作（名称変更・削除）に対応
 if(gridEl){
   gridEl.addEventListener("click", async (event) => {
     const target = event.target instanceof Element ? event.target.closest("button[data-action]") : null;
@@ -684,6 +717,7 @@ if(gridEl){
 }
 
 /** ---------- チャット：超軽量LLMもどき（デモ用） ---------- */
+// チャット UI の各要素を取得し、初期メッセージなどの状態を保持
 const logEl = $("#chatLog");
 const formEl = $("#chatForm");
 const inputEl = $("#chatInput");
@@ -695,6 +729,7 @@ let isPaused = false;
 let isSending = false;
 const chatHistory = [];
 
+// 送信ボタンや入力欄の有効・無効を現在の状態に合わせて切り替え
 function updateChatControls(){
   if(!sendBtn || !inputEl) return;
   const disableSend = isPaused || isSending;
@@ -706,6 +741,7 @@ function updateChatControls(){
   }
 }
 
+// 役割（ユーザー/アシスタント）に応じた吹き出しをログへ追加
 function pushMessage(role, text){
   chatHistory.push({ role, content: text });
   const item = document.createElement("div");
@@ -721,6 +757,7 @@ function pushMessage(role, text){
   logEl.scrollTop = logEl.scrollHeight;
 }
 
+// 登録済みデバイスの要約テキストを生成（フォールバック応答用）
 function summarizeDevices(){
   if(!devices.length){
     return "登録済みのデバイスはありません。";
@@ -735,6 +772,7 @@ function summarizeDevices(){
   return summaries.join(" / ");
 }
 
+// 単純なキーワード判定でチャット入力からデバイス状態要求を解釈
 function applyDeviceCommand(text){
   const t = text.trim();
   if(!t) return null;
@@ -746,6 +784,7 @@ function applyDeviceCommand(text){
   return null;
 }
 
+// サーバー側のエージェント API にチャット履歴を送信して応答を取得
 async function requestAssistantResponse(){
   const payload = {
     messages: chatHistory.map(({ role, content }) => ({ role, content })),
@@ -766,6 +805,7 @@ async function requestAssistantResponse(){
   return typeof data.reply === "string" ? data.reply : "";
 }
 
+// チャット送信時の処理。入力テキストを履歴に追加し、API 応答を待機
 formEl.addEventListener("submit", async (e) => {
   e.preventDefault();
   if(isPaused || isSending) return;
@@ -800,6 +840,7 @@ formEl.addEventListener("submit", async (e) => {
   }
 });
 
+// 「一時停止」ボタンで送信可否を切り替える
 if(pauseBtn){
   pauseBtn.addEventListener("click", () => {
     isPaused = !isPaused;
@@ -810,6 +851,7 @@ if(pauseBtn){
   });
 }
 
+// チャット履歴をリセットし初期状態へ戻す
 if(chatResetBtn){
   chatResetBtn.addEventListener("click", () => {
     logEl.innerHTML = "";
@@ -822,6 +864,7 @@ if(chatResetBtn){
 }
 
 /** ---------- 初期化 ---------- */
+// ページ読み込み時の初期化処理：挨拶メッセージ、UI 更新、デバイス取得
 (async function init(){
   pushMessage("assistant", INITIAL_GREETING);
   updateChatControls();

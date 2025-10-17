@@ -1,8 +1,10 @@
 import sys
 from pathlib import Path
 
+# LLM 応答の解析が正しく行われるか検証する
 import pytest
 
+# プロジェクトルートをパスに追加して app モジュールを参照
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -11,6 +13,7 @@ from app import _call_llm_and_parse
 
 
 class _FakeResponses:
+    # OpenAI SDK のレスポンス生成を模擬するスタブ
     def __init__(self, text: str):
         self._text = text
 
@@ -23,6 +26,7 @@ class _FakeResponses:
 
 
 class _FakeClient:
+    # responses.create を提供する偽クライアント
     def __init__(self, text: str):
         self.responses = _FakeResponses(text)
 
@@ -43,6 +47,7 @@ class _FakeClient:
     ],
 )
 def test_call_llm_and_parse_extracts_json_with_extra_text(raw_text, expected_reply):
+    # JSON 部分と余分なテキストが混在しても正しく抽出できるか確認
     client = _FakeClient(raw_text)
     result = _call_llm_and_parse(client, messages=[{"role": "user", "content": "test"}])
 
