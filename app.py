@@ -661,9 +661,9 @@ def logout():
     return redirect(url_for("login"))
 
 
-@app.get("/pico-w-test")
-def pico_w_test():
-    return jsonify({"message": "Successful!"})
+@app.get("/api/devices/ping")
+def device_ping():
+    return jsonify({"message": "ok"})
 
 
 @app.post("/api/chat")
@@ -735,7 +735,7 @@ def chat():
     return jsonify(payload), status
 
 
-@app.post("/pico-w/register")
+@app.post("/api/devices/register")
 def register_device():
     payload = request.get_json(silent=True) or {}
     device_id = payload.get("device_id")
@@ -881,13 +881,13 @@ def delete_device(device_id: str):
     return jsonify({"status": "deleted", "device_id": cleaned_id})
 
 
-@app.get("/pico-w/next")
-def next_job():
-    device_id = request.args.get("device_id", "").strip()
-    if not device_id:
+@app.get("/api/devices/<device_id>/jobs/next")
+def next_job(device_id: str):
+    cleaned_id = (device_id or "").strip()
+    if not cleaned_id:
         return jsonify({"error": "device_id is required"}), 400
 
-    device = _DEVICES.get(device_id)
+    device = _DEVICES.get(cleaned_id)
     if not device:
         return jsonify({"error": "device not registered"}), 404
 
@@ -900,8 +900,8 @@ def next_job():
     return jsonify(job)
 
 
-@app.post("/pico-w/result")
-def post_result():
+@app.post("/api/devices/<device_id>/jobs/result")
+def post_result(device_id: str):
     payload = request.get_json(silent=True)
     if payload is None:
         raw_body = request.get_data(cache=False, as_text=True) or ""
@@ -916,6 +916,7 @@ def post_result():
     query_device_id = request.args.get("device_id", "")
     query_job_id = request.args.get("job_id", "")
     header_device_id = request.headers.get("X-Device-ID", "")
+    path_device_id = device_id
 
     provided_ids: List[str] = []
 
@@ -930,6 +931,7 @@ def post_result():
         raw_device_id,
         query_device_id,
         header_device_id,
+        path_device_id,
     ):
         cleaned = _normalise_candidate(candidate)
         if cleaned and cleaned not in provided_ids:

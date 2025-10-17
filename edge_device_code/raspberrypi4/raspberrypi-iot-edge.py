@@ -57,9 +57,9 @@ DEVICE_ID_PATH = Path(
 DISPLAY_NAME = os.getenv("IOT_AGENT_DISPLAY_NAME", "Raspberry Pi 4 Agent")
 LOCATION = os.getenv("IOT_AGENT_LOCATION", "Lab")
 
-REGISTER_PATH = "/pico-w/register"
-NEXT_PATH = "/pico-w/next"
-RESULT_PATH = "/pico-w/result"
+REGISTER_PATH = "/api/devices/register"
+NEXT_PATH = "/api/devices/{device_id}/jobs/next"
+RESULT_PATH = "/api/devices/{device_id}/jobs/result"
 
 AGENT_ROLE_VALUE = "raspberrypi-agent"
 AGENT_COMMAND_NAME = "agent_instruction"
@@ -221,8 +221,7 @@ def _register_device(session: requests.Session, device_id: str) -> bool:
 def _poll_next_job(session: requests.Session, device_id: str) -> Optional[Dict[str, Any]]:
     try:
         resp = session.get(
-            _build_url(NEXT_PATH),
-            params={"device_id": device_id},
+            _build_url(NEXT_PATH.format(device_id=device_id)),
             timeout=REQUEST_TIMEOUT,
         )
     except Exception as exc:
@@ -255,7 +254,12 @@ def _post_result(
     max_attempts: int = 3,
     backoff_seconds: float = 2.0,
 ) -> bool:
-    url = _build_url(RESULT_PATH)
+    device_id_value = str(payload.get("device_id") or "").strip()
+    if not device_id_value:
+        logging.error("Result payload is missing device_id")
+        return False
+
+    url = _build_url(RESULT_PATH.format(device_id=device_id_value))
     attempt = 0
     while True:
         attempt += 1

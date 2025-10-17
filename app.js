@@ -1,7 +1,7 @@
 /* =========================================================
  * IoT ダッシュボード（登録デバイス表示）
  * - サーバーから登録済みデバイス一覧を取得して表示
- * - デバイス登録ダイアログから Pico W を登録
+ * - デバイス登録ダイアログから任意のエッジデバイスを登録
  * - チャットはサーバー連携 + 簡易フォールバック応答
  * ======================================================= */
 
@@ -432,14 +432,15 @@ const registerForm = $("#registerDeviceForm");
 const registerDeviceIdInput = $("#registerDeviceId");
 const registerNameInput = $("#registerDeviceName");
 const registerNoteInput = $("#registerDeviceNote");
+const registerCapabilitiesInput = $("#registerDeviceCapabilities");
+const registerMetaInput = $("#registerDeviceMeta");
 const registerDialogMessageEl = $("#registerDialogMessage");
 const registerCancelBtn = $("#registerCancelBtn");
 const registerSubmitBtn = $("#registerSubmitBtn");
 
 const REGISTER_DIALOG_DEFAULT = registerDialogMessageEl
   ? registerDialogMessageEl.textContent.trim()
-  : "Pico W の device_id.txt に保存された ID を入力し、ダッシュボードから登録します。";
-let cachedPicoCapabilities = null;
+  : "エッジデバイスで使用する識別子を入力し、必要に応じて表示名やメタ情報を設定します。capabilities や追加メタデータは JSON として登録できます。";
 let lastRegisteredDeviceId = null;
 let lastRegisteredDeviceName = null;
 
@@ -464,22 +465,6 @@ function hideRegisterNotice(){
   delete registerNoticeEl.dataset.kind;
 }
 
-async function loadPicoCapabilities(){
-  if(cachedPicoCapabilities){
-    return cachedPicoCapabilities;
-  }
-  const res = await fetch("/pico_capabilities.json", { cache: "no-cache" });
-  if(!res.ok){
-    throw new Error(`capabilities の取得に失敗しました (HTTP ${res.status})`);
-  }
-  const data = await res.json();
-  if(!Array.isArray(data)){
-    throw new Error("capabilities の形式が不正です");
-  }
-  cachedPicoCapabilities = data;
-  return data;
-}
-
 function setRegisterDialogMessage(message, kind = "info"){
   if(!registerDialogMessageEl) return;
   registerDialogMessageEl.textContent = message;
@@ -495,6 +480,12 @@ function clearRegisterDialog(){
   if(registerForm){
     registerForm.reset();
   }
+  if(registerCapabilitiesInput){
+    registerCapabilitiesInput.value = "";
+  }
+  if(registerMetaInput){
+    registerMetaInput.value = "";
+  }
   if(registerSubmitBtn){
     registerSubmitBtn.disabled = false;
     registerSubmitBtn.textContent = "登録";
@@ -509,6 +500,10 @@ async function handleRegisterSubmit(event){
   const deviceId = registerDeviceIdInput ? registerDeviceIdInput.value.trim() : "";
   const displayNameInput = registerNameInput ? registerNameInput.value.trim() : "";
   const note = registerNoteInput ? registerNoteInput.value.trim() : "";
+  const rawCapabilities = registerCapabilitiesInput
+    ? registerCapabilitiesInput.value.trim()
+    : "";
+  const rawMeta = registerMetaInput ? registerMetaInput.value.trim() : "";
 
   if(!deviceId){
     setRegisterDialogMessage("デバイスIDを入力してください。", "error");
@@ -518,21 +513,56 @@ async function handleRegisterSubmit(event){
     return;
   }
 
+  let capabilities = [];
+  if(rawCapabilities){
+    try{
+      const parsedCaps = JSON.parse(rawCapabilities);
+      if(!Array.isArray(parsedCaps)){
+        throw new Error("capabilities は JSON 配列で入力してください。");
+      }
+      capabilities = parsedCaps;
+    }catch(err){
+      const message = err instanceof Error ? err.message : String(err);
+      setRegisterDialogMessage(message, "error");
+      if(registerCapabilitiesInput){
+        registerCapabilitiesInput.focus();
+      }
+      return;
+    }
+  }
+
+  let additionalMeta = {};
+  if(rawMeta){
+    try{
+      const parsedMeta = JSON.parse(rawMeta);
+      if(!parsedMeta || Array.isArray(parsedMeta) || typeof parsedMeta !== "object"){
+        throw new Error("メタデータは JSON オブジェクトで入力してください。");
+      }
+      additionalMeta = parsedMeta;
+    }catch(err){
+      const message = err instanceof Error ? err.message : String(err);
+      setRegisterDialogMessage(message, "error");
+      if(registerMetaInput){
+        registerMetaInput.focus();
+      }
+      return;
+    }
+  }
+
   registerSubmitBtn.disabled = true;
   registerSubmitBtn.textContent = "登録中…";
   setRegisterDialogMessage("サーバーへ登録しています…");
 
   try{
-    const capabilities = await loadPicoCapabilities();
     const payload = {
       device_id: deviceId,
       capabilities,
       meta: {
-        firmware: "pico_w_agent/1.1.0",
-        ua: "PicoW-MicroPython-Agent/1.1",
         registered_via: "dashboard",
       },
+      approved: true,
     };
+    Object.assign(payload.meta, additionalMeta);
     if(displayNameInput){
       payload.meta.display_name = displayNameInput;
     }
@@ -540,7 +570,7 @@ async function handleRegisterSubmit(event){
       payload.meta.note = note;
     }
 
-    const res = await fetch("/pico-w/register", {
+    const res = await fetch("/api/devices/register", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -610,7 +640,7 @@ if(registerDialog){
     if(registerDialog.returnValue === "success" && lastRegisteredDeviceId){
       const label = lastRegisteredDeviceName || lastRegisteredDeviceId;
       const idSuffix = lastRegisteredDeviceName ? ` (ID: ${lastRegisteredDeviceId})` : "";
-      showRegisterNotice(`デバイス「${label}」${idSuffix}を登録しました。Pico W を起動するとジョブの取得を開始できます。`, "success");
+      showRegisterNotice(`デバイス「${label}」${idSuffix}を登録しました。エッジデバイスをオンラインにするとジョブの取得を開始できます。`, "success");
       fetchDevices();
     }
     lastRegisteredDeviceId = null;
