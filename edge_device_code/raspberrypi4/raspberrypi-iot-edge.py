@@ -1140,14 +1140,16 @@ def _process_job(
     logging.info(
         "Job %s completed: action=%s ok=%s error=%s",
         job_id,
-        action,
+        resolved_action,
         ok,
         error_message,
     )
 
-    if message:
-        logging.info("Job %s agent message: %s", job_id, message)
-        _console("Job {} message to user: {}".format(job_id, message))
+    if resolved_message:
+        logging.info("Job %s agent message: %s", job_id, resolved_message)
+        _console(
+            "Job {} message to user: {}".format(job_id, resolved_message)
+        )
 
     if not _post_result(session, result_payload):
         logging.error("Failed to deliver result for job %s", job_id)
