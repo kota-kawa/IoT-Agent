@@ -78,6 +78,7 @@ from machine import Pin, ADC, unique_id  # type: ignore
 # =========================
 # 設定
 # =========================
+# Flask サーバーへの接続先 URL と API パス
 BASE_URL = "https://iot-agent.project-kk.com"
 REGISTER_PATH = "/api/devices/register"
 NEXT_PATH = "/api/devices/{device_id}/jobs/next"
@@ -106,6 +107,7 @@ try:
 except Exception:
     pass
 
+# ポーリングや登録関連の挙動を制御するパラメータ
 POLL_INTERVAL_SEC = 1  # 1秒間隔でサーバーをポーリング
 AUTO_REGISTER_ON_BOOT = False  # True にすると起動時に自動登録
 CAPABILITY_SYNC_ENABLED = True  # 手動登録後でも機能一覧をサーバーへ同期する
@@ -120,6 +122,7 @@ RESULT_RETRY_BASE_DELAY = 2
 
 def _format_for_log(value, max_length=400):
     """Convert arbitrary value to a short printable string."""
+    # MicroPython 環境でも扱いやすいようログ出力文字列を整形
     try:
         text = json.dumps(value)
     except Exception:

@@ -30,17 +30,20 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+# HTTP 通信とローカル推論エンジンを扱う外部ライブラリを読み込む
 import requests
 from dotenv import load_dotenv
 from llama_cpp import Llama
 
 # Load environment variables from potential .env locations before reading them.
+# .env ファイルを探索する候補パス
 _ENV_CANDIDATES = [
     Path(__file__).resolve().parent / ".env",
     Path(__file__).resolve().parent.parent / ".env",
     Path.cwd() / ".env",
 ]
 for _env_file in _ENV_CANDIDATES:
+    # 各パスに .env があれば読み込んで環境変数を補完
     if _env_file.exists():
         load_dotenv(_env_file, override=False)
 # Also respect a .env in the current working directory if one exists.
@@ -48,6 +51,7 @@ load_dotenv(override=False)
 
 # ==== Configuration ========================================================
 
+# TinyLlama などローカル LLM の推論設定
 MODEL_PATH = os.getenv("LLAMA_MODEL_PATH", "Llama-3.2-3B-Instruct-Q3_K_M.gguf")
 LLAMA_THREADS = int(os.getenv("LLAMA_THREADS", "4"))
 LLAMA_CONTEXT = int(os.getenv("LLAMA_CONTEXT", "1024"))
@@ -56,15 +60,18 @@ LLAMA_TEMPERATURE = float(os.getenv("LLAMA_TEMPERATURE", "0.2"))
 # NOTE: The IoT server is deployed remotely, so we default to the public
 # endpoint. Set IOT_SERVER_URL to override when testing against a different
 # environment.
+# Flask サーバーのベース URL（デフォルトは公開エンドポイント）
 SERVER_BASE_URL = os.getenv(
     "IOT_SERVER_URL", "https://iot-agent.project-kk.com"
 ).rstrip("/")
 # Default to a 3 minute HTTP timeout to accommodate longer-running server
 # operations, while still allowing customization through the environment
 # variable.
+# HTTP タイムアウトやポーリング間隔など通信関連の設定
 REQUEST_TIMEOUT = float(os.getenv("IOT_AGENT_HTTP_TIMEOUT", "180"))
 POLL_INTERVAL = float(os.getenv("IOT_AGENT_POLL_INTERVAL", "2.0"))
 
+# 自動登録フラグ（ブール文字列を解釈）
 _AUTO_REGISTER_RAW = os.getenv("IOT_AGENT_AUTO_REGISTER")
 AUTO_REGISTRATION_REQUESTED = (
     (_AUTO_REGISTER_RAW or "").strip().lower()
@@ -76,11 +83,13 @@ AUTO_REGISTRATION_REQUESTED = (
     }
 )
 
+# 天気情報取得に使う OpenWeather の資格情報
 OPEN_WEATHER_API_KEY = os.getenv("OPEN_WEATHER_API_KEY")
 OPEN_WEATHER_BASE_URL = os.getenv(
     "OPEN_WEATHER_BASE_URL", "https://api.openweathermap.org/data/2.5/weather"
 )
 
+# デバイス ID は環境変数かファイルから解決
 DEVICE_ID_ENV = os.getenv("IOT_AGENT_DEVICE_ID")
 DEVICE_ID_PATH = Path(
     os.getenv(
@@ -99,6 +108,7 @@ RESULT_PATH = "/api/devices/{device_id}/jobs/result"
 AGENT_ROLE_VALUE = "raspberrypi-agent"
 AGENT_COMMAND_NAME = "agent_instruction"
 
+# Pi がネイティブにサポートするアクション定義
 SUPPORTED_ACTIONS: Dict[str, Dict[str, Any]] = {
     "play_rock_paper_scissors": {
         "description": "Play a round of rock-paper-scissors against the agent.",
@@ -144,6 +154,7 @@ SUPPORTED_ACTIONS: Dict[str, Dict[str, Any]] = {
     },
 }
 
+# サーバーへ公開するアクションカタログ（no_action を除外）
 ACTION_CATALOG = [
     {
         "name": action,
@@ -154,6 +165,7 @@ ACTION_CATALOG = [
     if action != "no_action"
 ]
 
+# サーバー登録時に伝える capability 情報
 CAPABILITIES = [
     {
         "name": AGENT_COMMAND_NAME,
@@ -169,6 +181,7 @@ CAPABILITIES = [
 def _console(message: str) -> None:
     """Emit a human-readable status line to the terminal."""
 
+    # 実行中の状態をターミナルへ表示する共通処理
     try:
         print(f"[agent] {message}", flush=True)
     except Exception:  # pragma: no cover - printing should never fail, but stay safe
@@ -200,10 +213,12 @@ LLM_SYSTEM_PROMPT = (
 
 
 def _build_url(path: str) -> str:
+    # API パスをベース URL と結合してアクセス先を得る
     return f"{SERVER_BASE_URL}{path}"
 
 
 def _load_device_id() -> str:
+    # ファイルキャッシュと環境変数を考慮してデバイス ID を解決
     if DEVICE_ID_ENV:
         return DEVICE_ID_ENV.strip()
 
@@ -225,6 +240,7 @@ def _load_device_id() -> str:
 
 
 def _create_llm() -> Llama:
+    # 指定パスの GGUF モデルを読み込んで推論器インスタンスを生成
     if not Path(MODEL_PATH).exists():
         logging.error("Model file not found: %s", MODEL_PATH)
         sys.exit(1)
@@ -239,6 +255,7 @@ def _create_llm() -> Llama:
 
 
 def _log_dict(label: str, value: Dict[str, Any], *, level: int = logging.INFO) -> None:
+    # 辞書データを JSON 文字列化してログに記録
     try:
         message = json.dumps(value, ensure_ascii=False, sort_keys=True)
     except TypeError:
@@ -247,6 +264,7 @@ def _log_dict(label: str, value: Dict[str, Any], *, level: int = logging.INFO) -
 
 
 def _register_device(session: requests.Session, device_id: str) -> Tuple[bool, bool]:
+    # サーバーへ登録リクエストを送り、成功と手動承認の要否を返す
     payload = {
         "device_id": device_id,
         "capabilities": CAPABILITIES,
@@ -306,6 +324,7 @@ def _register_device(session: requests.Session, device_id: str) -> Tuple[bool, b
 
 
 def _poll_next_job(session: requests.Session, device_id: str) -> Optional[Dict[str, Any]]:
+    # サーバーから次のジョブを取得し、必要に応じて再登録を試みる
     try:
         resp = session.get(
             _build_url(NEXT_PATH.format(device_id=device_id)),
@@ -365,6 +384,7 @@ def _post_result(
     max_attempts: int = 3,
     backoff_seconds: float = 2.0,
 ) -> bool:
+    # ジョブ結果を再試行つきでサーバーに送信
     device_id_value = str(payload.get("device_id") or "").strip()
     if not device_id_value:
         logging.error("Result payload is missing device_id")
@@ -441,6 +461,7 @@ def _build_result_payload(
     result: Any,
     error: Optional[str],
 ) -> Dict[str, Any]:
+    # サーバーが期待するフォーマットに結果をまとめる
     return {
         "device_id": device_id,
         "job_id": job_id,
@@ -462,6 +483,7 @@ def _build_result_payload(
 
 
 def _format_for_log(value: Any, *, max_length: int = 500) -> str:
+    # ログ出力用に値を文字列化し、長すぎる場合は省略記法にする
     try:
         text = json.dumps(value, ensure_ascii=False, sort_keys=True)
     except TypeError:
@@ -504,11 +526,13 @@ _WIN_MAP = {
 
 
 def _normalize_move(value: str) -> Optional[str]:
+    # じゃんけんの手を多言語表現から正規化
     key = value.strip().lower()
     return _MOVE_ALIASES.get(key)
 
 
 def _play_rock_paper_scissors(params: Dict[str, Any]) -> Dict[str, Any]:
+    # じゃんけん対戦を行い、勝敗とメッセージを返す
     move_value = params.get("player_move") if isinstance(params, dict) else None
     if isinstance(move_value, str) and move_value.strip():
         player_move = _normalize_move(move_value)
@@ -543,11 +567,13 @@ def _play_rock_paper_scissors(params: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _tell_joke() -> Dict[str, Any]:
+    # 事前定義されたジョークをランダムに選択
     joke = random.choice(JOKES)
     return {"joke": joke}
 
 
 def _get_weather(params: Dict[str, Any]) -> Dict[str, Any]:
+    # OpenWeather API を呼び出して現在の天気情報を取得
     if not OPEN_WEATHER_API_KEY:
         raise RuntimeError("OpenWeather API key is not configured in the environment.")
 
@@ -614,6 +640,7 @@ def _get_weather(params: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _execute_action(action: str, parameters: Dict[str, Any]) -> Tuple[bool, Any, Optional[str]]:
+    # アクション名に応じてローカル処理を実行し、成功可否と結果を返す
     logging.info(
         "Executing action '%s' with parameters=%s",
         action,
@@ -643,6 +670,7 @@ def _execute_action(action: str, parameters: Dict[str, Any]) -> Tuple[bool, Any,
 
 
 def _plan_from_instruction(llm: Llama, instruction: str) -> Dict[str, Any]:
+    # LLM へ命令文を渡し、JSON 形式のプランを推定
     messages = [
         {"role": "system", "content": LLM_SYSTEM_PROMPT},
         {"role": "user", "content": instruction},
@@ -686,6 +714,7 @@ def _plan_from_instruction(llm: Llama, instruction: str) -> Dict[str, Any]:
 
 
 def _build_multi_action_plan(llm: Llama, instruction: str) -> List[Dict[str, Any]]:
+    # 単一アクションまたはヒューリスティックから多段プランを生成
     heuristic = _heuristic_multi_plan(instruction)
     if heuristic:
         return heuristic
@@ -700,6 +729,7 @@ def _build_multi_action_plan(llm: Llama, instruction: str) -> List[Dict[str, Any
 def _execute_plan_sequence(
     plans: List[Dict[str, Any]]
 ) -> Tuple[bool, Any, Optional[str], Optional[str], str, Dict[str, Any]]:
+    # プラン配列を順に実行し、総合結果とメタ情報をまとめる
     if not plans:
         message = "No executable actions resolved from instruction."
         return False, None, message, message, "no_action", {}
@@ -787,6 +817,7 @@ def _execute_plan_sequence(
 
 
 def _extract_json(text: str) -> Optional[Any]:
+    # LLM の生テキストから JSON を抽出
     try:
         return json.loads(text)
     except json.JSONDecodeError:
@@ -804,6 +835,7 @@ def _extract_json(text: str) -> Optional[Any]:
 
 
 def _infer_units_from_instruction(instruction: str) -> Optional[str]:
+    # 命令文に含まれる単位指定を推定
     text = instruction.lower()
     if "fahrenheit" in text or "imperial" in text:
         return "imperial"
@@ -815,6 +847,7 @@ def _infer_units_from_instruction(instruction: str) -> Optional[str]:
 
 
 def _extract_weather_location(instruction: str) -> Optional[str]:
+    # 天気要求から地名を抽出（英語・日本語どちらにも対応）
     patterns = [
         r"\bweather\s+(?:in|for)\s+([A-Za-z0-9 ,'-]+)",
         r"\btemperature\s+(?:in|for)\s+([A-Za-z0-9 ,'-]+)",
@@ -838,6 +871,7 @@ def _extract_weather_location(instruction: str) -> Optional[str]:
 
 
 def _keyword_plan(instruction: str) -> Optional[Dict[str, Any]]:
+    # 単純なキーワード一致で最適アクションを一件抽出
     plans = _heuristic_multi_plan(instruction)
     return plans[0] if plans else None
 
@@ -845,6 +879,7 @@ def _keyword_plan(instruction: str) -> Optional[Dict[str, Any]]:
 def _heuristic_multi_plan(instruction: str) -> List[Dict[str, Any]]:
     """Resolve an instruction into a deterministic sequence of actions."""
 
+    # ヒューリスティックで複数アクションを導出
     text = instruction.strip()
     if not text:
         return []
@@ -907,6 +942,7 @@ def _process_job(
     device_id: str,
     job: Dict[str, Any],
 ) -> None:
+    # サーバーから受信したジョブを解析し、適切なアクションを実行
     raw_job_id: Any = job.get("job_id")
     if raw_job_id is None and "id" in job:
         raw_job_id = job.get("id")
@@ -1164,6 +1200,7 @@ def _process_job(
 
 
 def main() -> None:
+    # エージェントのエントリーポイント。モデル読み込みとポーリングループを開始
     logging.basicConfig(
         level=logging.INFO,
         format="[%(asctime)s] %(levelname)s %(message)s",

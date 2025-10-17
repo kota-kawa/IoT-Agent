@@ -1,5 +1,6 @@
 from typing import Any, Dict, List
 
+# マルチステップ命令まわりのサーバーロジックを検証するテスト
 import pytest
 
 from app import (
@@ -17,6 +18,7 @@ from app import (
 
 @pytest.fixture(autouse=True)
 def clear_state():
+    # 各テスト間でデバイス状態をリセット
     _DEVICES.clear()
     yield
     _DEVICES.clear()
@@ -28,6 +30,7 @@ def _register_device(
     meta: Dict[str, Any],
     approved: bool = True,
 ) -> None:
+    # テスト用にメモリ上へデバイスを直接登録
     _DEVICES[device_id] = DeviceState(
         device_id=device_id,
         capabilities=capabilities,
@@ -38,6 +41,7 @@ def _register_device(
 
 @pytest.fixture
 def client():
+    # Flask テストクライアントを生成して API を呼び出す
     from app import app
 
     with app.test_client() as test_client:
@@ -45,6 +49,7 @@ def client():
 
 
 def test_validate_device_command_sequence_multiple():
+    # 複数デバイスコマンドが正しくバリデーションを通過するか確認
     device_id = "sensor-1"
     _register_device(
         device_id,
@@ -64,6 +69,7 @@ def test_validate_device_command_sequence_multiple():
 
 
 def test_execute_device_command_sequence_mixed_types(monkeypatch):
+    # エージェントと通常デバイスが混在するシーケンスの実行フローを検証
     agent_id = "agent-1"
     sensor_id = "sensor-1"
 
@@ -130,6 +136,7 @@ def test_execute_device_command_sequence_mixed_types(monkeypatch):
 
 
 def test_execute_device_command_sequence_agent_failure(monkeypatch):
+    # エージェントコマンドが失敗した場合のエラー伝搬を確認
     agent_id = "agent-1"
     _register_device(
         agent_id,
@@ -166,6 +173,7 @@ def test_execute_device_command_sequence_agent_failure(monkeypatch):
 
 
 def test_chat_executes_multiple_commands(monkeypatch, client):
+    # チャット API が複数コマンドを順番に実行するシナリオを再現
     device_id = "sensor-1"
     register_payload = {
         "device_id": device_id,
@@ -225,6 +233,7 @@ def test_chat_executes_multiple_commands(monkeypatch, client):
 
 
 def test_format_return_value_for_multi_action():
+    # マルチアクションの戻り値が要約テキストに変換されるかチェック
     payload = {
         "action": "multi_action_sequence",
         "parameters": {
