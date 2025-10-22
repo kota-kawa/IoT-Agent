@@ -59,6 +59,12 @@ class DeviceState:
 # メモリ上でデバイス情報と進行中ジョブを管理する辞書
 _DEVICES: Dict[str, DeviceState] = {}
 _PENDING_JOBS: Dict[str, str] = {}
+_JOB_METADATA: Dict[str, Dict[str, Any]] = {}
+_COMPLETED_JOBS: Dict[str, Dict[str, Any]] = {}
+_COMPLETED_JOB_ORDER: Deque[str] = deque()
+
+
+MAX_COMPLETED_JOBS = int(os.getenv("MAX_COMPLETED_JOBS", "200"))
 
 
 # デバイスがジョブ結果を返さない場合にタイムアウトとみなす秒数
@@ -333,7 +339,28 @@ def _build_device_context() -> str:
     return "\n".join(lines).strip()
 
 
-def _enqueue_device_command(device_id: str, command: Dict[str, Any]) -> Optional[str]:
+def _store_completed_job(job_id: Optional[str], result: Dict[str, Any]) -> None:
+    # 完了済みジョブの結果を保持し、必要に応じて古いものを破棄
+
+    if not isinstance(job_id, str) or not job_id:
+        return
+
+    _COMPLETED_JOBS[job_id] = dict(result)
+    try:
+        _COMPLETED_JOB_ORDER.remove(job_id)
+    except ValueError:
+        pass
+    _COMPLETED_JOB_ORDER.append(job_id)
+
+    while len(_COMPLETED_JOB_ORDER) > MAX_COMPLETED_JOBS:
+        oldest = _COMPLETED_JOB_ORDER.popleft()
+        _COMPLETED_JOBS.pop(oldest, None)
+        _JOB_METADATA.pop(oldest, None)
+
+
+def _enqueue_device_command(
+    device_id: str, command: Dict[str, Any], *, source: str = "internal"
+) -> Optional[str]:
     # 指定デバイスのジョブキューへコマンドを追加し、job_id を返す
     device = _DEVICES.get(device_id)
     if not device:
@@ -343,6 +370,14 @@ def _enqueue_device_command(device_id: str, command: Dict[str, Any]) -> Optional
     device.job_queue.append({"job_id": job_id, "command": command})
     device.last_seen = time.time()
     _PENDING_JOBS[job_id] = device_id
+    _JOB_METADATA[job_id] = {
+        "job_id": job_id,
+        "device_id": device_id,
+        "command": dict(command),
+        "queued_at": time.time(),
+        "status": "pending",
+        "source": source,
+    }
     return job_id
 
 
@@ -356,6 +391,11 @@ def _await_device_result(device_id: str, job_id: str, timeout: float = 120.0) ->
         result = device.job_results.pop(job_id, None)
         if result:
             _PENDING_JOBS.pop(job_id, None)
+            metadata = _JOB_METADATA.get(job_id)
+            if metadata is not None:
+                metadata["status"] = "completed"
+                metadata["completed_at"] = time.time()
+            _store_completed_job(job_id, result)
             return result
         time.sleep(0.2)
     return None
@@ -846,7 +886,7 @@ def _execute_standard_device_command(
     args_dict = command.get("args") if isinstance(command.get("args"), dict) else {}
 
     command_payload = {"name": command_name, "args": args_dict}
-    job_id = _enqueue_device_command(device_id, command_payload)
+    job_id = _enqueue_device_command(device_id, command_payload, source="llm")
     if job_id is None:
         notice = "(注意: デバイスにコマンドを送信できませんでした。)"
         combined = (initial_reply + "\n" if initial_reply else "") + notice
@@ -998,7 +1038,7 @@ def _execute_agent_device_command(
         "args": command_args,
     }
 
-    job_id = _enqueue_device_command(agent.device_id, command_payload)
+    job_id = _enqueue_device_command(agent.device_id, command_payload, source="agent")
     if job_id is None:
         failure_message = "指示を送信できませんでした。デバイスの接続状態を確認してください。"
         combined = (initial_reply + "\n" if initial_reply else "") + failure_message
@@ -1214,6 +1254,36 @@ def logout():
     return redirect(url_for("login"))
 
 
+@app.get("/api/session")
+def session_status():
+    # 現在のセッションが認証済みかどうかを返す API
+
+    return jsonify({"authenticated": bool(session.get("authenticated"))})
+
+
+@app.post("/api/session")
+def session_login():
+    # JSON 経由でのログイン要求を処理し、成功時にセッションを確立
+
+    payload = request.get_json(silent=True) or {}
+    password = payload.get("password") if isinstance(payload, dict) else None
+
+    if isinstance(password, str) and password == APP_PASSWORD:
+        session["authenticated"] = True
+        return jsonify({"authenticated": True})
+
+    session.pop("authenticated", None)
+    return jsonify({"authenticated": False, "error": "invalid credentials"}), 401
+
+
+@app.delete("/api/session")
+def session_logout():
+    # API 経由でのログアウト要求。セッションを破棄して応答
+
+    session.clear()
+    return jsonify({"authenticated": False})
+
+
 @app.get("/api/devices/ping")
 def device_ping():
     # エッジデバイスからの疎通確認に応答するシンプルなエンドポイント
@@ -1372,6 +1442,194 @@ def register_device():
     })
 
 
+@app.get("/api/devices/<device_id>")
+def get_device(device_id: str):
+    # 指定デバイスの詳細情報を取得する API
+
+    cleaned_id = (device_id or "").strip()
+    if not cleaned_id:
+        return jsonify({"error": "device_id is required"}), 400
+
+    device = _DEVICES.get(cleaned_id)
+    if not device:
+        return jsonify({"error": "device not registered"}), 404
+
+    return jsonify({"device": _serialize_device(device)})
+
+
+@app.put("/api/devices/<device_id>")
+def update_device(device_id: str):
+    # デバイスのメタ情報や機能を更新する API
+
+    cleaned_id = (device_id or "").strip()
+    if not cleaned_id:
+        return jsonify({"error": "device_id is required"}), 400
+
+    device = _DEVICES.get(cleaned_id)
+    if not device:
+        return jsonify({"error": "device not registered"}), 404
+
+    payload = request.get_json(silent=True) or {}
+
+    if "capabilities" in payload:
+        capabilities = payload.get("capabilities")
+        if capabilities is None:
+            device.capabilities = []
+        elif isinstance(capabilities, list):
+            device.capabilities = _normalise_capabilities(capabilities)
+        else:
+            return jsonify({"error": "capabilities must be a list or null"}), 400
+
+    if "meta" in payload:
+        meta = payload.get("meta")
+        if meta is None:
+            device.meta = {}
+        elif isinstance(meta, dict):
+            if not isinstance(device.meta, dict):
+                device.meta = {}
+            for key, value in meta.items():
+                if value is None:
+                    device.meta.pop(key, None)
+                else:
+                    device.meta[key] = value
+
+            display_name = device.meta.get("display_name")
+            if isinstance(display_name, str):
+                trimmed = display_name.strip()
+                if trimmed:
+                    device.meta["display_name"] = trimmed
+                else:
+                    device.meta.pop("display_name", None)
+        else:
+            return jsonify({"error": "meta must be an object or null"}), 400
+
+    if "approved" in payload:
+        device.approved = bool(payload.get("approved"))
+
+    device.last_seen = time.time()
+    return jsonify({"status": "updated", "device": _serialize_device(device)})
+
+
+@app.get("/api/devices/<device_id>/jobs")
+def list_device_jobs(device_id: str):
+    # デバイスごとのジョブ履歴を取得
+
+    cleaned_id = (device_id or "").strip()
+    if not cleaned_id:
+        return jsonify({"error": "device_id is required"}), 400
+
+    device = _DEVICES.get(cleaned_id)
+    if not device:
+        return jsonify({"error": "device not registered"}), 404
+
+    jobs: List[Dict[str, Any]] = []
+    for job_id, metadata in _JOB_METADATA.items():
+        if metadata.get("device_id") != cleaned_id:
+            continue
+
+        job_info = dict(metadata)
+        job_info["job_id"] = job_id
+
+        if job_id in _PENDING_JOBS:
+            if job_info.get("status") not in {"dispatched", "cancelled"}:
+                job_info["status"] = "pending"
+        elif job_id in _COMPLETED_JOBS and job_info.get("status") != "cancelled":
+            job_info["status"] = "completed"
+            job_info["result"] = _COMPLETED_JOBS[job_id]
+
+        jobs.append({k: v for k, v in job_info.items() if v is not None})
+
+    jobs.sort(key=lambda item: item.get("queued_at") or 0)
+    return jsonify({"device_id": cleaned_id, "jobs": jobs})
+
+
+@app.post("/api/devices/<device_id>/jobs")
+def create_device_job(device_id: str):
+    # 外部サービスから直接ジョブを投入する API
+
+    cleaned_id = (device_id or "").strip()
+    if not cleaned_id:
+        return jsonify({"error": "device_id is required"}), 400
+
+    if cleaned_id not in _DEVICES:
+        return jsonify({"error": "device not registered"}), 404
+
+    payload = request.get_json(silent=True) or {}
+
+    command_payload: Dict[str, Any]
+    raw_command = payload.get("command")
+    if isinstance(raw_command, dict):
+        command_payload = dict(raw_command)
+    else:
+        command_payload = {
+            "device_id": cleaned_id,
+            "name": payload.get("name"),
+            "args": payload.get("args"),
+        }
+
+    command_payload.setdefault("device_id", cleaned_id)
+
+    validated_command, error_message = _validate_device_command(command_payload)
+    if not validated_command:
+        return jsonify({"error": error_message or "invalid command"}), 400
+
+    queue_command = {
+        "name": validated_command["name"],
+        "args": validated_command.get("args", {}),
+    }
+
+    job_id = _enqueue_device_command(cleaned_id, queue_command, source="api")
+    if job_id is None:
+        return jsonify({"error": "device not registered"}), 404
+
+    wait_for_result = bool(payload.get("wait_for_result"))
+    timeout_value = payload.get("timeout")
+    try:
+        timeout_seconds = float(timeout_value)
+        if timeout_seconds <= 0:
+            raise ValueError
+    except (TypeError, ValueError):
+        timeout_seconds = DEVICE_RESULT_TIMEOUT
+
+    metadata = _JOB_METADATA.get(job_id)
+    if metadata is not None:
+        metadata["wait_for_result"] = wait_for_result
+        requested_via = payload.get("requested_via")
+        if isinstance(requested_via, str) and requested_via.strip():
+            metadata["requested_via"] = requested_via.strip()
+        else:
+            metadata.setdefault("requested_via", "api")
+
+    response_payload: Dict[str, Any] = {
+        "status": "queued",
+        "job_id": job_id,
+        "device_id": cleaned_id,
+        "command": queue_command,
+        "wait_for_result": wait_for_result,
+    }
+
+    if metadata is not None:
+        response_payload["queued_at"] = metadata.get("queued_at")
+
+    if wait_for_result:
+        result = _await_device_result(cleaned_id, job_id, timeout=timeout_seconds)
+        if result is not None:
+            response_payload.update({"status": "completed", "result": result})
+            status_code = 200
+        else:
+            response_payload.update(
+                {
+                    "status": "timeout",
+                    "message": f"Result not available within {int(timeout_seconds)} seconds.",
+                }
+            )
+            status_code = 202
+    else:
+        status_code = 202
+
+    return jsonify(response_payload), status_code
+
+
 @app.get("/api/devices")
 def list_devices():
     # 登録済みデバイス一覧を JSON 形式で返却
@@ -1430,6 +1688,10 @@ def delete_device(device_id: str):
     stale_jobs = [job_id for job_id, mapped in _PENDING_JOBS.items() if mapped == cleaned_id]
     for job_id in stale_jobs:
         _PENDING_JOBS.pop(job_id, None)
+        metadata = _JOB_METADATA.get(job_id)
+        if metadata is not None:
+            metadata["status"] = "cancelled"
+            metadata["cancelled_at"] = time.time()
 
     return jsonify({"status": "deleted", "device_id": cleaned_id})
 
@@ -1452,7 +1714,107 @@ def next_job(device_id: str):
         return ("", 204)
 
     job = device.job_queue.popleft()
+    job_id = job.get("job_id") if isinstance(job, dict) else None
+    if isinstance(job_id, str):
+        metadata = _JOB_METADATA.get(job_id)
+        if metadata is not None and metadata.get("status") == "pending":
+            metadata["status"] = "dispatched"
+            metadata["dispatched_at"] = time.time()
     return jsonify(job)
+
+
+@app.get("/api/jobs/<job_id>")
+def get_job(job_id: str):
+    # ジョブ ID に紐づく状態と結果を返す
+
+    cleaned_id = (job_id or "").strip()
+    if not cleaned_id:
+        return jsonify({"error": "job_id is required"}), 400
+
+    metadata = _JOB_METADATA.get(cleaned_id)
+    pending_device = _PENDING_JOBS.get(cleaned_id)
+    result = _COMPLETED_JOBS.get(cleaned_id)
+
+    if not metadata and not pending_device and result is None:
+        return jsonify({"error": "job not found"}), 404
+
+    response_payload: Dict[str, Any] = {"job_id": cleaned_id}
+
+    if metadata:
+        response_payload.update({k: v for k, v in metadata.items() if v is not None})
+
+    if pending_device:
+        response_payload["device_id"] = pending_device
+        if metadata and metadata.get("status") == "dispatched":
+            response_payload["status"] = "dispatched"
+        else:
+            response_payload["status"] = "pending"
+
+    if result is not None:
+        response_payload["status"] = "completed"
+        response_payload["result"] = result
+        response_payload.setdefault("device_id", result.get("device_id"))
+
+    response_payload.setdefault("status", metadata.get("status") if metadata else "unknown")
+
+    return jsonify(response_payload)
+
+
+@app.delete("/api/jobs/<job_id>")
+def cancel_job(job_id: str):
+    # キューに残っているジョブをキャンセル
+
+    cleaned_id = (job_id or "").strip()
+    if not cleaned_id:
+        return jsonify({"error": "job_id is required"}), 400
+
+    if cleaned_id in _COMPLETED_JOBS:
+        return jsonify({"error": "job already completed"}), 409
+
+    device_id = _PENDING_JOBS.get(cleaned_id)
+    metadata = _JOB_METADATA.get(cleaned_id)
+
+    if not device_id:
+        if metadata and metadata.get("status") == "cancelled":
+            response_payload = {
+                "status": "cancelled",
+                "job_id": cleaned_id,
+                "device_id": metadata.get("device_id"),
+            }
+            return jsonify(response_payload)
+        return jsonify({"error": "job not found or already dispatched"}), 404
+
+    device = _DEVICES.get(device_id)
+    if not device:
+        _PENDING_JOBS.pop(cleaned_id, None)
+        if metadata is not None:
+            metadata["status"] = "cancelled"
+            metadata["cancelled_at"] = time.time()
+        return jsonify({"status": "cancelled", "job_id": cleaned_id, "device_id": device_id})
+
+    removed = False
+    new_queue: Deque[Dict[str, Any]] = deque()
+    while device.job_queue:
+        job = device.job_queue.popleft()
+        if not removed and job.get("job_id") == cleaned_id:
+            removed = True
+            continue
+        new_queue.append(job)
+
+    device.job_queue = new_queue
+
+    if not removed:
+        # ジョブは既にデバイスに取得されている
+        device.job_queue = new_queue
+        return jsonify({"error": "job already dispatched"}), 409
+
+    device.last_seen = time.time()
+    _PENDING_JOBS.pop(cleaned_id, None)
+    if metadata is not None:
+        metadata["status"] = "cancelled"
+        metadata["cancelled_at"] = time.time()
+
+    return jsonify({"status": "cancelled", "job_id": cleaned_id, "device_id": device_id})
 
 
 @app.post("/api/devices/<device_id>/jobs/result")
@@ -1569,6 +1931,14 @@ def post_result(device_id: str):
     device.last_result = result_record
     if job_id:
         device.job_results[job_id] = dict(result_record)
+        metadata = _JOB_METADATA.setdefault(job_id, {"job_id": job_id})
+        metadata["device_id"] = device.device_id
+        metadata.setdefault("command", payload.get("command"))
+        metadata.setdefault("queued_at", time.time())
+        metadata["status"] = "completed"
+        metadata["completed_at"] = time.time()
+        metadata["result_ok"] = bool(payload.get("ok"))
+    _store_completed_job(job_id, result_record)
 
     response_payload = {"status": "ack"}
     if mismatch_resolved_via_job:
