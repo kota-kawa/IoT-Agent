@@ -16,6 +16,7 @@ Robot Face animation for ST7735 (1.8inch 160x128) on Raspberry Pi 4
 注意:
 - VCC は 3.3V系推奨。電池駆動の場合も Raspberry Pi の GND と必ず共通化。
 - 右端に細い線が出る場合は h_offset / v_offset を 1〜2 で微調整。
+- 本スクリプトはバックライト(PWM)を gpiozero で制御します（RPi.GPIO 非使用）。
 """
 
 import os
@@ -23,7 +24,9 @@ import sys
 import math
 import time
 import signal
-import RPi.GPIO as GPIO
+from typing import Optional
+
+from gpiozero import PWMLED
 from PIL import Image, ImageDraw, ImageFont
 
 from luma.core.interface.serial import spi
@@ -64,6 +67,10 @@ EYE_OPEN_BASE  = 1.00  # 通常の目の開き倍率
 MOUTH_OPEN_MAX = 14    # 口の最大開き（px）
 BREATH_PERIOD  = 5.0   # 「呼吸」っぽい上下揺れ（顔全体を1〜2px）
 
+# ====== グローバル（シグナルハンドラで参照） ======
+_bl_pwm: Optional[PWMLED] = None
+
+
 # ====== ユーティリティ ======
 def die(msg: str):
     print(f"[ERROR] {msg}", file=sys.stderr)
@@ -75,13 +82,20 @@ def ensure_spidev():
         die(f"{path} が見つかりません。/boot(または /boot/firmware)/config.txt に "
             f"'dtoverlay=spi1-1cs' を追記して再起動してください。")
 
-def setup_backlight():
-    GPIO.setwarnings(False)
-    GPIO.setmode(GPIO.BCM)
-    GPIO.setup(PIN_BL, GPIO.OUT)
-    bl = GPIO.PWM(PIN_BL, 1000)  # 1kHz
-    bl.start(100)                # 100% duty
+def setup_backlight() -> PWMLED:
+    """
+    バックライトPWMを開始。gpiozero の PWMLED を使用（duty=0.0〜1.0）。
+    frequency=1000 で 1kHz。初期は 1.0（100%）に設定。
+    """
+    bl = PWMLED(PIN_BL, frequency=1000, active_high=True, initial_value=1.0)
     return bl
+
+def set_backlight_percent(bl: PWMLED, percent: float):
+    """
+    0〜100(%) を PWMLED.value(0.0〜1.0) に変換して設定。
+    """
+    p = max(0.0, min(100.0, percent))
+    bl.value = p / 100.0
 
 def init_device():
     serial_if = spi(
@@ -215,17 +229,24 @@ def draw_face(draw: ImageDraw.ImageDraw, t: float, W: int, H: int):
 
 # ====== メインループ ======
 def main():
+    global _bl_pwm
+
     ensure_spidev()
-    bl_pwm = setup_backlight()
+    _bl_pwm = setup_backlight()
     dev = init_device()
 
-    # Ctrl+C 終了で GPIO を後片付け
+    # Ctrl+C / SIGTERM 終了でバックライトを確実に開放
     def _cleanup(*_):
         try:
-            bl_pwm.stop()
+            if _bl_pwm is not None:
+                # 消灯してからクローズ（任意）
+                try:
+                    _bl_pwm.value = 0.0
+                except Exception:
+                    pass
+                _bl_pwm.close()
         finally:
-            GPIO.cleanup()
-        sys.exit(0)
+            sys.exit(0)
 
     signal.signal(signal.SIGINT, _cleanup)
     signal.signal(signal.SIGTERM, _cleanup)
@@ -234,8 +255,9 @@ def main():
     frame_delay = 1.0 / FPS
 
     # 起動アニメ（フェードインっぽく）
+    # gpiozero では 0.0〜1.0 を PWMLED.value に設定する
     for duty in (20, 40, 60, 80, 100):
-        bl_pwm.ChangeDutyCycle(duty)
+        set_backlight_percent(_bl_pwm, duty)
         with canvas(dev) as draw:
             draw.rectangle((0, 0, dev.width, dev.height), fill=COL_BG)
             draw.text((10, dev.height//2 - 6), "Starting robot face...", fill=COL_TEXT)
