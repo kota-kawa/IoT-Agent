@@ -1,45 +1,45 @@
 #!/usr/bin/env python3
-# /home/pi/servo/control_servo.py
+# /home/kota/iot-agent/test/servo_test.py
 # -*- coding: utf-8 -*-
 
 """
 Raspberry Pi 4 + サーボ（3線：GND/5V/Signal）制御スクリプト（gpiozero版）
+- サブコマンド無しでも動作する「ダイレクトモード」対応。
 - 既存使用GPIO（BCM）：17, 22, 23, 24, 25, 27, 20, 21, 18, 26, 6, 13 は使用しません。
 - 既定のサーボ信号ピンは BCM12（物理ピン32）を使用します。
 
-【配線（色とGPIO）】
-  ⚫ GND（黒/茶）   -> Raspberry Pi の GND（物理ピン 6, 9, 14, 20, 25, 30, 34, 39 のいずれか）
-  🔴 +5V（赤）     -> 外部5V電源の +5V （推奨）※小型1個なら Pi の 5V（物理2/4）も可だがリスクあり
-  🟠 信号（橙/黄/白）-> GPIO12（BCM12 / 物理ピン32）
+【配線（色とGPIO/物理ピン）】
+  ⚫ GND（黒/茶）     -> Raspberry Pi の GND（物理 6/9/14/20/25/30/34/39）
+  🔴 +5V（赤）       -> 外部5V電源の +5V（推奨。小型1個のみなら Pi の 5V(物理2/4)でも動く例あり）
+  🟠 信号（橙/黄/白） -> GPIO12（BCM12 / 物理ピン32）
 
 【安全注意】
 - 外部5V電源使用時は Pi の GND と外部電源の GND を共通にしてください（共通GND）。
 - +5V と GND の間に 470〜1000µF 程度の電解コンデンサをサーボ近くに配置推奨。
 - サーボ個体差により可動範囲やパルス幅が異なります。無理な可動はギア破損の恐れ。
 
-【使い方例】
-  1) 90度へ移動:
-     python3 control_servo.py set --angle 90
+【ダイレクトモード（サブコマンド不要の例）】
+  # 配線情報だけ表示（安全デフォルト）
+  python3 servo_test.py
 
-  2) センタ（90度相当）:
-     python3 control_servo.py center
+  # 角度を直接指定
+  python3 servo_test.py --angle 90
 
-  3) スイープ（0〜180度 往復）:
-     python3 control_servo.py sweep --start 0 --end 180 --step 2 --delay 0.02
+  # センタへ
+  python3 servo_test.py --center
 
-  4) 信号出力停止（デタッチ＝PWM停止）:
-     python3 control_servo.py off
+  # PWM停止（デタッチ）
+  python3 servo_test.py --off
 
-  5) ピン情報表示:
-     python3 control_servo.py info
+  # スイープ
+  python3 servo_test.py --sweep --start 0 --end 180 --step 2 --delay 0.02 --cycles 2
 
-  6) pigpio を使って安定化（pigpiod が起動していること）:
-     python3 control_servo.py set --angle 45 --pigpio
-
-【複数サーボを使う場合の例（空きピン候補）】
-  CH1: BCM12(物理32), CH2: BCM19(物理35), CH3: BCM5(物理29), CH4: BCM4(物理7)
-  -> 例: python3 control_servo.py set --channel 2 --angle 30
-
+【従来のサブコマンドも可】
+  python3 servo_test.py info
+  python3 servo_test.py set --angle 45
+  python3 servo_test.py center
+  python3 servo_test.py off
+  python3 servo_test.py sweep --cycles 2
 """
 
 from __future__ import annotations
@@ -238,23 +238,44 @@ def cmd_sweep(args: argparse.Namespace) -> None:
         servo.close()
 
 
-def cmd_info(args: argparse.Namespace) -> None:
+def cmd_info(_: argparse.Namespace) -> None:
     print("=== サーボ配線（色とGPIO/物理ピン） ===")
     print(" ⚫ GND（黒/茶） : Raspberry Pi の GND（物理 6/9/14/20/25/30/34/39）")
     print(" 🔴 +5V（赤）   : 外部5V推奨（Piの 2/4 でも小型1個なら動作例あり）")
     print(" 🟠 信号（橙/黄/白）: CH1->GPIO12(物理32), CH2->GPIO19(物理35), CH3->GPIO5(物理29), CH4->GPIO4(物理7)")
-    print(" ※ あなたの使用済GPIO: 17, 22, 23, 24, 25, 27, 20, 21, 18, 26, 6, 13 は避けています。")
+    print(" ※ 使用済GPIO: 17, 22, 23, 24, 25, 27, 20, 21, 18, 26, 6, 13 は避けています。")
 
 
 # ------------------------------------------------------------
-# エントリポイント
+# 解析・エントリポイント
 # ------------------------------------------------------------
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        description="Raspberry Pi 4 サーボ制御（gpiozero/AngularServo）。角度は0〜180度で指定。",
+        description="Raspberry Pi 4 サーボ制御（gpiozero/AngularServo）。サブコマンド無しでも動作。",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        add_help=True,
     )
-    sub = p.add_subparsers(dest="cmd", required=True)
+
+    # ---------- グローバル共通オプション（ダイレクトモードでも使用） ----------
+    p.add_argument("--channel", type=int, default=1, help="サーボチャンネル（1〜4）")
+    p.add_argument("--pigpio", action="store_true", help="pigpio ピンファクトリを使用（pigpiod が起動していること）")
+    p.add_argument("--min-pw", dest="min_pw", type=float, default=0.0005, help="min_pulse_width（秒）例: 0.0005=0.5ms")
+    p.add_argument("--max-pw", dest="max_pw", type=float, default=0.0025, help="max_pulse_width（秒）例: 0.0025=2.5ms")
+    p.add_argument("--hold", type=float, default=0.0, help="コマンド実行後にこの秒数だけ保持して終了")
+
+    # ---------- ダイレクトモード用のアクション指定（サブコマンド不要） ----------
+    p.add_argument("--angle", type=float, help="角度を直接指定（0〜180）。指定時は set と同等。")
+    p.add_argument("--center", action="store_true", help="センタ（90度）へ移動。")
+    p.add_argument("--off", action="store_true", help="PWM 停止（デタッチ）。")
+    p.add_argument("--sweep", action="store_true", help="スイープ動作を実行。")
+    p.add_argument("--start", type=float, default=0.0, help="スイープ開始角度（--sweep時）")
+    p.add_argument("--end", type=float, default=180.0, help="スイープ終了角度（--sweep時）")
+    p.add_argument("--step", type=float, default=1.0, help="スイープ刻み角度（--sweep時）")
+    p.add_argument("--delay", type=float, default=0.01, help="各ステップ間の待ち秒数（--sweep時）")
+    p.add_argument("--cycles", type=int, default=1, help="スイープ往復回数（0で無限。--sweep時）")
+
+    # ---------- 従来のサブコマンド（互換のため残す。必須にはしない） ----------
+    sub = p.add_subparsers(dest="cmd", required=False)
 
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--channel", type=int, default=1, help="サーボチャンネル（1〜4）")
@@ -287,12 +308,57 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _count_direct_actions(args: argparse.Namespace) -> int:
+    cnt = 0
+    if args.angle is not None:
+        cnt += 1
+    if args.center:
+        cnt += 1
+    if args.off:
+        cnt += 1
+    if args.sweep:
+        cnt += 1
+    return cnt
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     parser = build_parser()
+    # サブコマンド必須ではない
     args = parser.parse_args(argv)
+
     try:
-        args.func(args)
+        # 1) サブコマンドが指定されていれば従来通り
+        if args.cmd:
+            return args.func(args) or 0
+
+        # 2) ダイレクトモード（サブコマンド無しでの判定）
+        act_cnt = _count_direct_actions(args)
+        if act_cnt > 1:
+            raise ValueError("同時に複数の動作は指定できません。--angle / --center / --off / --sweep のいずれか1つにしてください。")
+
+        if args.angle is not None:
+            # set 相当
+            if not (0.0 <= args.angle <= 180.0):
+                raise ValueError("角度は0〜180の範囲で指定してください。")
+            cmd_set(args)
+            return 0
+
+        if args.center:
+            cmd_center(args)
+            return 0
+
+        if args.off:
+            cmd_off(args)
+            return 0
+
+        if args.sweep:
+            cmd_sweep(args)
+            return 0
+
+        # 3) 何も指定が無ければ安全のため info を表示（自動駆動はしない）
+        cmd_info(args)
         return 0
+
     except Exception as e:
         print(f"[ERROR] {e}", file=sys.stderr)
         return 1
