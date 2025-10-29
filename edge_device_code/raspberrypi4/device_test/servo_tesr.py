@@ -6,8 +6,7 @@
 Raspberry Pi 4 + サーボ（3線：GND/5V/Signal）制御スクリプト（gpiozero版）
 - 既存使用GPIO（BCM）：17, 22, 23, 24, 25, 27, 20, 21, 18, 26, 6, 13 は使用しません。
 - 既定のサーボ信号ピンは BCM12（物理ピン32）を使用します（CH1）。
-- 無引数で起動した場合：infoを表示し、対話メニューで操作を選べます。
-- これまで通りのサブコマンド（set/center/off/sweep/info）でも操作できます。
+- 無引数で起動した場合：非対話の自動デモを実行（info表示 → センタ移動 → 小振りスイープ → PWM停止）。
 
 【配線（色とGPIO/物理ピン）】
   ⚫ GND（黒/茶）   -> Raspberry Pi の GND（物理 6/9/14/20/25/30/34/39 のいずれか）
@@ -21,13 +20,19 @@ Raspberry Pi 4 + サーボ（3線：GND/5V/Signal）制御スクリプト（gpio
 
 【未使用の空きGPIO（例）】※あなたの使用済みリストは避けています
   CH1: BCM12(物理32), CH2: BCM19(物理35), CH3: BCM5(物理29), CH4: BCM4(物理7)
+
+【無引数デモのシーケンス】
+  1) info表示
+  2) CH1を 90° へ移動して 0.5秒保持
+  3) 60°↔120° を 2°刻みで 2往復（delay 0.02s）
+  4) PWM停止（保持解除）
 """
 
 from __future__ import annotations
 import time
 import sys
 import argparse
-from typing import Dict, Optional, Callable
+from typing import Dict, Optional
 
 from gpiozero import AngularServo, Device
 
@@ -92,7 +97,7 @@ def create_servo(
 
 
 # ------------------------------------------------------------
-# コマンド実装（サブコマンド用と内部呼び出し用）
+# コマンド実装（サブコマンド用）
 # ------------------------------------------------------------
 def cmd_set(args: argparse.Namespace) -> None:
     bcm = _DEFAULT_CHANNEL_PINS.get(args.channel, None)
@@ -222,87 +227,77 @@ def cmd_info(_: argparse.Namespace) -> None:
 
 
 # ------------------------------------------------------------
-# 対話メニュー（無引数時に起動）
+# 無引数時の非対話デモ
 # ------------------------------------------------------------
-def _ask(prompt: str, cast: Callable[[str], object], default: Optional[object] = None) -> object:
+def autorun_demo() -> int:
     """
-    入力補助。空入力は default を返す。cast で型変換。
+    非対話の安全デモ：
+      1) info表示
+      2) CH1を90度へ → 0.5秒保持
+      3) 60°↔120° を2往復（2°刻み, 0.02s/step）
+      4) PWM停止
     """
-    suffix = f" [{default}]" if default is not None else ""
-    while True:
-        s = input(f"{prompt}{suffix}: ").strip()
-        if not s:
-            if default is not None:
-                return default
-            else:
-                continue
-        try:
-            return cast(s)
-        except Exception:
-            print("入力形式が不正です。もう一度。")
+    cmd_info(argparse.Namespace())
 
+    # デモ設定
+    channel = 1
+    bcm = _DEFAULT_CHANNEL_PINS[channel]
+    use_pigpio = False
+    min_pw = 0.0005
+    max_pw = 0.0025
+    center_angle = 90.0
+    sweep_start = 60.0
+    sweep_end = 120.0
+    sweep_step = 2.0
+    sweep_delay = 0.02
+    sweep_cycles = 2
 
-def interactive_menu() -> None:
-    """
-    無引数で起動したときの対話式メニュー。
-    """
-    print("\n=== 互換モード：サブコマンドなしで起動 ===")
-    print(" 1) info   - 配線/ピン割り当てを表示")
-    print(" 2) center - 90度へ移動")
-    print(" 3) set    - 任意角度へ移動")
-    print(" 4) sweep  - 角度スイープ（往復）")
-    print(" 5) off    - PWM停止（保持解除）")
-    print(" 6) exit   - 終了")
-    while True:
-        choice = _ask("選択番号を入力", int, 1)
-        if choice == 1:
-            cmd_info(argparse.Namespace())
-        elif choice == 2:
-            ch = _ask("チャンネル(1-4)", int, 1)
-            pig = _ask("pigpioを使う？(0/1)", int, 0) == 1
-            minpw = _ask("min_pulse_width[秒]", float, 0.0005)
-            maxpw = _ask("max_pulse_width[秒]", float, 0.0025)
-            hold = _ask("保持[秒]（0で直ちに終了）", float, 0.0)
-            args = argparse.Namespace(channel=ch, pigpio=pig, min_pw=minpw, max_pw=maxpw, hold=hold)
-            cmd_center(args)
-        elif choice == 3:
-            ch = _ask("チャンネル(1-4)", int, 1)
-            ang = _ask("角度(0-180)", float, 90.0)
-            pig = _ask("pigpioを使う？(0/1)", int, 0) == 1
-            minpw = _ask("min_pulse_width[秒]", float, 0.0005)
-            maxpw = _ask("max_pulse_width[秒]", float, 0.0025)
-            hold = _ask("保持[秒]（0で直ちに終了）", float, 0.0)
-            args = argparse.Namespace(channel=ch, angle=ang, pigpio=pig, min_pw=minpw, max_pw=maxpw, hold=hold)
-            cmd_set(args)
-        elif choice == 4:
-            ch = _ask("チャンネル(1-4)", int, 1)
-            start = _ask("開始角度(0-180)", float, 0.0)
-            end = _ask("終了角度(0-180)", float, 180.0)
-            step = _ask("刻み角度", float, 1.0)
-            delay = _ask("ステップ間待ち[秒]", float, 0.01)
-            cycles = _ask("往復回数（0で無限）", int, 1)
-            pig = _ask("pigpioを使う？(0/1)", int, 0) == 1
-            minpw = _ask("min_pulse_width[秒]", float, 0.0005)
-            maxpw = _ask("max_pulse_width[秒]", float, 0.0025)
-            hold = 0.0  # sweepはループ処理のためholdは未使用
-            args = argparse.Namespace(
-                channel=ch, start=start, end=end, step=step, delay=delay, cycles=cycles,
-                pigpio=pig, min_pw=minpw, max_pw=maxpw, hold=hold
-            )
-            cmd_sweep(args)
-        elif choice == 5:
-            ch = _ask("チャンネル(1-4)", int, 1)
-            pig = _ask("pigpioを使う？(0/1)", int, 0) == 1
-            minpw = _ask("min_pulse_width[秒]", float, 0.0005)
-            maxpw = _ask("max_pulse_width[秒]", float, 0.0025)
-            hold = _ask("保持[秒]（0で直ちに終了）", float, 0.0)
-            args = argparse.Namespace(channel=ch, pigpio=pig, min_pw=minpw, max_pw=maxpw, hold=hold)
-            cmd_off(args)
-        elif choice == 6:
-            print("終了します。")
-            break
-        else:
-            print("1〜6の番号で選択してください。")
+    servo = create_servo(
+        bcm_pin=bcm,
+        use_pigpio=use_pigpio,
+        min_pulse_width=min_pw,
+        max_pulse_width=max_pw,
+        min_angle=0.0,
+        max_angle=180.0,
+    )
+    try:
+        # センタへ
+        servo.angle = center_angle
+        print(f"[DEMO] CH{channel}: GPIO{bcm} -> {center_angle:.1f}度（センタ）保持0.5s")
+        time.sleep(0.5)
+
+        # 小振りスイープ
+        print(f"[DEMO] スイープ開始: {sweep_start}°↔{sweep_end}°, step={sweep_step}°, delay={sweep_delay}s, cycles={sweep_cycles}")
+        count = 0
+        while True:
+            # 60 -> 120
+            a = sweep_start
+            while a <= sweep_end:
+                servo.angle = a
+                print(f" angle={a:.1f}")
+                time.sleep(sweep_delay)
+                a += sweep_step
+            # 120 -> 60
+            a = sweep_end
+            while a >= sweep_start:
+                servo.angle = a
+                print(f" angle={a:.1f}")
+                time.sleep(sweep_delay)
+                a -= sweep_step
+
+            count += 1
+            if count >= sweep_cycles:
+                break
+
+        # PWM停止
+        servo.value = None
+        print("[DEMO] PWM停止（保持解除）")
+        return 0
+    except KeyboardInterrupt:
+        print("[DEMO] 中断されました。")
+        return 1
+    finally:
+        servo.close()
 
 
 # ------------------------------------------------------------
@@ -310,11 +305,11 @@ def interactive_menu() -> None:
 # ------------------------------------------------------------
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        description="Raspberry Pi 4 サーボ制御（gpiozero/AngularServo）。角度は0〜180度で指定。サブコマンド省略時は対話メニューが起動します。",
+        description="Raspberry Pi 4 サーボ制御（gpiozero/AngularServo）。角度は0〜180度で指定。無引数時は非対話デモを自動実行。",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
         add_help=True,
     )
-    sub = p.add_subparsers(dest="cmd", required=False)  # ★ required=False に変更（デフォルト動作に対応）
+    sub = p.add_subparsers(dest="cmd", required=False)  # 無引数対応
 
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--channel", type=int, default=1, help="サーボチャンネル（1〜4）")
@@ -352,21 +347,14 @@ def build_parser() -> argparse.ArgumentParser:
 # ------------------------------------------------------------
 def main(argv: Optional[list[str]] = None) -> int:
     parser = build_parser()
-    # まずは生のargvを見て、サブコマンド有無を判定
-    raw_argv = sys.argv[1:] if argv is None else argv
-
-    # 引数を解釈
     args = parser.parse_args(argv)
 
     try:
         if args.cmd is None:
-            # ★ サブコマンド省略時：info の出力後に対話メニュー起動
-            print("（ヒント）set/center/off/sweep/info のサブコマンドも利用できます。")
-            cmd_info(argparse.Namespace())
-            interactive_menu()
-            return 0
+            # ★ サブコマンド省略時：非対話デモを自動実行
+            return autorun_demo()
         else:
-            # 従来通りサブコマンド実行
+            # サブコマンド実行
             args.func(args)
             return 0
     except Exception as e:
