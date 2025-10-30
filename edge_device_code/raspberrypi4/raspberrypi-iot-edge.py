@@ -23,6 +23,8 @@ import logging
 import os
 import random
 import re
+import shlex
+import subprocess
 import sys
 import time
 import uuid
@@ -98,6 +100,8 @@ DEVICE_ID_PATH = Path(
     )
 )
 
+DEVICE_TEST_DIR = Path(__file__).resolve().parent / "device_test"
+
 DISPLAY_NAME = os.getenv("IOT_AGENT_DISPLAY_NAME", "Raspberry Pi 4 Agent")
 LOCATION = os.getenv("IOT_AGENT_LOCATION", "Lab")
 
@@ -145,6 +149,105 @@ SUPPORTED_ACTIONS: Dict[str, Dict[str, Any]] = {
     "tell_joke": {
         "description": "Tell one joke chosen from a predefined list.",
         "params": [],
+    },
+    "run_motor_test": {
+        "description": "Execute the dual DC motor diagnostic script located at device_test/motor_test.py.",
+        "params": [
+            {
+                "name": "timeout",
+                "type": "number",
+                "required": False,
+                "description": "Optional timeout in seconds before the motor test is stopped.",
+            }
+        ],
+    },
+    "run_oled_robot_demo": {
+        "description": "Run the ST7735 robot face animation demo from device_test/oled_robot.py.",
+        "params": [
+            {
+                "name": "timeout",
+                "type": "number",
+                "required": False,
+                "description": "Optional timeout in seconds before stopping the animation demo.",
+            }
+        ],
+    },
+    "run_servo_demo": {
+        "description": "Execute the servo control demo/utility script from device_test/servo_tesr.py.",
+        "params": [
+            {
+                "name": "command",
+                "type": "string",
+                "required": False,
+                "description": "Raw command string to pass to the servo script (e.g. 'set --angle 90').",
+            },
+            {
+                "name": "mode",
+                "type": "string",
+                "required": False,
+                "description": "Named subcommand to run (set, center, off, sweep, info).",
+            },
+            {
+                "name": "angle",
+                "type": "number",
+                "required": False,
+                "description": "Angle in degrees used with the set subcommand (0-180).",
+            },
+            {
+                "name": "start",
+                "type": "number",
+                "required": False,
+                "description": "Start angle in degrees for sweep operations.",
+            },
+            {
+                "name": "end",
+                "type": "number",
+                "required": False,
+                "description": "End angle in degrees for sweep operations.",
+            },
+            {
+                "name": "step",
+                "type": "number",
+                "required": False,
+                "description": "Step size in degrees for sweep operations.",
+            },
+            {
+                "name": "delay",
+                "type": "number",
+                "required": False,
+                "description": "Delay in seconds between sweep steps.",
+            },
+            {
+                "name": "cycles",
+                "type": "integer",
+                "required": False,
+                "description": "Number of sweep cycles to execute (0 for infinite).",
+            },
+            {
+                "name": "channel",
+                "type": "integer",
+                "required": False,
+                "description": "Servo channel (1-4).",
+            },
+            {
+                "name": "pigpio",
+                "type": "boolean",
+                "required": False,
+                "description": "When true, add the --pigpio flag to use the PiGPIO factory.",
+            },
+            {
+                "name": "hold",
+                "type": "number",
+                "required": False,
+                "description": "Hold duration in seconds after executing the servo command.",
+            },
+            {
+                "name": "timeout",
+                "type": "number",
+                "required": False,
+                "description": "Optional timeout in seconds before stopping the servo script.",
+            },
+        ],
     },
     "no_action": {
         "description": "Used when the request should not trigger a device operation.",
@@ -639,6 +742,167 @@ def _get_weather(params: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+_DEFAULT_MOTOR_TEST_TIMEOUT = 30.0
+_DEFAULT_OLED_DEMO_TIMEOUT = 60.0
+_DEFAULT_SERVO_TIMEOUT = 90.0
+_PROCESS_TERMINATE_GRACE = 5.0
+
+
+def _parse_timeout_parameter(parameters: Any, default: float) -> float:
+    """Extract a positive timeout value from action parameters."""
+
+    if not isinstance(parameters, dict):
+        return default
+
+    raw_value = parameters.get("timeout")
+    if raw_value is None:
+        return default
+
+    if isinstance(raw_value, (int, float)):
+        timeout_value = float(raw_value)
+    elif isinstance(raw_value, str):
+        raw_value = raw_value.strip()
+        if not raw_value:
+            return default
+        try:
+            timeout_value = float(raw_value)
+        except ValueError as exc:  # pragma: no cover - defensive
+            raise ValueError("timeout must be a positive number of seconds.") from exc
+    else:
+        raise ValueError("timeout must be a positive number of seconds.")
+
+    if timeout_value <= 0:
+        raise ValueError("timeout must be greater than zero.")
+
+    return timeout_value
+
+
+def _run_device_test_script(
+    script_name: str,
+    *,
+    extra_args: Optional[List[str]] = None,
+    timeout: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Execute a helper script under device_test/ and collect its output."""
+
+    script_path = DEVICE_TEST_DIR / script_name
+    if not script_path.exists():
+        raise FileNotFoundError(f"Device test script not found: {script_path}")
+
+    cmd: List[str] = [sys.executable, str(script_path)]
+    if extra_args:
+        cmd.extend(str(arg) for arg in extra_args)
+
+    started = time.monotonic()
+    process = subprocess.Popen(
+        cmd,
+        cwd=str(DEVICE_TEST_DIR),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+
+    timed_out = False
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        process.terminate()
+        try:
+            stdout, stderr = process.communicate(timeout=_PROCESS_TERMINATE_GRACE)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            stdout, stderr = process.communicate(timeout=_PROCESS_TERMINATE_GRACE)
+
+    duration = time.monotonic() - started
+    result = {
+        "command": " ".join(shlex.quote(part) for part in cmd),
+        "returncode": process.returncode,
+        "stdout": stdout,
+        "stderr": stderr,
+        "duration_seconds": duration,
+    }
+    if timed_out:
+        result["timed_out"] = True
+
+    if process.returncode not in (0, None) and not timed_out:
+        raise RuntimeError(
+            f"{script_name} exited with status {process.returncode}.",
+        )
+
+    return result
+
+
+def _run_motor_test(parameters: Any) -> Dict[str, Any]:
+    timeout = _parse_timeout_parameter(parameters, _DEFAULT_MOTOR_TEST_TIMEOUT)
+    return _run_device_test_script("motor_test.py", timeout=timeout)
+
+
+def _run_oled_robot_demo(parameters: Any) -> Dict[str, Any]:
+    timeout = _parse_timeout_parameter(parameters, _DEFAULT_OLED_DEMO_TIMEOUT)
+    return _run_device_test_script("oled_robot.py", timeout=timeout)
+
+
+def _extract_servo_arguments(parameters: Any) -> Tuple[List[str], bool]:
+    """Convert structured parameters into CLI arguments for servo_tesr.py."""
+
+    if not isinstance(parameters, dict):
+        return [], False
+
+    command_value = parameters.get("command")
+    if isinstance(command_value, str) and command_value.strip():
+        args = shlex.split(command_value.strip())
+        return args, bool(args)
+
+    if isinstance(command_value, list) and command_value:
+        args = [str(item) for item in command_value]
+        return args, bool(args)
+
+    args: List[str] = []
+    mode_value = parameters.get("mode")
+    if isinstance(mode_value, str) and mode_value.strip():
+        args.append(mode_value.strip())
+
+    has_command = bool(args)
+
+    if has_command:
+        # Boolean flag support
+        if parameters.get("pigpio"):
+            args.append("--pigpio")
+
+        option_fields = {
+            "channel": "--channel",
+            "angle": "--angle",
+            "hold": "--hold",
+            "start": "--start",
+            "end": "--end",
+            "step": "--step",
+            "delay": "--delay",
+            "cycles": "--cycles",
+            "min_pw": "--min-pw",
+            "max_pw": "--max-pw",
+        }
+
+        for key, flag in option_fields.items():
+            if key in parameters and parameters[key] is not None:
+                args.append(flag)
+                args.append(str(parameters[key]))
+
+    return args, has_command
+
+
+def _run_servo_demo(parameters: Any) -> Dict[str, Any]:
+    args, has_command = _extract_servo_arguments(parameters)
+    timeout = _parse_timeout_parameter(parameters, _DEFAULT_SERVO_TIMEOUT)
+    return _run_device_test_script(
+        "servo_tesr.py",
+        extra_args=args if has_command else None,
+        timeout=timeout,
+    )
+
+
 def _execute_action(action: str, parameters: Dict[str, Any]) -> Tuple[bool, Any, Optional[str]]:
     # アクション名に応じてローカル処理を実行し、成功可否と結果を返す
     logging.info(
@@ -656,6 +920,12 @@ def _execute_action(action: str, parameters: Dict[str, Any]) -> Tuple[bool, Any,
             return True, _get_weather(parameters or {}), None
         if action == "tell_joke":
             return True, _tell_joke(), None
+        if action == "run_motor_test":
+            return True, _run_motor_test(parameters or {}), None
+        if action == "run_oled_robot_demo":
+            return True, _run_oled_robot_demo(parameters or {}), None
+        if action == "run_servo_demo":
+            return True, _run_servo_demo(parameters or {}), None
         if action == "no_action":
             message = parameters.get("message") if isinstance(parameters, dict) else None
             return True, {"message": message or "No action executed."}, None
@@ -876,6 +1146,149 @@ def _keyword_plan(instruction: str) -> Optional[Dict[str, Any]]:
     return plans[0] if plans else None
 
 
+def _extract_float(patterns: List[str], text: str) -> Optional[str]:
+    for pattern in patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            return match.group(1)
+    return None
+
+
+def _build_servo_parameters_from_instruction(
+    instruction: str, lowered: str
+) -> Dict[str, Any]:
+    """Translate common servo-related phrases into script parameters."""
+
+    params: Dict[str, Any] = {}
+    command_parts: List[str] = []
+
+    # Detect requested channel (1-4)
+    channel: Optional[int] = None
+    channel_patterns = [
+        r"\bch(?:annel)?\s*(\d+)",
+        r"(?:CH|ＣＨ)\s*(\d+)",
+        r"(\d+)\s*ch",
+        r"チャンネル\s*(\d+)",
+    ]
+    for pattern in channel_patterns:
+        match = re.search(pattern, instruction, re.IGNORECASE)
+        if match:
+            try:
+                candidate = int(match.group(1))
+            except ValueError:
+                continue
+            if 1 <= candidate <= 4:
+                channel = candidate
+                break
+
+    pigpio_requested = "pigpio" in lowered or "ピグピオ" in instruction
+
+    # Determine desired command
+    if any(keyword in lowered for keyword in ["center", "centre"]) or any(
+        kw in instruction for kw in ["センタ", "センター", "中央"]
+    ):
+        command_parts.append("center")
+    elif any(keyword in lowered for keyword in ["off", "detach"]) or any(
+        kw in instruction for kw in ["停止", "止め", "オフ"]
+    ):
+        command_parts.append("off")
+    elif any(keyword in lowered for keyword in ["info", "information"]) or "配線" in instruction:
+        command_parts.append("info")
+    else:
+        sweep_keywords = ["sweep", "scan", "swing"]
+        sweep_matches = any(keyword in lowered for keyword in sweep_keywords) or any(
+            kw in instruction for kw in ["スイープ", "往復", "揺", "振"]
+        )
+        if sweep_matches:
+            command_parts.append("sweep")
+            start_value = _extract_float(
+                [
+                    r"(?:from|start(?:ing)?(?:\s+at)?)\s*(\d+(?:\.\d+)?)",
+                    r"(\d+(?:\.\d+)?)\s*(?:度|degrees?)\s*(?:から|~|〜)",
+                ],
+                instruction,
+            )
+            end_value = _extract_float(
+                [
+                    r"(?:to|until|end(?:ing)?(?:\s+at)?)\s*(\d+(?:\.\d+)?)",
+                    r"(?:to|まで)\s*(\d+(?:\.\d+)?)",
+                ],
+                instruction,
+            )
+
+            numeric_candidates: List[str] = []
+            if start_value is None or end_value is None:
+                # Fallback: pick numbers from text excluding the channel id
+                raw_numbers = re.findall(r"\d+(?:\.\d+)?", instruction)
+                for raw in raw_numbers:
+                    try:
+                        value = float(raw)
+                    except ValueError:
+                        continue
+                    if channel is not None and abs(value - channel) < 1e-9:
+                        continue
+                    numeric_candidates.append(raw)
+
+            if start_value is None and numeric_candidates:
+                start_value = numeric_candidates.pop(0)
+            if end_value is None and numeric_candidates:
+                end_value = numeric_candidates.pop(0)
+
+            if start_value is not None:
+                command_parts.extend(["--start", start_value])
+            if end_value is not None:
+                command_parts.extend(["--end", end_value])
+
+            step_value = _extract_float([r"step(?: size)?\s*(\d+(?:\.\d+)?)", r"刻み\s*(\d+(?:\.\d+)?)"], instruction)
+            if step_value is None and numeric_candidates:
+                step_value = numeric_candidates.pop(0)
+            if step_value is not None:
+                command_parts.extend(["--step", step_value])
+
+            delay_value = _extract_float(
+                [
+                    r"delay\s*(\d+(?:\.\d+)?)",
+                    r"(\d+(?:\.\d+)?)\s*(?:sec|s|秒)(?:\s*delay)?",
+                ],
+                instruction,
+            )
+            if delay_value is not None:
+                command_parts.extend(["--delay", delay_value])
+
+            cycles_value = _extract_float(
+                [r"(\d+)\s*(?:cycles?|回|往復)"],
+                instruction,
+            )
+            if cycles_value is not None:
+                command_parts.extend(["--cycles", cycles_value])
+        else:
+            angle_value = _extract_float(
+                [
+                    r"(?:to|at|angle|set)\s*(\d+(?:\.\d+)?)\s*(?:degrees?|°)",
+                    r"(\d+(?:\.\d+)?)度",
+                ],
+                instruction,
+            )
+            if angle_value is not None:
+                command_parts.extend(["set", "--angle", angle_value])
+
+    hold_value = _extract_float(
+        [r"hold\s*(\d+(?:\.\d+)?)", r"(\d+(?:\.\d+)?)\s*秒保持"],
+        instruction,
+    )
+
+    if command_parts:
+        if channel is not None:
+            command_parts.extend(["--channel", str(channel)])
+        if pigpio_requested:
+            command_parts.append("--pigpio")
+        if hold_value is not None:
+            command_parts.extend(["--hold", hold_value])
+        params["command"] = " ".join(command_parts)
+
+    return params
+
+
 def _heuristic_multi_plan(instruction: str) -> List[Dict[str, Any]]:
     """Resolve an instruction into a deterministic sequence of actions."""
 
@@ -929,6 +1342,25 @@ def _heuristic_multi_plan(instruction: str) -> List[Dict[str, Any]]:
             if units:
                 params["units"] = units
             _add("get_weather", params)
+
+    motor_keywords = ["motor test", "motor demo", "l293d", "dc motor"]
+    if (
+        any(keyword in lowered for keyword in motor_keywords)
+        or ("モーター" in text and "サーボ" not in text)
+    ) and "servo" not in lowered:
+        _add("run_motor_test", {})
+
+    oled_keywords = ["oled", "st7735", "robot face", "lcd animation"]
+    if (
+        any(keyword in lowered for keyword in oled_keywords)
+        or ("ロボット" in text and "顔" in text)
+        or "液晶" in text
+    ):
+        _add("run_oled_robot_demo", {})
+
+    if "servo" in lowered or "サーボ" in text:
+        servo_params = _build_servo_parameters_from_instruction(instruction, lowered)
+        _add("run_servo_demo", servo_params)
 
     return plans
 
