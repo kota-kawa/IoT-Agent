@@ -18,13 +18,13 @@ tinyllama-1.1b-chat-v1.0.Q3_K_M 1min
 tinyllama-1.1b-chat-v1.0.Q4_K_M 1min
 """
 
+import argparse
 import json
 import logging
 import os
 import random
 import re
 import shlex
-import subprocess
 import sys
 import time
 import uuid
@@ -151,7 +151,7 @@ SUPPORTED_ACTIONS: Dict[str, Dict[str, Any]] = {
         "params": [],
     },
     "run_motor_test": {
-        "description": "Execute the dual DC motor diagnostic script located at device_test/motor_test.py.",
+        "description": "Execute the built-in dual DC motor diagnostic routine using the configured L293D wiring.",
         "params": [
             {
                 "name": "timeout",
@@ -162,7 +162,7 @@ SUPPORTED_ACTIONS: Dict[str, Dict[str, Any]] = {
         ],
     },
     "run_oled_robot_demo": {
-        "description": "Run the ST7735 robot face animation demo from device_test/oled_robot.py.",
+        "description": "Show the integrated ST7735 robot face animation demo on the connected display.",
         "params": [
             {
                 "name": "timeout",
@@ -173,7 +173,7 @@ SUPPORTED_ACTIONS: Dict[str, Dict[str, Any]] = {
         ],
     },
     "run_servo_demo": {
-        "description": "Execute the servo control demo/utility script from device_test/servo_tesr.py.",
+        "description": "Execute the integrated servo control utilities (demo, set, center, off, sweep, info).",
         "params": [
             {
                 "name": "command",
@@ -745,7 +745,6 @@ def _get_weather(params: Dict[str, Any]) -> Dict[str, Any]:
 _DEFAULT_MOTOR_TEST_TIMEOUT = 30.0
 _DEFAULT_OLED_DEMO_TIMEOUT = 60.0
 _DEFAULT_SERVO_TIMEOUT = 90.0
-_PROCESS_TERMINATE_GRACE = 5.0
 
 
 def _parse_timeout_parameter(parameters: Any, default: float) -> float:
@@ -777,72 +776,368 @@ def _parse_timeout_parameter(parameters: Any, default: float) -> float:
     return timeout_value
 
 
-def _run_device_test_script(
-    script_name: str,
-    *,
-    extra_args: Optional[List[str]] = None,
-    timeout: Optional[float] = None,
-) -> Dict[str, Any]:
-    """Execute a helper script under device_test/ and collect its output."""
+class _ActionExecutionContext:
+    """Helper for hardware demos that adds logging and timeout handling."""
 
-    script_path = DEVICE_TEST_DIR / script_name
-    if not script_path.exists():
-        raise FileNotFoundError(f"Device test script not found: {script_path}")
+    def __init__(self, timeout: float):
+        self.started = time.monotonic()
+        self.deadline = self.started + float(timeout) if timeout else None
+        self.timed_out = False
+        self.events: List[Dict[str, Any]] = []
 
-    cmd: List[str] = [sys.executable, str(script_path)]
-    if extra_args:
-        cmd.extend(str(arg) for arg in extra_args)
+    def elapsed(self) -> float:
+        return time.monotonic() - self.started
 
-    started = time.monotonic()
-    process = subprocess.Popen(
-        cmd,
-        cwd=str(DEVICE_TEST_DIR),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-    )
+    def remaining(self) -> Optional[float]:
+        if self.deadline is None:
+            return None
+        return max(0.0, self.deadline - time.monotonic())
 
-    timed_out = False
-    try:
-        stdout, stderr = process.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        timed_out = True
-        process.terminate()
-        try:
-            stdout, stderr = process.communicate(timeout=_PROCESS_TERMINATE_GRACE)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            stdout, stderr = process.communicate(timeout=_PROCESS_TERMINATE_GRACE)
+    def log(self, message: str, **extra: Any) -> None:
+        entry: Dict[str, Any] = {"time": round(self.elapsed(), 3), "message": message}
+        if extra:
+            entry.update(extra)
+        self.events.append(entry)
 
-    duration = time.monotonic() - started
-    result = {
-        "command": " ".join(shlex.quote(part) for part in cmd),
-        "returncode": process.returncode,
-        "stdout": stdout,
-        "stderr": stderr,
-        "duration_seconds": duration,
-    }
-    if timed_out:
-        result["timed_out"] = True
+    def sleep(self, seconds: float) -> bool:
+        """Sleep while respecting the configured timeout."""
 
-    if process.returncode not in (0, None) and not timed_out:
-        raise RuntimeError(
-            f"{script_name} exited with status {process.returncode}.",
-        )
+        if seconds <= 0:
+            return True
 
-    return result
+        if self.deadline is None:
+            time.sleep(seconds)
+            return True
+
+        remaining = self.deadline - time.monotonic()
+        if remaining <= 0:
+            self.timed_out = True
+            return False
+
+        actual_sleep = min(seconds, remaining)
+        time.sleep(actual_sleep)
+        if actual_sleep + 1e-9 < seconds:
+            self.timed_out = True
+            return False
+
+        return True
 
 
 def _run_motor_test(parameters: Any) -> Dict[str, Any]:
     timeout = _parse_timeout_parameter(parameters, _DEFAULT_MOTOR_TEST_TIMEOUT)
-    return _run_device_test_script("motor_test.py", timeout=timeout)
+    context = _ActionExecutionContext(timeout)
+
+    try:
+        from gpiozero import OutputDevice
+    except ImportError as exc:
+        raise RuntimeError(
+            "gpiozero is required to control the motors. Install it on the Raspberry Pi."
+        ) from exc
+
+    motor1 = {"EN": 25, "IN1": 24, "IN2": 23}
+    motor2 = {"EN": 17, "IN1": 27, "IN2": 22}
+
+    context.log("Initializing L293D motor outputs", motor1=motor1, motor2=motor2)
+
+    en1 = OutputDevice(motor1["EN"], active_high=True, initial_value=True)
+    en2 = OutputDevice(motor2["EN"], active_high=True, initial_value=True)
+    in1_1 = OutputDevice(motor1["IN1"])
+    in1_2 = OutputDevice(motor1["IN2"])
+    in2_1 = OutputDevice(motor2["IN1"])
+    in2_2 = OutputDevice(motor2["IN2"])
+
+    def forward() -> None:
+        in1_1.on()
+        in1_2.off()
+        in2_1.on()
+        in2_2.off()
+
+    def backward() -> None:
+        in1_1.off()
+        in1_2.on()
+        in2_1.off()
+        in2_2.on()
+
+    def coast() -> None:
+        en1.off()
+        en2.off()
+        context.log("Coasting motors (EN pins low)")
+        context.sleep(2.0)
+        en1.on()
+        en2.on()
+
+    try:
+        context.log("FORWARD for 5 seconds")
+        forward()
+        if not context.sleep(5.0):
+            context.log("Timeout reached while running forward motion")
+            return {
+                "events": context.events,
+                "timed_out": True,
+                "duration_seconds": context.elapsed(),
+                "motor_pins": {"motor1": motor1, "motor2": motor2},
+            }
+
+        context.log("COAST for 2 seconds")
+        coast()
+        if context.timed_out:
+            context.log("Timeout reached during coasting phase")
+            return {
+                "events": context.events,
+                "timed_out": True,
+                "duration_seconds": context.elapsed(),
+                "motor_pins": {"motor1": motor1, "motor2": motor2},
+            }
+
+        context.log("BACKWARD for 5 seconds")
+        backward()
+        if not context.sleep(5.0):
+            context.log("Timeout reached while running backward motion")
+            return {
+                "events": context.events,
+                "timed_out": True,
+                "duration_seconds": context.elapsed(),
+                "motor_pins": {"motor1": motor1, "motor2": motor2},
+            }
+
+        context.log("Motor diagnostic completed successfully")
+        return {
+            "events": context.events,
+            "timed_out": False,
+            "duration_seconds": context.elapsed(),
+            "motor_pins": {"motor1": motor1, "motor2": motor2},
+        }
+    finally:
+        en1.off()
+        en2.off()
+        in1_1.off()
+        in1_2.off()
+        in2_1.off()
+        in2_2.off()
 
 
 def _run_oled_robot_demo(parameters: Any) -> Dict[str, Any]:
     timeout = _parse_timeout_parameter(parameters, _DEFAULT_OLED_DEMO_TIMEOUT)
-    return _run_device_test_script("oled_robot.py", timeout=timeout)
+    context = _ActionExecutionContext(timeout)
+
+    try:
+        import math
+        import os
+        from gpiozero import PWMLED
+        from PIL import ImageDraw, ImageFont
+        from luma.core.interface.serial import spi
+        from luma.core.render import canvas
+        from luma.lcd.device import st7735
+    except ImportError as exc:
+        raise RuntimeError(
+            "The OLED demo requires gpiozero, Pillow, and luma.lcd to be installed on the Raspberry Pi."
+        ) from exc
+
+    SPI_PORT = 1
+    SPI_DEVICE = 0
+    PIN_DC = 26
+    PIN_RST = 6
+    PIN_BL = 13
+    BUS_HZ = 16_000_000
+
+    WIDTH, HEIGHT = 160, 128
+    ROTATE = 0
+    BGR = False
+    H_OFF, V_OFF = 0, 0
+
+    COL_BG = (12, 18, 26)
+    COL_PANEL = (20, 30, 42)
+    COL_FRAME = (220, 220, 230)
+    COL_EYE = (235, 235, 245)
+    COL_PUPIL = (30, 40, 55)
+    COL_MOUTH = (120, 200, 255)
+    COL_ACCENT = (80, 140, 255)
+    COL_TEXT = (230, 230, 240)
+
+    FPS = 50
+    BLINK_PERIOD = 3.2
+    BLINK_LEN = 0.14
+    EYE_H_SWEEP = 10
+    EYE_V_SWEEP = 2
+    EYE_OPEN_BASE = 1.0
+    MOUTH_OPEN_MAX = 14
+    BREATH_PERIOD = 5.0
+
+    def ensure_spidev() -> None:
+        path = f"/dev/spidev{SPI_PORT}.{SPI_DEVICE}"
+        if not os.path.exists(path):
+            raise FileNotFoundError(
+                f"{path} が見つかりません。/boot(または /boot/firmware)/config.txt に 'dtoverlay=spi1-1cs' を追記して再起動してください。"
+            )
+
+    def setup_backlight() -> PWMLED:
+        return PWMLED(PIN_BL, frequency=1000, active_high=True, initial_value=1.0)
+
+    def set_backlight_percent(bl: PWMLED, percent: float) -> None:
+        value = max(0.0, min(100.0, percent)) / 100.0
+        bl.value = value
+
+    def init_device() -> st7735:
+        serial_if = spi(
+            port=SPI_PORT,
+            device=SPI_DEVICE,
+            gpio_DC=PIN_DC,
+            gpio_RST=PIN_RST,
+            bus_speed_hz=BUS_HZ,
+        )
+        return st7735(
+            serial_interface=serial_if,
+            width=WIDTH,
+            height=HEIGHT,
+            rotate=ROTATE,
+            bgr=BGR,
+            h_offset=H_OFF,
+            v_offset=V_OFF,
+        )
+
+    def triangle_wave(t: float, period: float, lo: float, hi: float) -> float:
+        x = (t % period) / period
+        if x < 0.5:
+            y = x * 2.0
+        else:
+            y = 2.0 - x * 2.0
+        return lo + (hi - lo) * y
+
+    def blink_open_ratio(t: float) -> float:
+        phase = t % BLINK_PERIOD
+        if phase < BLINK_LEN:
+            return max(0.0, 1.0 - (phase / BLINK_LEN) * 1.5)
+        return 1.0
+
+    def draw_face(draw: ImageDraw.ImageDraw, t: float, W: int, H: int) -> None:
+        margin = 4
+        draw.rectangle((0, 0, W, H), fill=COL_BG)
+        draw.rectangle((margin, margin, W - margin, H - margin), outline=COL_FRAME, fill=COL_PANEL, width=2)
+
+        breath = int(math.sin(2 * math.pi * t / BREATH_PERIOD) * 1.5)
+
+        eye_w, eye_h = 42, 28
+        eye_spacing = 18
+        eye_y = 36 + breath
+        left_eye_x = W // 2 - eye_spacing // 2 - eye_w
+        right_eye_x = W // 2 + eye_spacing // 2
+
+        open_ratio = max(0.0, min(1.0, EYE_OPEN_BASE * blink_open_ratio(t)))
+
+        px_off = int(math.sin(t * 1.4) * EYE_H_SWEEP)
+        py_off = int(math.sin(t * 1.9) * EYE_V_SWEEP)
+
+        for ex in (left_eye_x, right_eye_x):
+            ebox = (ex, eye_y, ex + eye_w, eye_y + eye_h)
+            draw.ellipse(ebox, fill=COL_EYE, outline=COL_FRAME, width=2)
+
+            if open_ratio < 1.0:
+                close_amt = int((1.0 - open_ratio) * (eye_h // 2))
+                draw.rectangle((ex - 2, eye_y - 2, ex + eye_w + 2, eye_y + close_amt), fill=COL_PANEL)
+                draw.rectangle((ex - 2, eye_y + eye_h - close_amt, ex + eye_w + 2, eye_y + eye_h + 2), fill=COL_PANEL)
+
+            pr = 9
+            cx = ex + eye_w // 2 + px_off
+            cy = eye_y + eye_h // 2 + py_off
+            cx = max(ex + pr + 3, min(ex + eye_w - pr - 3, cx))
+            cy = max(eye_y + pr + 3, min(eye_y + eye_h - pr - 3, cy))
+            draw.ellipse((cx - pr, cy - pr, cx + pr, cy + pr), fill=COL_PUPIL)
+
+        mouth_w = 80
+        mouth_h_base = 6
+        mouth_x = (W - mouth_w) // 2
+        mouth_y = 88 + breath
+
+        mouth_open = int((math.sin(t * 2.2) * 0.5 + 0.5) * MOUTH_OPEN_MAX)
+        if int(t) % 11 in (0, 1):
+            mouth_open = max(mouth_open, MOUTH_OPEN_MAX - 2)
+
+        draw.rectangle(
+            (mouth_x - 2, mouth_y - 10, mouth_x + mouth_w + 2, mouth_y + 18),
+            outline=COL_FRAME,
+            width=1,
+        )
+        top = mouth_y - mouth_open // 2
+        bottom = mouth_y + mouth_open // 2 + mouth_h_base
+        draw.rectangle((mouth_x, top, mouth_x + mouth_w, bottom), fill=COL_MOUTH)
+
+        meter_h = 64
+        meter_w = 6
+        meter_y = 28 + breath
+        lv = int(triangle_wave(t, 1.6, 8, meter_h - 8))
+        draw.rectangle((margin + 2, meter_y, margin + 2 + meter_w, meter_y + meter_h), outline=COL_FRAME, width=1)
+        draw.rectangle((margin + 3, meter_y + meter_h - lv, margin + 1 + meter_w, meter_y + meter_h - 1), fill=COL_ACCENT)
+
+        rv = int(triangle_wave(t + 0.7, 1.9, 8, meter_h - 8))
+        draw.rectangle((W - margin - 2 - meter_w, meter_y, W - margin - 2, meter_y + meter_h), outline=COL_FRAME, width=1)
+        draw.rectangle(
+            (W - margin - 1 - meter_w, meter_y + meter_h - rv, W - margin - 3, meter_y + meter_h - 1),
+            fill=COL_ACCENT,
+        )
+
+        draw.text((6, 4), "Robot Face", fill=COL_TEXT, font=ImageFont.load_default())
+
+    ensure_spidev()
+    context.log("SPI device is available", device=f"/dev/spidev{SPI_PORT}.{SPI_DEVICE}")
+
+    backlight: Optional[PWMLED] = None
+    frames = 0
+
+    try:
+        backlight = setup_backlight()
+        context.log("Backlight PWM initialized", pin=PIN_BL)
+        device = init_device()
+        context.log("ST7735 display initialized", resolution=f"{WIDTH}x{HEIGHT}")
+
+        t0 = time.time()
+        frame_delay = 1.0 / FPS
+
+        for duty in (20, 40, 60, 80, 100):
+            if backlight is not None:
+                set_backlight_percent(backlight, duty)
+            with canvas(device) as draw:
+                draw.rectangle((0, 0, device.width, device.height), fill=COL_BG)
+                draw.text((10, device.height // 2 - 6), "Starting robot face...", fill=COL_TEXT)
+            context.log("Backlight fade-in step", percent=duty)
+            if not context.sleep(0.05):
+                break
+
+        while not context.timed_out:
+            remaining = context.remaining()
+            if remaining is not None and remaining <= 0:
+                context.timed_out = True
+                break
+
+            t = time.time() - t0
+            with canvas(device) as draw:
+                draw_face(draw, t, device.width, device.height)
+            frames += 1
+
+            if not context.sleep(frame_delay):
+                break
+
+        if context.timed_out:
+            context.log("OLED demo stopped because the timeout was reached")
+        else:
+            context.log("OLED demo completed", frames=frames)
+
+        return {
+            "events": context.events,
+            "timed_out": context.timed_out,
+            "duration_seconds": context.elapsed(),
+            "frames_rendered": frames,
+            "target_fps": FPS,
+        }
+    finally:
+        try:
+            if backlight is not None:
+                try:
+                    backlight.value = 0.0
+                except Exception:
+                    pass
+                backlight.close()
+        except Exception:
+            logging.exception("Failed to clean up OLED backlight PWM")
 
 
 def _extract_servo_arguments(parameters: Any) -> Tuple[List[str], bool]:
@@ -893,14 +1188,340 @@ def _extract_servo_arguments(parameters: Any) -> Tuple[List[str], bool]:
     return args, has_command
 
 
+_SERVO_USED_BCM: Set[int] = {17, 22, 23, 24, 25, 27, 20, 21, 18, 26, 6, 13}
+
+_SERVO_DEFAULT_CHANNEL_PINS: Dict[int, int] = {
+    1: 12,
+    2: 19,
+    3: 5,
+    4: 4,
+}
+
+
+def _servo_validate_default_pins() -> None:
+    for channel, pin in _SERVO_DEFAULT_CHANNEL_PINS.items():
+        if pin in _SERVO_USED_BCM:
+            raise RuntimeError(
+                f"デフォルト割当のCH{channel} -> GPIO{pin} が '使用済み' リストと衝突しています。別の空きGPIOに変更してください。"
+            )
+
+
+def _servo_resolve_pin(channel: int) -> int:
+    bcm = _SERVO_DEFAULT_CHANNEL_PINS.get(channel)
+    if bcm is None:
+        raise ValueError(f"不正なチャンネル番号: {channel}")
+    return bcm
+
+
+def _servo_create_servo(
+    *,
+    bcm_pin: int,
+    use_pigpio: bool,
+    min_pulse_width: float,
+    max_pulse_width: float,
+) -> "AngularServo":
+    try:
+        from gpiozero import AngularServo, Device
+    except ImportError as exc:
+        raise RuntimeError(
+            "gpiozero is required for servo control. Install it on the Raspberry Pi."
+        ) from exc
+
+    if bcm_pin in _SERVO_USED_BCM:
+        raise ValueError(
+            f"指定されたGPIO{bcm_pin}は '使用済み' リストに含まれています。別のGPIOを指定してください。"
+        )
+
+    if use_pigpio:
+        try:
+            from gpiozero.pins.pigpio import PiGPIOFactory
+        except Exception as exc:
+            raise RuntimeError(
+                "pigpio のピンファクトリが利用できません。'python3 -m pip install pigpio' および 'sudo apt-get install pigpio' 後、'sudo systemctl start pigpiod' を実行してください。"
+            ) from exc
+        Device.pin_factory = PiGPIOFactory()
+
+    return AngularServo(
+        bcm_pin,
+        min_angle=0.0,
+        max_angle=180.0,
+        min_pulse_width=min_pulse_width,
+        max_pulse_width=max_pulse_width,
+        frame_width=0.02,
+    )
+
+
+def _servo_log_wiring(context: _ActionExecutionContext) -> None:
+    context.log("=== サーボ配線（色とGPIO/物理ピン） ===")
+    context.log(" ⚫ GND（黒/茶） : Raspberry Pi の GND（物理 6/9/14/20/25/30/34/39）")
+    context.log(" 🔴 +5V（赤）   : 外部5V推奨（Piの 2/4 でも小型1個なら動作例あり）")
+    context.log(
+        " 🟠 信号（橙/黄/白）: CH1->GPIO12(物理32), CH2->GPIO19(物理35), CH3->GPIO5(物理29), CH4->GPIO4(物理7)"
+    )
+    context.log(" ※ 使用済GPIO: 17, 22, 23, 24, 25, 27, 20, 21, 18, 26, 6, 13 は回避済み。")
+
+
+def _servo_cmd_set(args: argparse.Namespace, context: _ActionExecutionContext) -> None:
+    bcm = _servo_resolve_pin(args.channel)
+    servo = _servo_create_servo(
+        bcm_pin=bcm,
+        use_pigpio=args.pigpio,
+        min_pulse_width=args.min_pw,
+        max_pulse_width=args.max_pw,
+    )
+    try:
+        angle = float(args.angle)
+        if not (0.0 <= angle <= 180.0):
+            raise ValueError("角度は0〜180の範囲で指定してください。")
+        servo.angle = angle
+        context.log("[SET] サーボ角度を設定", channel=args.channel, gpio=bcm, angle=round(angle, 1))
+        if args.hold > 0 and not context.sleep(args.hold):
+            context.log("タイムアウトのため保持を終了")
+    finally:
+        servo.close()
+
+
+def _servo_cmd_center(args: argparse.Namespace, context: _ActionExecutionContext) -> None:
+    bcm = _servo_resolve_pin(args.channel)
+    servo = _servo_create_servo(
+        bcm_pin=bcm,
+        use_pigpio=args.pigpio,
+        min_pulse_width=args.min_pw,
+        max_pulse_width=args.max_pw,
+    )
+    try:
+        servo.angle = 90.0
+        context.log("[CENTER] サーボをセンターへ移動", channel=args.channel, gpio=bcm)
+        if args.hold > 0 and not context.sleep(args.hold):
+            context.log("タイムアウトのため保持を終了")
+    finally:
+        servo.close()
+
+
+def _servo_cmd_off(args: argparse.Namespace, context: _ActionExecutionContext) -> None:
+    bcm = _servo_resolve_pin(args.channel)
+    servo = _servo_create_servo(
+        bcm_pin=bcm,
+        use_pigpio=args.pigpio,
+        min_pulse_width=args.min_pw,
+        max_pulse_width=args.max_pw,
+    )
+    try:
+        servo.value = None
+        context.log("[OFF] PWM停止（デタッチ）", channel=args.channel, gpio=bcm)
+        if args.hold > 0 and not context.sleep(args.hold):
+            context.log("タイムアウトのため保持を終了")
+    finally:
+        servo.close()
+
+
+def _servo_cmd_sweep(args: argparse.Namespace, context: _ActionExecutionContext) -> None:
+    start = float(args.start)
+    end = float(args.end)
+    step = float(args.step)
+    delay = float(args.delay)
+
+    if step <= 0:
+        raise ValueError("step は正の値にしてください。")
+    if not (0.0 <= start <= 180.0 and 0.0 <= end <= 180.0):
+        raise ValueError("start / end は 0〜180 の範囲で指定してください。")
+
+    bcm = _servo_resolve_pin(args.channel)
+    servo = _servo_create_servo(
+        bcm_pin=bcm,
+        use_pigpio=args.pigpio,
+        min_pulse_width=args.min_pw,
+        max_pulse_width=args.max_pw,
+    )
+    try:
+        cycles = int(args.cycles)
+        context.log(
+            "[SWEEP] サーボスイープを開始",
+            channel=args.channel,
+            gpio=bcm,
+            start=start,
+            end=end,
+            step=step,
+            delay=delay,
+            cycles=cycles,
+        )
+        count = 0
+        while True:
+            a = start
+            while a <= end + 1e-6:
+                servo.angle = a
+                context.log(" angle更新", angle=round(a, 1))
+                if not context.sleep(delay):
+                    context.log("タイムアウトのためスイープを終了")
+                    return
+                a += step
+
+            a = end
+            while a >= start - 1e-6:
+                servo.angle = a
+                context.log(" angle更新", angle=round(a, 1))
+                if not context.sleep(delay):
+                    context.log("タイムアウトのためスイープを終了")
+                    return
+                a -= step
+
+            if cycles > 0:
+                count += 1
+                if count >= cycles:
+                    break
+    finally:
+        servo.close()
+
+
+def _servo_cmd_info(_: argparse.Namespace, context: _ActionExecutionContext) -> None:
+    _servo_log_wiring(context)
+
+
+def _servo_autorun_demo(context: _ActionExecutionContext) -> None:
+    _servo_log_wiring(context)
+
+    channel = 1
+    bcm = _SERVO_DEFAULT_CHANNEL_PINS[channel]
+    use_pigpio = False
+    min_pw = 0.0005
+    max_pw = 0.0025
+    center_angle = 90.0
+    sweep_start = 60.0
+    sweep_end = 120.0
+    sweep_step = 2.0
+    sweep_delay = 0.02
+    sweep_cycles = 2
+
+    servo = _servo_create_servo(
+        bcm_pin=bcm,
+        use_pigpio=use_pigpio,
+        min_pulse_width=min_pw,
+        max_pulse_width=max_pw,
+    )
+    try:
+        servo.angle = center_angle
+        context.log(
+            "[DEMO] サーボをセンターへ移動",
+            channel=channel,
+            gpio=bcm,
+            angle=center_angle,
+        )
+        if not context.sleep(0.5):
+            context.log("タイムアウトのためデモを終了")
+            return
+
+        context.log(
+            "[DEMO] スイープ開始",
+            start=sweep_start,
+            end=sweep_end,
+            step=sweep_step,
+            delay=sweep_delay,
+            cycles=sweep_cycles,
+        )
+        count = 0
+        while True:
+            a = sweep_start
+            while a <= sweep_end + 1e-6:
+                servo.angle = a
+                context.log(" angle更新", angle=round(a, 1))
+                if not context.sleep(sweep_delay):
+                    context.log("タイムアウトのためデモを終了")
+                    return
+                a += sweep_step
+
+            a = sweep_end
+            while a >= sweep_start - 1e-6:
+                servo.angle = a
+                context.log(" angle更新", angle=round(a, 1))
+                if not context.sleep(sweep_delay):
+                    context.log("タイムアウトのためデモを終了")
+                    return
+                a -= sweep_step
+
+            count += 1
+            if count >= sweep_cycles:
+                break
+
+        servo.value = None
+        context.log("[DEMO] PWM停止（保持解除）")
+    finally:
+        servo.close()
+
+
+def _servo_build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Raspberry Pi 4 サーボ制御（gpiozero/AngularServo）。角度は0〜180度で指定。無引数時は非対話デモを自動実行。",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        add_help=False,
+        exit_on_error=False,
+    )
+
+    sub = parser.add_subparsers(dest="cmd", required=False)
+
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--channel", type=int, default=1)
+    common.add_argument("--pigpio", action="store_true")
+    common.add_argument("--min-pw", dest="min_pw", type=float, default=0.0005)
+    common.add_argument("--max-pw", dest="max_pw", type=float, default=0.0025)
+    common.add_argument("--hold", type=float, default=0.0)
+
+    sp_set = sub.add_parser("set", parents=[common], add_help=False)
+    sp_set.add_argument("--angle", type=float, required=True)
+    sp_set.set_defaults(_handler=_servo_cmd_set)
+
+    sp_center = sub.add_parser("center", parents=[common], add_help=False)
+    sp_center.set_defaults(_handler=_servo_cmd_center)
+
+    sp_off = sub.add_parser("off", parents=[common], add_help=False)
+    sp_off.set_defaults(_handler=_servo_cmd_off)
+
+    sp_sweep = sub.add_parser("sweep", parents=[common], add_help=False)
+    sp_sweep.add_argument("--start", type=float, default=0.0)
+    sp_sweep.add_argument("--end", type=float, default=180.0)
+    sp_sweep.add_argument("--step", type=float, default=1.0)
+    sp_sweep.add_argument("--delay", type=float, default=0.01)
+    sp_sweep.add_argument("--cycles", type=int, default=1)
+    sp_sweep.set_defaults(_handler=_servo_cmd_sweep)
+
+    sp_info = sub.add_parser("info", add_help=False)
+    sp_info.set_defaults(_handler=_servo_cmd_info)
+
+    return parser
+
+
 def _run_servo_demo(parameters: Any) -> Dict[str, Any]:
     args, has_command = _extract_servo_arguments(parameters)
     timeout = _parse_timeout_parameter(parameters, _DEFAULT_SERVO_TIMEOUT)
-    return _run_device_test_script(
-        "servo_tesr.py",
-        extra_args=args if has_command else None,
-        timeout=timeout,
-    )
+    context = _ActionExecutionContext(timeout)
+
+    _servo_validate_default_pins()
+    parser = _servo_build_parser()
+
+    argv = args if has_command else []
+    try:
+        parsed = parser.parse_args(argv)
+    except Exception as exc:
+        raise ValueError(f"Invalid servo command arguments: {exc}") from exc
+
+    handler = getattr(parsed, "_handler", None)
+
+    try:
+        if handler is None:
+            _servo_autorun_demo(context)
+        else:
+            handler(parsed, context)
+    finally:
+        if context.timed_out:
+            context.log("Servo操作は指定されたタイムアウトで終了しました。")
+
+    command_name = parsed.cmd if getattr(parsed, "cmd", None) else "demo"
+    return {
+        "events": context.events,
+        "timed_out": context.timed_out,
+        "duration_seconds": context.elapsed(),
+        "command": command_name,
+        "arguments": argv,
+    }
 
 
 def _execute_action(action: str, parameters: Dict[str, Any]) -> Tuple[bool, Any, Optional[str]]:
