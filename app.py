@@ -622,6 +622,138 @@ def _call_llm_and_parse(client: OpenAI, messages: List[Dict[str, str]]) -> Dict[
     }
 
 
+def _normalise_conversation_messages(raw_messages: Any) -> List[Dict[str, str]]:
+    # 外部エージェントから渡される会話履歴を内部フォーマットへ整形
+
+    if not isinstance(raw_messages, list):
+        return []
+
+    normalised: List[Dict[str, str]] = []
+
+    for entry in raw_messages:
+        if not isinstance(entry, dict):
+            continue
+        content = entry.get("content")
+        if not isinstance(content, str):
+            continue
+
+        raw_role = entry.get("role")
+        role = "system"
+        if isinstance(raw_role, str):
+            lowered = raw_role.strip().lower()
+            if lowered in {"system", "user", "assistant"}:
+                role = lowered
+            elif lowered in {"agent", "assistant_agent", "assistant_ai"}:
+                role = "assistant"
+            elif lowered in {"client", "customer", "human"}:
+                role = "user"
+            else:
+                role = "system"
+
+        normalised.append({"role": role, "content": content})
+
+    return normalised
+
+
+def _structured_conversation_review_prompt(messages: List[Dict[str, str]]) -> Dict[str, Any]:
+    # 会話履歴を監査し、IoT 操作が必要か判定するプロンプトを構築
+
+    device_context = _build_device_context()
+    system_prompt = (
+        "You are an operations analyst that reviews past multi-agent conversations "
+        "to decide whether IoT remediation is required. Always respond with a strict "
+        "JSON object containing: "
+        "'action_required' (boolean), "
+        "'reason' (string explaining your decision), "
+        "'device_commands' (null or array of command objects with 'device_id', 'name', 'args'), "
+        "and optionally 'notes'. "
+        "Only mark 'action_required' true when a concrete IoT command should run. "
+        "If no action is needed, still provide a concise reason."
+    )
+
+    context_message = (
+        "Available device information:\n" + device_context
+        if device_context
+        else "No devices are currently registered."
+    )
+
+    conversation_dump_lines: List[str] = []
+    for entry in messages:
+        role = entry.get("role", "")
+        content = entry.get("content")
+        if not isinstance(content, str):
+            continue
+        conversation_dump_lines.append(f"{role}: {content.strip()}")
+
+    conversation_dump = "\n".join(conversation_dump_lines) or "Conversation log was empty."
+
+    return {
+        "model": "gpt-4.1-2025-04-14",
+        "input": [
+            {"role": "system", "content": system_prompt},
+            {"role": "system", "content": context_message},
+            {
+                "role": "user",
+                "content": (
+                    "Review the following conversation transcript. "
+                    "Decide whether any IoT intervention is required."
+                    "\n\n"
+                    f"{conversation_dump}"
+                ),
+            },
+        ],
+    }
+
+
+def _call_llm_for_conversation_review(
+    client: OpenAI, messages: List[Dict[str, str]]
+) -> Dict[str, Any]:
+    # 監査用 LLM を呼び出し、action_required と device_commands を抽出
+
+    response = client.responses.create(**_structured_conversation_review_prompt(messages))
+    reply_text = getattr(response, "output_text", None) or ""
+
+    parsed_obj, cleaned_text = _extract_json_object(reply_text)
+
+    result: Dict[str, Any] = {
+        "action_required": False,
+        "reason": "",
+        "device_commands": [],
+        "notes": None,
+        "raw": reply_text,
+    }
+
+    if isinstance(parsed_obj, dict):
+        action_required = parsed_obj.get("action_required")
+        reason = parsed_obj.get("reason")
+        device_commands_field = parsed_obj.get("device_commands")
+        notes = parsed_obj.get("notes")
+
+        if isinstance(action_required, bool):
+            result["action_required"] = action_required
+
+        if isinstance(reason, str) and reason.strip():
+            result["reason"] = reason.strip()
+
+        commands: List[Dict[str, Any]] = []
+        if isinstance(device_commands_field, dict):
+            commands = [device_commands_field]
+        elif isinstance(device_commands_field, list):
+            commands = [cmd for cmd in device_commands_field if isinstance(cmd, dict)]
+
+        result["device_commands"] = commands
+
+        if isinstance(notes, str) and notes.strip():
+            result["notes"] = notes.strip()
+
+        if not result["reason"]:
+            result["reason"] = cleaned_text or reply_text.strip()
+    else:
+        result["reason"] = cleaned_text or reply_text.strip()
+
+    return result
+
+
 def _call_llm_text(client: OpenAI, payload: Dict[str, Any]) -> str:
     # 指定ペイロードで LLM を呼び出し、クリーンなテキストを返す
 
@@ -1347,6 +1479,68 @@ def chat():
         payload, status = _chat_via_legacy(formatted_messages)
 
     return jsonify(payload), status
+
+
+@app.post("/api/conversations/review")
+def review_conversation():
+    # 他エージェントから渡された会話ログを評価し、必要なら IoT 操作を実行
+
+    payload = request.get_json(silent=True) or {}
+    raw_history = payload.get("history")
+    if raw_history is None:
+        raw_history = payload.get("messages")
+
+    if raw_history is None:
+        return jsonify({"error": "history is required"}), 400
+    if not isinstance(raw_history, list):
+        return jsonify({"error": "history must be a list"}), 400
+
+    messages = _normalise_conversation_messages(raw_history)
+
+    try:
+        client = _client()
+        analysis = _call_llm_for_conversation_review(client, messages)
+    except RuntimeError as exc:
+        return jsonify({"error": str(exc)}), 500
+    except Exception as exc:  # pragma: no cover - network/SDK errors
+        return jsonify({"error": str(exc)}), 500
+
+    validation_target: Any = analysis.get("device_commands")
+    validated_commands, validation_errors = _validate_device_command_sequence(validation_target)
+    action_required = bool(analysis.get("action_required"))
+
+    response_payload: Dict[str, Any] = {
+        "analysis": {
+            "action_required": action_required,
+            "reason": analysis.get("reason", ""),
+            "notes": analysis.get("notes"),
+            "raw": analysis.get("raw"),
+            "suggested_device_commands": validation_target if isinstance(validation_target, list) else [],
+        },
+        "action_taken": False,
+    }
+
+    if validation_errors:
+        response_payload["analysis"]["validation_errors"] = validation_errors
+        return jsonify(response_payload), 200
+
+    if action_required and not validated_commands:
+        response_payload["analysis"]["validation_errors"] = [
+            "LLM indicated action_required but did not provide executable commands."
+        ]
+        return jsonify(response_payload), 200
+
+    if action_required and validated_commands:
+        initial_reply = analysis.get("reason", "")
+        final_reply, status = _execute_device_command_sequence(
+            client, messages, initial_reply, validated_commands
+        )
+        response_payload["action_taken"] = True
+        response_payload["analysis"]["executed_commands"] = validated_commands
+        response_payload["execution_reply"] = final_reply
+        return jsonify(response_payload), status
+
+    return jsonify(response_payload), 200
 
 
 @app.post("/api/devices/register")
