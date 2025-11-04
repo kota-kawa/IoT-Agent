@@ -7,7 +7,11 @@
 """
 
 import json
+import os
 import sys
+
+# テスト用の環境変数設定
+os.environ.setdefault('OPENAI_API_KEY', 'dummy-key-for-testing')
 
 
 def test_agent_selection():
@@ -15,10 +19,6 @@ def test_agent_selection():
     print("=" * 60)
     print("エージェント自動選択機能のテスト")
     print("=" * 60)
-    
-    # app モジュールをインポート（環境変数が必要）
-    import os
-    os.environ.setdefault('OPENAI_API_KEY', 'dummy-key-for-testing')
     
     from app import _select_optimal_agent_for_task
     
@@ -46,9 +46,6 @@ def test_agent_descriptions():
     print("=" * 60)
     print("エージェント説明の表示")
     print("=" * 60)
-    
-    import os
-    os.environ.setdefault('OPENAI_API_KEY', 'dummy-key-for-testing')
     
     from app import (
         FAQ_AGENT_DESCRIPTION,
@@ -78,9 +75,6 @@ def test_endpoint_availability():
     print("\n" + "=" * 60)
     print("API エンドポイントの存在確認")
     print("=" * 60)
-    
-    import os
-    os.environ.setdefault('OPENAI_API_KEY', 'dummy-key-for-testing')
     
     from app import app
     

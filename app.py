@@ -278,7 +278,7 @@ def _call_faq_agent(question: str, *, persist_history: bool = False) -> Optional
     if not bases:
         return None
     
-    endpoint = FAQ_AGENT_ENDPOINTS["agent_rag_answer"] if not persist_history else FAQ_AGENT_ENDPOINTS["rag_answer"]
+    endpoint = FAQ_AGENT_ENDPOINTS["rag_answer"] if persist_history else FAQ_AGENT_ENDPOINTS["agent_rag_answer"]
     payload = {"question": question}
     
     for base in bases:
@@ -289,7 +289,7 @@ def _call_faq_agent(question: str, *, persist_history: bool = False) -> Optional
                 data = response.json()
                 if isinstance(data, dict):
                     return data
-        except Exception:
+        except (requests.RequestException, requests.Timeout):
             continue
     
     return None
@@ -320,7 +320,7 @@ def _call_browser_agent(prompt: str) -> Optional[Dict[str, Any]]:
                 data = response.json()
                 if isinstance(data, dict):
                     return data
-        except Exception:
+        except (requests.RequestException, requests.Timeout):
             continue
     
     return None
