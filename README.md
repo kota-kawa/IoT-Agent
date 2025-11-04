@@ -8,6 +8,11 @@ OpenAI API を利用したチャット型オーケストレーションでデバ
 セッション認証済みユーザーは、ブラウザ上のチャットから自然言語で指示を与え、
 登録済みデバイスの機能を呼び出せます。
 
+### マルチエージェント連携機能
+IoT Agent は他の専門エージェント（FAQ エージェント、Browser エージェント）と連携し、
+タスク実行中に必要な知識や機能を外部エージェントから取得できます。
+詳細は [MULTI_AGENT_INTEGRATION.md](MULTI_AGENT_INTEGRATION.md) を参照してください。
+
 ## リポジトリ構成
 - `app.py` — Flask アプリ本体。認証、チャット、ジョブ管理、デバイス登録 API を実装。
 - `index.html` / `app.js` / `styles.css` — ダッシュボード UI。チャットサイドバーとデバイスカードを描画。
@@ -16,6 +21,7 @@ OpenAI API を利用したチャット型オーケストレーションでデバ
 - `Dockerfile` — 本番運用向け Gunicorn コンテナイメージのビルド手順。
 - `docker-compose.yml` — 開発中にホットリロードで Flask サーバーを起動する docker-compose サービス。
 - `requirements.txt` — サーバーが必要とする Python パッケージ。
+- `MULTI_AGENT_INTEGRATION.md` — マルチエージェント連携機能のドキュメント。
 
 ## 実行前の準備
 1. **Python**: バックエンドは Python 3.11 で検証されています。
@@ -28,6 +34,8 @@ OpenAI API を利用したチャット型オーケストレーションでデバ
    - `FLASK_SECRET_KEY` — Flask セッション暗号化キー (未設定時は "change-this-secret")。
    - `MAX_COMPLETED_JOBS` — 完了ジョブの保持数 (デフォルト 200)。
    - `DEVICE_RESULT_TIMEOUT` — エッジ結果待機の秒数 (デフォルト 120 秒)。
+   - `FAQ_AGENT_API_BASE` — FAQ エージェント接続先 (オプション)。
+   - `BROWSER_AGENT_API_BASE` — Browser エージェント接続先 (オプション)。
    - `APP_PASSWORD` はコード上で `kkawagoe` に固定されています。運用時は `app.py` の定数を変更してください。
 
 ## 起動方法
@@ -71,6 +79,8 @@ docker run --rm -p 5006:5006 --env-file .env iot-agent
 | POST | `/api/devices/<device_id>/jobs/result` | エッジ側が実行結果をアップロード。
 | GET | `/api/jobs/<job_id>` | 任意ジョブの状態確認。
 | DELETE | `/api/jobs/<job_id>` | キュー上に残るジョブのキャンセル。
+| POST | `/api/agents/respond` | 外部エージェントからの問い合わせに応答。
+| POST | `/api/agents/request-help` | 他エージェントに助けを求める（マルチエージェント連携）。
 | GET | `/api/ping` | 動作確認用の簡易ヘルスチェック。
 
 ## ジョブとデータ管理

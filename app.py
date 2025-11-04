@@ -2443,5 +2443,96 @@ def post_result(device_id: str):
     return jsonify(response_payload)
 
 
+@app.post("/api/agents/request-help")
+def request_help_from_agents():
+    """
+    他のエージェントに助けを求めるエンドポイント
+    タスク実行中に他のエージェントの支援が必要な場合に使用
+    
+    リクエスト形式:
+    {
+        "task": "タスクの説明",
+        "agent": "faq" | "browser" | "auto",  # optional, "auto"で自動選択
+        "context": "追加のコンテキスト情報"  # optional
+    }
+    
+    レスポンス形式:
+    {
+        "agent_used": "faq" | "browser",
+        "response": "エージェントからの応答",
+        "success": true | false,
+        "error": "エラーメッセージ"  # エラー時のみ
+    }
+    """
+    payload = request.get_json(silent=True) or {}
+    
+    task = payload.get("task")
+    if not isinstance(task, str) or not task.strip():
+        return jsonify({"error": "task is required"}), 400
+    
+    task = task.strip()
+    requested_agent = payload.get("agent", "auto")
+    context = payload.get("context", "")
+    
+    # エージェントの自動選択
+    if requested_agent == "auto":
+        selected_agent = _select_optimal_agent_for_task(task)
+        if not selected_agent or selected_agent == "iot":
+            return jsonify({
+                "error": "No suitable external agent found for this task",
+                "suggestion": "This task should be handled by IoT agent itself"
+            }), 400
+    else:
+        selected_agent = requested_agent
+    
+    # FAQ エージェントへのリクエスト
+    if selected_agent == "faq":
+        question = task
+        if context:
+            question = f"{context}\n\n{task}"
+        
+        result = _call_faq_agent(question, persist_history=False)
+        if result:
+            return jsonify({
+                "agent_used": "faq",
+                "response": result.get("answer", ""),
+                "sources": result.get("sources", []),
+                "success": True
+            })
+        else:
+            return jsonify({
+                "agent_used": "faq",
+                "success": False,
+                "error": "FAQ agent connection failed"
+            }), 502
+    
+    # Browser エージェントへのリクエスト
+    elif selected_agent == "browser":
+        prompt = task
+        if context:
+            prompt = f"Context: {context}\n\nTask: {task}"
+        
+        result = _call_browser_agent(prompt)
+        if result:
+            return jsonify({
+                "agent_used": "browser",
+                "response": result.get("response", ""),
+                "success": True,
+                "details": result
+            })
+        else:
+            return jsonify({
+                "agent_used": "browser",
+                "success": False,
+                "error": "Browser agent connection failed"
+            }), 502
+    
+    else:
+        return jsonify({
+            "error": f"Unknown agent: {selected_agent}",
+            "available_agents": ["faq", "browser", "auto"]
+        }), 400
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5006)

@@ -16,3 +16,8 @@
 
 # 仮想環境ディレクトリを無視
 venv/
+
+# Python キャッシュを無視
+__pycache__/
+*.pyc
+*.pyo
