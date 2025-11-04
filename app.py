@@ -12,6 +12,7 @@ from typing import Any, Deque, Dict, List, Optional, Tuple
 # 外部依存：環境変数の読み込み、Web アプリ基盤、OpenAI クライアント
 from dotenv import load_dotenv as loadenv
 from flask import Flask, jsonify, redirect, request, session, url_for
+import requests
 from openai import OpenAI
 
 
@@ -30,6 +31,108 @@ APP_PASSWORD = "kkawagoe"
 AGENT_ROLE_VALUE = "raspberrypi-agent"
 AGENT_CAPABILITY_NAME = "agent_instruction"
 AGENT_COMMAND_NAME = "agent_instruction"
+
+
+@dataclass(frozen=True)
+class _PeerAgentDefinition:
+    """静的に管理するピアエージェントのメタ情報を表す構造体。"""
+
+    key: str
+    display_name: str
+    description: str
+    base_env_var: str
+    default_bases: Tuple[str, ...]
+    endpoint: str
+    method: str
+    timeout_env_var: str
+    default_timeout: float
+
+    def iter_bases(self) -> List[str]:
+        """環境変数と既定値から問い合わせ候補のベース URL を生成する。"""
+
+        configured = os.getenv(self.base_env_var, "")
+        candidates: List[str] = []
+
+        if configured:
+            for part in configured.split(","):
+                cleaned = part.strip()
+                if cleaned:
+                    candidates.append(cleaned)
+
+        candidates.extend(self.default_bases)
+
+        # 入力順を維持したまま重複排除
+        return list(dict.fromkeys(base.rstrip("/") for base in candidates if base))
+
+    def resolve_timeout(self) -> float:
+        """エージェント固有のタイムアウトを環境変数から読み取る。"""
+
+        raw_timeout = os.getenv(self.timeout_env_var)
+        if raw_timeout is None:
+            return self.default_timeout
+        try:
+            return float(raw_timeout)
+        except (TypeError, ValueError):
+            return self.default_timeout
+
+
+# FAQ_Gemini へのブリッジ。リポジトリ https://github.com/kota-kawa/FAQ_Gemini を参照。
+_FAQ_PEER_AGENT = _PeerAgentDefinition(
+    key="faq",
+    display_name="FAQ ナレッジエージェント",
+    description=(
+        "社内ナレッジベースを横断検索し、FAQ_Gemini の RAG エンドポイントで回答を組み立てる。"
+        " 社内向けの手順や機能仕様の確認が必要な場合に使用する。"
+    ),
+    base_env_var="FAQ_AGENT_API_BASE",
+    default_bases=(
+        "http://localhost:5000",
+        "http://faq_gemini:5000",
+    ),
+    endpoint="/agent_rag_answer",
+    method="POST",
+    timeout_env_var="FAQ_AGENT_TIMEOUT",
+    default_timeout=30.0,
+)
+
+# Browser Agent へのブリッジ。リポジトリ https://github.com/kota-kawa/web_agent02 を参照。
+_BROWSER_PEER_AGENT = _PeerAgentDefinition(
+    key="browser",
+    display_name="ブラウザ自動化エージェント",
+    description=(
+        "無人でウェブページを閲覧・操作し、タスクの結果サマリーや操作ログを返す。"
+        " 検索・スクリーンショット収集・フォーム操作などの Web 自動化に向く。"
+    ),
+    base_env_var="BROWSER_AGENT_API_BASE",
+    default_bases=(
+        "http://browser-agent:5005",
+        "http://localhost:5005",
+    ),
+    endpoint="/api/agent-relay",
+    method="POST",
+    timeout_env_var="BROWSER_AGENT_TIMEOUT",
+    default_timeout=120.0,
+)
+
+_PEER_AGENT_REGISTRY: Dict[str, _PeerAgentDefinition] = {
+    _FAQ_PEER_AGENT.key: _FAQ_PEER_AGENT,
+    _BROWSER_PEER_AGENT.key: _BROWSER_PEER_AGENT,
+}
+
+_PEER_AGENT_ALIASES: Dict[str, str] = {
+    "faq": "faq",
+    "faq_gemini": "faq",
+    "knowledge": "faq",
+    "knowledge_base": "faq",
+    "docs": "faq",
+    "document": "faq",
+    "manual": "faq",
+    "browser": "browser",
+    "web": "browser",
+    "web_agent": "browser",
+    "navigator": "browser",
+    "site": "browser",
+}
 
 
 @dataclass
@@ -337,6 +440,246 @@ def _build_device_context() -> str:
             )
         lines.append("")
     return "\n".join(lines).strip()
+
+
+def _normalise_peer_agent_key(raw: Optional[str]) -> Optional[str]:
+    """ペイロードに含まれるエージェント指定を正規化してキーへ変換する。"""
+
+    if not isinstance(raw, str):
+        return None
+
+    lowered = raw.strip().lower()
+    if not lowered:
+        return None
+
+    if lowered in _PEER_AGENT_REGISTRY:
+        return lowered
+
+    return _PEER_AGENT_ALIASES.get(lowered)
+
+
+def _metadata_peer_agent_hint(metadata: Optional[Dict[str, Any]]) -> Optional[str]:
+    """メタデータ内に埋め込まれたエージェント指定を検出する。"""
+
+    if not metadata:
+        return None
+
+    candidate_keys = (
+        "agent",
+        "target_agent",
+        "preferred_agent",
+        "category",
+        "domain",
+        "team",
+    )
+
+    for key in candidate_keys:
+        value = metadata.get(key)
+        if isinstance(value, str):
+            hint = _normalise_peer_agent_key(value)
+            if hint:
+                return hint
+        elif isinstance(value, list):
+            for item in value:
+                if not isinstance(item, str):
+                    continue
+                hint = _normalise_peer_agent_key(item)
+                if hint:
+                    return hint
+
+    browser_flags = {"need_browser", "requires_browser", "use_browser"}
+    for flag in browser_flags:
+        if bool(metadata.get(flag)):
+            return _BROWSER_PEER_AGENT.key
+
+    return None
+
+
+_BROWSER_KEYWORDS = {
+    "browser",
+    "web",
+    "ウェブ",
+    "サイト",
+    "ページ",
+    "検索",
+    "スクリーンショット",
+    "スクショ",
+    "navigate",
+    "url",
+    "click",
+}
+
+
+def _select_peer_agent(
+    question: str,
+    *,
+    hint: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    context: Optional[str] = None,
+) -> _PeerAgentDefinition:
+    """質問内容やヒントから最適なピアエージェント定義を返す。"""
+
+    candidate = _normalise_peer_agent_key(hint)
+    if not candidate:
+        candidate = _metadata_peer_agent_hint(metadata)
+
+    target_text = question.lower()
+    if isinstance(context, str) and context.strip():
+        target_text += "\n" + context.lower()
+    if metadata and not candidate:
+        metadata_context = metadata.get("context")
+        if isinstance(metadata_context, str):
+            target_text += "\n" + metadata_context.lower()
+
+    if not candidate:
+        for keyword in _BROWSER_KEYWORDS:
+            if keyword in target_text:
+                candidate = _BROWSER_PEER_AGENT.key
+                break
+
+    if not candidate:
+        candidate = _FAQ_PEER_AGENT.key
+
+    return _PEER_AGENT_REGISTRY[candidate]
+
+
+def _build_peer_agent_url(base: str, path: str) -> str:
+    """ベース URL とパスから問い合わせ先の完全 URL を生成する。"""
+
+    normalized_base = base.rstrip("/")
+    normalized_path = path if path.startswith("/") else f"/{path}"
+    return normalized_base + normalized_path
+
+
+def _build_peer_agent_payload(
+    agent: _PeerAgentDefinition,
+    question: str,
+    *,
+    context: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """質問・コンテキストをピアエージェント向けの JSON ペイロードへ整形する。"""
+
+    sections: List[str] = []
+
+    cleaned_question = question.strip()
+    if cleaned_question:
+        sections.append(cleaned_question)
+
+    if isinstance(context, str) and context.strip():
+        sections.append("[Context]\n" + context.strip())
+
+    if metadata:
+        try:
+            metadata_text = json.dumps(metadata, ensure_ascii=False, default=str)
+        except TypeError:
+            metadata_text = str(metadata)
+        sections.append("[Metadata]\n" + metadata_text)
+
+    combined = "\n\n".join(section for section in sections if section)
+
+    if agent.key == _FAQ_PEER_AGENT.key:
+        return {"question": combined or cleaned_question}
+
+    # Browser エージェントは指示文を prompt として受け取る。
+    return {"prompt": combined or cleaned_question}
+
+
+def _perform_peer_agent_request(
+    agent: _PeerAgentDefinition,
+    payload: Dict[str, Any],
+) -> Tuple[Any, str, int]:
+    """HTTP 経由でピアエージェントへ問い合わせ、結果と使用 URL を返す。"""
+
+    timeout = agent.resolve_timeout()
+    errors: List[str] = []
+
+    for base in agent.iter_bases():
+        url = _build_peer_agent_url(base, agent.endpoint)
+        try:
+            response = requests.request(
+                agent.method,
+                url,
+                json=payload,
+                timeout=timeout,
+            )
+        except requests.RequestException as exc:  # pragma: no cover - network依存
+            errors.append(f"{url}: {exc}")
+            continue
+
+        if response.status_code >= 400:
+            try:
+                error_body = response.json()
+            except ValueError:
+                error_body = response.text
+            errors.append(
+                f"{url}: HTTP {response.status_code} {error_body}"
+            )
+            continue
+
+        try:
+            data = response.json()
+        except ValueError:
+            data = {"raw": response.text}
+
+        return data, url, response.status_code
+
+    joined = "; ".join(errors) if errors else "no endpoints available"
+    raise RuntimeError(f"ピアエージェントへの問い合わせに失敗しました: {joined}")
+
+
+def _request_peer_assistance(
+    question: str,
+    *,
+    hint: Optional[str] = None,
+    context: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """質問内容から最適なエージェントを選定し、応答内容をまとめる。"""
+
+    agent = _select_peer_agent(
+        question,
+        hint=hint,
+        metadata=metadata,
+        context=context,
+    )
+    payload = _build_peer_agent_payload(
+        agent,
+        question,
+        context=context,
+        metadata=metadata,
+    )
+    data, url, status_code = _perform_peer_agent_request(agent, payload)
+
+    return {
+        "agent": agent.key,
+        "agent_display_name": agent.display_name,
+        "agent_description": agent.description,
+        "request_url": url,
+        "request_payload": payload,
+        "status_code": status_code,
+        "response": data,
+    }
+
+
+def _list_peer_agents() -> List[Dict[str, Any]]:
+    """利用可能なピアエージェント一覧を辞書形式で返す。"""
+
+    entries: List[Dict[str, Any]] = []
+    for agent in _PEER_AGENT_REGISTRY.values():
+        entries.append(
+            {
+                "key": agent.key,
+                "display_name": agent.display_name,
+                "description": agent.description,
+                "base_env_var": agent.base_env_var,
+                "default_bases": agent.default_bases,
+                "endpoint": agent.endpoint,
+                "timeout_env_var": agent.timeout_env_var,
+                "default_timeout": agent.default_timeout,
+            }
+        )
+    return entries
 
 
 def _store_completed_job(job_id: Optional[str], result: Dict[str, Any]) -> None:
@@ -1524,6 +1867,73 @@ def chat():
         payload, status = _chat_via_legacy(formatted_messages)
 
     return jsonify(payload), status
+
+
+@app.get("/api/peer_agents")
+def list_peer_agents():
+    # 連携可能なピアエージェントの一覧と役割を返す
+
+    return jsonify({"agents": _list_peer_agents()})
+
+
+@app.post("/api/peer_agents/assist")
+def assist_via_peer_agent():
+    # 他エージェントから知識・Web 操作支援を得るためのラッパー API
+
+    payload = request.get_json(silent=True) or {}
+
+    raw_question = payload.get("question")
+    if not isinstance(raw_question, str) or not raw_question.strip():
+        return jsonify({"error": "question is required"}), 400
+    question = raw_question.strip()
+
+    hint: Optional[str] = None
+    for key in ("agent", "hint", "preferred_agent", "target_agent"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            hint = value.strip()
+            break
+
+    metadata_raw = payload.get("metadata")
+    if metadata_raw is not None and not isinstance(metadata_raw, dict):
+        return jsonify({"error": "metadata must be an object"}), 400
+    metadata = metadata_raw if isinstance(metadata_raw, dict) else None
+
+    context_raw = payload.get("context") or payload.get("supplemental_context")
+    if context_raw is not None and not isinstance(context_raw, str):
+        return jsonify({"error": "context must be a string"}), 400
+    if isinstance(context_raw, str):
+        context = context_raw.strip() or None
+    else:
+        context = None
+
+    include_catalog_raw = payload.get("include_catalog")
+    include_catalog = bool(include_catalog_raw)
+    if isinstance(include_catalog_raw, str):
+        lowered = include_catalog_raw.strip().lower()
+        include_catalog = lowered in {"1", "true", "yes", "on"}
+
+    try:
+        result = _request_peer_assistance(
+            question,
+            hint=hint,
+            context=context,
+            metadata=metadata,
+        )
+    except RuntimeError as exc:
+        return jsonify({"error": str(exc)}), 502
+    except Exception as exc:  # pragma: no cover - ネットワークや JSON デコードの失敗
+        return jsonify({"error": str(exc)}), 500
+
+    result["question"] = question
+    if context is not None:
+        result["context"] = context
+    if metadata is not None:
+        result["metadata"] = metadata
+    if include_catalog:
+        result["available_agents"] = _list_peer_agents()
+
+    return jsonify(result)
 
 
 @app.post("/api/agents/respond")
