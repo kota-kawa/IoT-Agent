@@ -7,7 +7,7 @@ import time
 import uuid
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Any, Deque, Dict, List, Optional, Tuple
+from typing import Any, Deque, Dict, List, Literal, Optional, Set, Tuple
 
 # 外部依存：環境変数の読み込み、Web アプリ基盤、OpenAI クライアント、HTTP リクエスト
 from dotenv import load_dotenv as loadenv
@@ -230,7 +230,7 @@ def _iter_faq_agent_bases() -> List[str]:
     candidates.extend(DEFAULT_FAQ_AGENT_BASES)
     
     deduped: List[str] = []
-    seen: set[str] = set()
+    seen: Set[str] = set()
     for base in candidates:
         if not base:
             continue
@@ -251,7 +251,7 @@ def _iter_browser_agent_bases() -> List[str]:
     candidates.extend(DEFAULT_BROWSER_AGENT_BASES)
     
     deduped: List[str] = []
-    seen: set[str] = set()
+    seen: Set[str] = set()
     for base in candidates:
         if not base:
             continue
@@ -274,8 +274,6 @@ def _call_faq_agent(question: str, *, persist_history: bool = False) -> Optional
     Returns:
         回答データ (answer, sources を含む辞書) または None
     """
-    import requests
-    
     bases = _iter_faq_agent_bases()
     if not bases:
         return None
@@ -307,8 +305,6 @@ def _call_browser_agent(prompt: str) -> Optional[Dict[str, Any]]:
     Returns:
         実行結果データまたは None
     """
-    import requests
-    
     bases = _iter_browser_agent_bases()
     if not bases:
         return None
@@ -330,7 +326,7 @@ def _call_browser_agent(prompt: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _select_optimal_agent_for_task(task_description: str) -> Optional[str]:
+def _select_optimal_agent_for_task(task_description: str) -> Optional[Literal["faq", "browser", "iot"]]:
     """
     タスク内容から最適なエージェントを選択
     
