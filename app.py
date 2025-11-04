@@ -800,6 +800,51 @@ def _structured_agent_instruction_prompt(messages: List[Dict[str, str]]) -> Dict
     }
 
 
+def _structured_peer_agent_prompt(
+    request_text: str,
+    *,
+    metadata: Optional[Dict[str, Any]] = None,
+    supplemental_context: Optional[str] = None,
+) -> Dict[str, Any]:
+    # ピアエージェントからの直接的な問い合わせに回答するためのプロンプトを構築
+
+    device_context = _build_device_context()
+    system_prompt = (
+        "You respond directly to peer automation agents about the IoT environment. "
+        "Answer succinctly in Japanese using only the provided facts. "
+        "If the requested information is unavailable, state that clearly. "
+        "Do not mention conversation history or end users."
+    )
+
+    messages: List[Dict[str, str]] = [
+        {"role": "system", "content": system_prompt},
+    ]
+
+    if device_context:
+        messages.append(
+            {"role": "system", "content": "利用可能なデバイス情報:\n" + device_context}
+        )
+    else:
+        messages.append(
+            {"role": "system", "content": "現在登録されているデバイスはありません。"}
+        )
+
+    if supplemental_context:
+        messages.append(
+            {"role": "system", "content": "追加コンテキスト:\n" + supplemental_context}
+        )
+
+    if metadata:
+        metadata_text = json.dumps(metadata, ensure_ascii=False, default=str)
+        messages.append(
+            {"role": "system", "content": "ピアエージェントからのメタデータ:\n" + metadata_text}
+        )
+
+    messages.append({"role": "user", "content": request_text})
+
+    return {"model": "gpt-4.1-2025-04-14", "input": messages}
+
+
 def _structured_agent_followup_prompt(
     base_messages: List[Dict[str, str]],
     english_instruction: str,
@@ -1479,6 +1524,69 @@ def chat():
         payload, status = _chat_via_legacy(formatted_messages)
 
     return jsonify(payload), status
+
+
+@app.post("/api/agents/respond")
+def respond_to_peer_agent():
+    # 外部エージェントからのスポット問い合わせに応答するエンドポイント
+
+    payload = request.get_json(silent=True) or {}
+
+    request_text: Optional[str] = None
+    for key in ("request", "prompt", "question", "message"):
+        raw_value = payload.get(key)
+        if isinstance(raw_value, str) and raw_value.strip():
+            request_text = raw_value.strip()
+            break
+
+    if not request_text:
+        return jsonify({"error": "request text is required"}), 400
+
+    metadata = payload.get("metadata")
+    if metadata is not None and not isinstance(metadata, dict):
+        return jsonify({"error": "metadata must be an object"}), 400
+    metadata_dict: Optional[Dict[str, Any]] = metadata if isinstance(metadata, dict) else None
+
+    supplemental_context = payload.get("context") or payload.get("supplemental_context")
+    if supplemental_context is not None:
+        if not isinstance(supplemental_context, str):
+            return jsonify({"error": "context must be a string"}), 400
+        supplemental_context = supplemental_context.strip() or None
+
+    include_snapshot_raw = payload.get("include_device_snapshot")
+    if isinstance(include_snapshot_raw, str):
+        lowered = include_snapshot_raw.strip().lower()
+        include_snapshot = lowered in {"1", "true", "yes", "on"}
+    else:
+        include_snapshot = bool(include_snapshot_raw)
+
+    try:
+        client = _client()
+    except RuntimeError as exc:
+        return jsonify({"error": str(exc)}), 500
+
+    try:
+        prompt_payload = _structured_peer_agent_prompt(
+            request_text,
+            metadata=metadata_dict,
+            supplemental_context=supplemental_context,
+        )
+        reply_text = _call_llm_text(client, prompt_payload)
+    except Exception as exc:  # pragma: no cover - network/SDK errors
+        return jsonify({"error": str(exc)}), 500
+
+    response_body: Dict[str, Any] = {"reply": reply_text}
+
+    request_id = payload.get("request_id")
+    if isinstance(request_id, (str, int, float)):
+        response_body["request_id"] = request_id
+
+    if include_snapshot:
+        snapshot = [_serialize_device(device) for device in _DEVICES.values()]
+        snapshot.sort(key=lambda item: item.get("device_id") or "")
+        response_body["device_snapshot"] = snapshot
+
+    return jsonify(response_body)
 
 
 @app.post("/api/conversations/review")
