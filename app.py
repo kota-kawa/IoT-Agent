@@ -353,7 +353,7 @@ def _select_optimal_agent_for_task(task_description: str) -> Optional[str]:
         return "browser"
     
     # IoT エージェント（自身）が適切なキーワード
-    iot_keywords = ["デバイス", "センサー", "制御", "操作", "測定"]
+    iot_keywords = ["デバイス", "センサー", "制御", "操作", "測定", "led", "点灯", "点滅", "モーター", "サーボ"]
     if any(keyword in task_lower for keyword in iot_keywords):
         return "iot"
     
