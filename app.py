@@ -9,10 +9,11 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Deque, Dict, List, Optional, Tuple
 
-# 外部依存：環境変数の読み込み、Web アプリ基盤、OpenAI クライアント
+# 外部依存：環境変数の読み込み、Web アプリ基盤、OpenAI クライアント、HTTP リクエスト
 from dotenv import load_dotenv as loadenv
 from flask import Flask, jsonify, redirect, request, session, url_for
 from openai import OpenAI
+import requests
 
 
 ## ------------------------------------------------------------
@@ -30,6 +31,56 @@ APP_PASSWORD = "kkawagoe"
 AGENT_ROLE_VALUE = "raspberrypi-agent"
 AGENT_CAPABILITY_NAME = "agent_instruction"
 AGENT_COMMAND_NAME = "agent_instruction"
+
+
+## ------------------------------------------------------------
+## 外部エージェント連携設定
+## ------------------------------------------------------------
+
+# 外部エージェントの説明と接続先エンドポイント
+# Multi-Agent-Platform を通じて他エージェントに助けを求める際に使用
+
+# FAQ エージェント (FAQ_Gemini)
+# 役割: 家庭内の出来事や家電の専門知識を持つナレッジベースエージェント
+# 機能: IoT デバイスや家電製品に関する質問に RAG (Retrieval-Augmented Generation) で回答
+# 接続先: FAQ_Gemini API エンドポイント
+FAQ_AGENT_DESCRIPTION = """
+FAQ エージェント - 家庭内IoTデバイスと家電製品の専門知識エージェント
+- 役割: ベクトルデータベースを活用した質問応答システム
+- 機能: IoT デバイスの使用方法、トラブルシューティング、設定方法などの質問に回答
+- 使用場面: デバイス操作の不明点、エラー解決方法、製品仕様の確認が必要な場合
+"""
+FAQ_AGENT_ENDPOINTS = {
+    "rag_answer": "/rag_answer",  # 質問応答エンドポイント
+    "agent_rag_answer": "/agent_rag_answer",  # エージェント間通信用エンドポイント
+    "analyze_conversation": "/analyze_conversation",  # 会話履歴分析エンドポイント
+}
+DEFAULT_FAQ_AGENT_BASES = (
+    "http://localhost:5000",
+    "http://faq_gemini:5000",
+)
+FAQ_AGENT_TIMEOUT = float(os.getenv("FAQ_AGENT_TIMEOUT", "30"))
+
+# Browser エージェント (web_agent02)
+# 役割: Web ブラウザ自動化エージェント
+# 機能: Web サイトの閲覧、情報収集、フォーム入力などのブラウザ操作を自動実行
+# 接続先: Browser Agent API エンドポイント
+BROWSER_AGENT_DESCRIPTION = """
+Browser エージェント - Web ブラウザ自動化エージェント
+- 役割: Web サイトの自動操作とスクレイピング
+- 機能: ページ閲覧、情報抽出、フォーム入力、クリック操作などの Web タスク自動化
+- 使用場面: IoT デバイスの Web 管理画面操作、オンライン情報収集、Web サービス連携が必要な場合
+"""
+BROWSER_AGENT_ENDPOINTS = {
+    "chat": "/api/chat",  # チャットベースのタスク実行エンドポイント
+    "check_history": "/api/check-conversation-history",  # 会話履歴確認エンドポイント
+    "agent_relay": "/api/agent-relay",  # エージェント間リレーエンドポイント
+}
+DEFAULT_BROWSER_AGENT_BASES = (
+    "http://localhost:5005",
+    "http://browser-agent:5005",
+)
+BROWSER_AGENT_TIMEOUT = float(os.getenv("BROWSER_AGENT_TIMEOUT", "120"))
 
 
 @dataclass
@@ -164,6 +215,149 @@ def _client() -> OpenAI:
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY is not set")
     return OpenAI(api_key=api_key)
+
+
+## ------------------------------------------------------------
+## 外部エージェント連携ヘルパー関数
+## ------------------------------------------------------------
+
+def _iter_faq_agent_bases() -> List[str]:
+    """FAQ エージェントの接続先 URL を優先順位順に取得"""
+    configured = os.getenv("FAQ_AGENT_API_BASE", "")
+    candidates: List[str] = []
+    if configured:
+        candidates.extend(part.strip() for part in configured.split(","))
+    candidates.extend(DEFAULT_FAQ_AGENT_BASES)
+    
+    deduped: List[str] = []
+    seen: set[str] = set()
+    for base in candidates:
+        if not base:
+            continue
+        normalized = base.rstrip("/")
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        deduped.append(normalized)
+    return deduped
+
+
+def _iter_browser_agent_bases() -> List[str]:
+    """Browser エージェントの接続先 URL を優先順位順に取得"""
+    configured = os.getenv("BROWSER_AGENT_API_BASE", "")
+    candidates: List[str] = []
+    if configured:
+        candidates.extend(part.strip() for part in configured.split(","))
+    candidates.extend(DEFAULT_BROWSER_AGENT_BASES)
+    
+    deduped: List[str] = []
+    seen: set[str] = set()
+    for base in candidates:
+        if not base:
+            continue
+        normalized = base.rstrip("/")
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        deduped.append(normalized)
+    return deduped
+
+
+def _call_faq_agent(question: str, *, persist_history: bool = False) -> Optional[Dict[str, Any]]:
+    """
+    FAQ エージェントに質問を送信して回答を取得
+    
+    Args:
+        question: 質問内容
+        persist_history: FAQ エージェント側で会話履歴を保存するかどうか
+    
+    Returns:
+        回答データ (answer, sources を含む辞書) または None
+    """
+    import requests
+    
+    bases = _iter_faq_agent_bases()
+    if not bases:
+        return None
+    
+    endpoint = FAQ_AGENT_ENDPOINTS["agent_rag_answer"] if not persist_history else FAQ_AGENT_ENDPOINTS["rag_answer"]
+    payload = {"question": question}
+    
+    for base in bases:
+        url = f"{base}{endpoint}"
+        try:
+            response = requests.post(url, json=payload, timeout=FAQ_AGENT_TIMEOUT)
+            if response.ok:
+                data = response.json()
+                if isinstance(data, dict):
+                    return data
+        except Exception:
+            continue
+    
+    return None
+
+
+def _call_browser_agent(prompt: str) -> Optional[Dict[str, Any]]:
+    """
+    Browser エージェントにタスクを送信して実行結果を取得
+    
+    Args:
+        prompt: ブラウザ操作の指示内容
+    
+    Returns:
+        実行結果データまたは None
+    """
+    import requests
+    
+    bases = _iter_browser_agent_bases()
+    if not bases:
+        return None
+    
+    endpoint = BROWSER_AGENT_ENDPOINTS["chat"]
+    payload = {"prompt": prompt, "new_task": True}
+    
+    for base in bases:
+        url = f"{base}{endpoint}"
+        try:
+            response = requests.post(url, json=payload, timeout=BROWSER_AGENT_TIMEOUT)
+            if response.ok:
+                data = response.json()
+                if isinstance(data, dict):
+                    return data
+        except Exception:
+            continue
+    
+    return None
+
+
+def _select_optimal_agent_for_task(task_description: str) -> Optional[str]:
+    """
+    タスク内容から最適なエージェントを選択
+    
+    Args:
+        task_description: タスクの説明
+    
+    Returns:
+        "faq", "browser", "iot", または None
+    """
+    task_lower = task_description.lower()
+    
+    # FAQ エージェントが適切なキーワード
+    faq_keywords = ["質問", "教えて", "方法", "使い方", "設定", "トラブル", "エラー", "仕様"]
+    if any(keyword in task_lower for keyword in faq_keywords):
+        return "faq"
+    
+    # Browser エージェントが適切なキーワード
+    browser_keywords = ["web", "ブラウザ", "検索", "サイト", "ページ", "情報収集"]
+    if any(keyword in task_lower for keyword in browser_keywords):
+        return "browser"
+    
+    # IoT エージェント（自身）が適切なキーワード
+    iot_keywords = ["デバイス", "センサー", "制御", "操作", "測定"]
+    if any(keyword in task_lower for keyword in iot_keywords):
+        return "iot"
+    
+    return None
 
 
 def _first_device_id() -> Optional[str]:
