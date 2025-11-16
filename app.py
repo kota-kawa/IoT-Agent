@@ -7,6 +7,7 @@ import time
 import uuid
 from collections import deque
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Deque, Dict, List, Optional, Tuple
 
 # 外部依存：環境変数の読み込み、Web アプリ基盤、OpenAI クライアント
@@ -69,6 +70,11 @@ MAX_COMPLETED_JOBS = int(os.getenv("MAX_COMPLETED_JOBS", "200"))
 
 # デバイスがジョブ結果を返さない場合にタイムアウトとみなす秒数
 DEVICE_RESULT_TIMEOUT = float(os.getenv("DEVICE_RESULT_TIMEOUT", "120"))
+
+
+def _current_datetime_line() -> str:
+    """Return the timestamp string used in system prompts."""
+    return datetime.now().strftime("現在の日時ー%Y年%m月%d日%H時%M分")
 
 
 def _normalise_capability_params(params: Any) -> List[Dict[str, Any]]:
@@ -514,7 +520,9 @@ def _format_result_for_prompt(result: Dict[str, Any]) -> str:
 def _structured_llm_prompt(messages: List[Dict[str, str]]) -> Dict[str, Any]:
     # LLM へ投げる構造化プロンプトとコンテキストを組み立てる
     device_context = _build_device_context()
+    timestamp_line = _current_datetime_line()
     system_prompt = (
+        f"{timestamp_line}\n"
         "You are an assistant that manages IoT devices for the user. "
         "Always respond with a strict JSON object containing the keys "
         "'reply' and 'device_commands'. The 'reply' field is a natural "
@@ -659,7 +667,9 @@ def _structured_conversation_review_prompt(messages: List[Dict[str, str]]) -> Di
     # 会話履歴を監査し、IoT 操作が必要か判定するプロンプトを構築
 
     device_context = _build_device_context()
+    timestamp_line = _current_datetime_line()
     system_prompt = (
+        f"{timestamp_line}\n"
         "You are an operations analyst that reviews past multi-agent conversations "
         "to decide whether IoT remediation is required. Always respond with a strict "
         "JSON object containing: "
@@ -766,7 +776,9 @@ def _structured_agent_instruction_prompt(messages: List[Dict[str, str]]) -> Dict
     # エージェント向け英語命令文の生成に必要なプロンプトを組み立てる
 
     device_context = _build_device_context()
+    timestamp_line = _current_datetime_line()
     system_prompt = (
+        f"{timestamp_line}\n"
         "You translate the latest user instruction into a single, simple "
         "English sentence that describes the IoT task to perform. Use clear "
         "imperative phrasing and avoid technical jargon. If no action is "
