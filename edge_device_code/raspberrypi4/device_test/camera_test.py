@@ -7,7 +7,7 @@ from pathlib import Path
 import time
 
 # ---- 保存先ディレクトリ（ハードコード） ----
-SAVE_DIR = Path("/home/pi/my_captures")  # ここを任意の固定パスに変更可
+SAVE_DIR = Path("/home/kota/iot-agent/test")  # ここを任意の固定パスに変更可
 SAVE_DIR.mkdir(parents=True, exist_ok=True)
 
 # ---- ファイル名（タイムスタンプ） ----
