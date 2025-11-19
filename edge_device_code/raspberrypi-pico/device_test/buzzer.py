@@ -10,11 +10,17 @@ class PassiveBuzzer:
     - tone(freq_hz, duration_ms, duty): 指定周波数・時間で鳴らす
     - silence(duration_ms): 休符
     - play(sequence): シーケンス再生 [(freq, ms, duty省略可), 休符ms, ...]
+    追加:
+    - stop(): 終了時に必ず無音化（duty=0 → PWM停止 → ピンLOW固定）
+    - コンテキストマネージャ対応（with ... as ...）
     """
     def __init__(self, pin=BUZZER_PIN):
-        self.pwm = PWM(Pin(pin, Pin.OUT))
+        self.pin_no = pin
+        self.pin = Pin(pin, Pin.OUT)
+        self.pwm = PWM(self.pin)
         # 初期状態は無音
         self.pwm.duty_u16(0)
+        self._stopped = False
 
     def tone(self, freq_hz: int, duration_ms: int, duty: float = 0.5):
         """
@@ -62,16 +68,51 @@ class PassiveBuzzer:
                 # 数値だけ渡されたら休符として扱う
                 self.silence(int(item))
 
+    def stop(self):
+        """
+        必ず無音で終了させるための後始末。
+        1) duty=0（PWM出力を無音に）
+        2) PWMを停止（deinit）
+        3) ピンを通常GPIO出力LOWに固定（浮きや残留発振の予防）
+        """
+        if self._stopped:
+            return
+        try:
+            self.pwm.duty_u16(0)
+        except Exception:
+            pass
+        try:
+            self.pwm.deinit()
+        except Exception:
+            pass
+        try:
+            # PWM機能から通常GPIOに戻してLOW固定
+            self.pin = Pin(self.pin_no, Pin.OUT)
+            self.pin.value(0)
+        except Exception:
+            pass
+        self._stopped = True
+
     def deinit(self):
-        self.pwm.deinit()
+        # 既存コード互換
+        self.stop()
+
+    # ---- with 文対応 ----
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.stop()
+        # 例外は呼び出し側へ伝播させる（False）
+        return False
 
 def demo():
     """
     簡単なデモ：ドレミファソラシド → 休符 → 逆順
     パッシブブザーは 2kHz 前後が鳴らしやすいですが、音階例として 260〜520Hz 帯を使用。
     """
-    buz = PassiveBuzzer(BUZZER_PIN)
-    try:
+    # with を使うことで、正常終了/例外/KeyboardInterrupt でも必ず無音化
+    with PassiveBuzzer(BUZZER_PIN) as buz:
         # 周波数（おおよそ）
         C4=261; D4=294; E4=329; F4=349; G4=392; A4=440; B4=494; C5=523
         quarter = 200  # 200ms
@@ -89,8 +130,10 @@ def demo():
         time.sleep_ms(300)
         buz.tone(2000, 300, duty=0.5)
 
-    finally:
-        buz.deinit()
-
 if __name__ == "__main__":
-    demo()
+    try:
+        demo()
+    except KeyboardInterrupt:
+        # Ctrl+C でも with の __exit__ が走るため無音化される
+        pass
+

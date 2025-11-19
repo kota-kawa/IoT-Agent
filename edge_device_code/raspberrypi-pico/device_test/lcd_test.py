@@ -16,7 +16,7 @@ from machine import Pin, PWM
 import time
 
 # ------------ ユーザー調整用 定数 ------------
-CONTRAST_PERCENT_DEFAULT = 75
+CONTRAST_PERCENT_DEFAULT = 15
 PWM_FREQ_HZ = 100_000
 
 # LCDピン割り当て（GP13/14/15は不使用）
@@ -171,3 +171,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

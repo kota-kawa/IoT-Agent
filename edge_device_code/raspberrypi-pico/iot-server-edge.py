@@ -1,11 +1,6 @@
 # -*- coding: utf-8 -*-
-<<<<<<< HEAD:edge_device_code/iot-server-edge.py
 """
 Raspberry Pi Pico W (MicroPython) - LLMエージェント連携クライアント（デバイス側のみ）
-
-=======
-"""
-MicroPython エッジデバイス向け IoT サーバークライアント（デバイス側のみ）
 
 変更点（2025-10-10）:
   * MicroPython の一部ビルドに sys.stdout / sys.stderr が無いため、
@@ -13,7 +8,6 @@ MicroPython エッジデバイス向け IoT サーバークライアント（デ
   * 例外は sys.print_exception() で専用バッファへ書き出し。
   * それ以外の動作は従来通り：1秒ポーリングでジョブ取得→ローカル関数実行→結果POST。
   * ダッシュボードの UI 名称を「デバイス登録」に合わせて案内を更新。
->>>>>>> c03fc706f3585949ed7e2ecd600cee1aabfaa757:edge_device_code/raspberrypi-pico/iot-server-edge.py
 
 機能:
   - Wi-Fi接続（secrets.py から SSID/PASS 読み込み）
@@ -30,10 +24,10 @@ MicroPython エッジデバイス向け IoT サーバークライアント（デ
   - POST {BASE_URL}{REGISTER_PATH}
       req: {"device_id": "...", "capabilities": [...], "meta": {...}}
       res: 200/201 JSON
-  - GET  {BASE_URL}{NEXT_PATH.format(device_id="...")}
+  - GET  {BASE_URL}{NEXT_PATH}?device_id=...
       res: 204 (no job)
            200 {"job_id":"...", "command":{"name":"led","args":{"times":3,"interval_sec":0.1}}}
-  - POST {BASE_URL}{RESULT_PATH.format(device_id="...")}
+  - POST {BASE_URL}{RESULT_PATH}
       req: {"device_id":"...","job_id":"...","ok":true/false,
             "return_value":..., "stdout":"...", "stderr":"...","ts":123456789}
 """
@@ -84,11 +78,10 @@ from machine import Pin, ADC, unique_id  # type: ignore
 # =========================
 # 設定
 # =========================
-# Flask サーバーへの接続先 URL と API パス
 BASE_URL = "https://iot-agent.project-kk.com"
-REGISTER_PATH = "/api/devices/register"
-NEXT_PATH = "/api/devices/{device_id}/jobs/next"
-RESULT_PATH = "/api/devices/{device_id}/jobs/result"
+REGISTER_PATH = "/pico-w/register"
+NEXT_PATH = "/pico-w/next"
+RESULT_PATH = "/pico-w/result"
 
 # Wi-Fi 認証情報は secrets.py から読み込み（無ければ未設定扱い）
 WIFI_SSID = ""
@@ -113,33 +106,15 @@ try:
 except Exception:
     pass
 
-# ポーリングや登録関連の挙動を制御するパラメータ
 POLL_INTERVAL_SEC = 1  # 1秒間隔でサーバーをポーリング
 AUTO_REGISTER_ON_BOOT = False  # True にすると起動時に自動登録
-CAPABILITY_SYNC_ENABLED = True  # 手動登録後でも機能一覧をサーバーへ同期する
-CAPABILITY_RESYNC_INTERVAL_SEC = 30  # 同期失敗時の再試行間隔（秒）
 
-USER_AGENT = "MicroPython-IoT-Edge-Agent/1.1"
+USER_AGENT = "PicoW-MicroPython-Agent/1.1"
 HTTP_BODY_PREVIEW_LEN = 512
 HTTP_TIMEOUT_SEC = 15
 _RECV_CHUNK = 1024
 RESULT_MAX_ATTEMPTS = 4
 RESULT_RETRY_BASE_DELAY = 2
-
-def _format_for_log(value, max_length=400):
-    """Convert arbitrary value to a short printable string."""
-    # MicroPython 環境でも扱いやすいようログ出力文字列を整形
-    try:
-        text = json.dumps(value)
-    except Exception:
-        try:
-            text = str(value)
-        except Exception:
-            text = "<unprintable>"
-
-    if text and len(text) > max_length:
-        return text[: max_length - 16] + "...<truncated>"
-    return text
 
 # =========================
 # ハードウェア初期化
@@ -342,7 +317,7 @@ def _load_device_id(path: str = "device_id.txt") -> str:
         did = "".join("{:02x}".format(b) for b in raw)
     except Exception:
         rnd = random.getrandbits(64)
-        did = "edge-" + "{:016x}".format(rnd)
+        did = "pico-" + "{:016x}".format(rnd)
 
     try:
         with open(path, "w") as f:
@@ -430,24 +405,6 @@ def get_capabilities():
         })
     return caps
 
-
-def get_action_catalog():
-    """ダッシュボード/LLM向けに提供する操作リストを生成"""
-    actions = []
-    for name, spec in FUNCTIONS.items():
-        entry = {
-            "name": name,
-            "capability": name,
-        }
-        description = spec.get("description")
-        if isinstance(description, str) and description:
-            entry["description"] = description
-        params = spec.get("params", [])
-        if isinstance(params, list) and params:
-            entry["params"] = params
-        actions.append(entry)
-    return actions
-
 # =========================
 # LLMエージェント連携
 # =========================
@@ -457,9 +414,8 @@ def register_device(base_url: str, device_id: str):
         "device_id": device_id,
         "capabilities": get_capabilities(),
         "meta": {
-            "firmware": "iot_edge_agent/1.1.0",
+            "firmware": "pico_w_agent/1.1.0",
             "ua": USER_AGENT,
-            "action_catalog": get_action_catalog(),
         },
     }
     if DEVICE_LABEL:
@@ -477,7 +433,7 @@ def register_device(base_url: str, device_id: str):
 
 def fetch_next_job(base_url: str, device_id: str):
     global _NOT_REGISTERED_WARNED
-    url = "{}{}".format(base_url, NEXT_PATH.format(device_id=device_id))
+    url = "{}{}?device_id={}".format(base_url, NEXT_PATH, device_id)
     status, text = http_get_text(url, timeout=HTTP_TIMEOUT_SEC)
     if status == 204 or (status == 200 and not text.strip()):
         if _NOT_REGISTERED_WARNED:
@@ -522,9 +478,10 @@ def post_result(
     max_attempts: int = RESULT_MAX_ATTEMPTS,
     backoff_base: int = RESULT_RETRY_BASE_DELAY,
 ) -> bool:
-    # サーバーはパスパラメーターで device_id を受け取るため URL に埋め込む。
-    # ボディとヘッダーにも同じ値を含めて送信し、整合性チェックに備える。
-    url = "{}{}".format(base_url, RESULT_PATH.format(device_id=device_id))
+    # サーバー側で device_id をクエリパラメーターとして参照するケースがあり、
+    # ボディのみでは 400 ("device_id is required") が返る状況が確認された。
+    # 念のためクエリにも同じ値を付与して送信し、互換性を高める。
+    url = "{}{}?device_id={}".format(base_url, RESULT_PATH, device_id)
     payload = {
         "device_id": device_id,
         "job_id": job_id,
@@ -652,85 +609,24 @@ def agent_loop():
     device_id = _load_device_id()
     print("[agent] device_id={}".format(device_id))
 
-    def _current_seconds():
-        try:
-            return float(time.time())
-        except Exception:
-            try:
-                return float(time.ticks_ms()) / 1000.0
-            except Exception:
-                return 0.0
-
-    capability_synced = False
-    next_capability_sync = 0.0
-
-    def _schedule_capability_sync(delay_sec: float):
-        nonlocal next_capability_sync
-        if delay_sec <= 0:
-            next_capability_sync = 0.0
-            return
-        try:
-            next_capability_sync = _current_seconds() + float(delay_sec)
-        except Exception:
-            next_capability_sync = float(delay_sec)
-
-    def _attempt_capability_sync(reason: str) -> bool:
-        nonlocal capability_synced
-        if not CAPABILITY_SYNC_ENABLED:
-            return True
-        print("[agent] syncing capabilities ({}).".format(reason))
-        try:
-            status = register_device(BASE_URL, device_id)
-        except Exception as exc:
-            print("[agent] capability sync error ({}): {}".format(reason, exc))
-            return False
-
-        if 200 <= (status or 0) < 300:
-            capability_synced = True
-            print("[agent] capability sync succeeded (status {}).".format(status))
-            return True
-
-        if status == 403:
-            print(
-                "[agent] capability sync rejected (status 403). Register/approve this device "
-                "from the dashboard first."
-            )
-        else:
-            print("[agent] capability sync returned status {}.".format(status))
-        return False
-
     if AUTO_REGISTER_ON_BOOT:
-        if not _attempt_capability_sync("auto-register"):
-            _schedule_capability_sync(CAPABILITY_RESYNC_INTERVAL_SEC)
+        try:
+            register_device(BASE_URL, device_id)
+        except Exception as e:
+            print("[agent] register error: {}".format(e))
     else:
         print(
             "[agent] auto registration is disabled. Register this device from the dashboard "
             "(https://iot-agent.project-kk.com/) before sending jobs."
         )
-        if not _attempt_capability_sync("capability-sync"):
-            _schedule_capability_sync(CAPABILITY_RESYNC_INTERVAL_SEC)
 
     backoff = 0
     pending_result = None
     pending_attempt = 0
     while True:
         try:
-            if CAPABILITY_SYNC_ENABLED and not capability_synced:
-                now_sec = _current_seconds()
-                if next_capability_sync <= 0 or now_sec >= next_capability_sync:
-                    if _attempt_capability_sync("scheduled"):
-                        next_capability_sync = 0.0
-                    else:
-                        _schedule_capability_sync(CAPABILITY_RESYNC_INTERVAL_SEC)
-
             if pending_result is not None:
                 job_id, ok, ret, out, err = pending_result
-                print(
-                    "[agent] retrying result delivery for job {} (attempt {}).".format(
-                        job_id,
-                        pending_attempt + 1,
-                    )
-                )
                 success = post_result(
                     BASE_URL,
                     device_id,
@@ -742,13 +638,6 @@ def agent_loop():
                     max_attempts=1,
                 )
                 if success:
-                    print("[agent] result delivery confirmed for job {}".format(job_id))
-                    print(
-                        "[agent] job {} final return payload: {}".format(
-                            job_id,
-                            _format_for_log(ret),
-                        )
-                    )
                     pending_result = None
                     pending_attempt = 0
                     gc.collect()
@@ -780,14 +669,7 @@ def agent_loop():
             name = (cmd.get("name") or "").strip().lower()
             args = cmd.get("args") or {}
 
-            print("[agent] job received: id={} name={} args={}".format(
-                job_id,
-                name,
-                _format_for_log(args),
-            ))
-
-            if cmd.get("message"):
-                print("[agent] job note: {}".format(_format_for_log(cmd.get("message"))))
+            print("[agent] job received: id={} name={} args={}".format(job_id, name, args))
 
             ok, ret, out, err = _exec_with_capture(
                 _call_function_by_name, {"name": name, "args": args}
@@ -799,26 +681,7 @@ def agent_loop():
             if err and len(err) > HTTP_BODY_PREVIEW_LEN:
                 err = err[:HTTP_BODY_PREVIEW_LEN] + "\n...[truncated]"
 
-            print(
-                "[agent] exec finished for job {}: ok={} return={}".format(
-                    job_id,
-                    ok,
-                    _format_for_log(ret),
-                )
-            )
-            if out:
-                print("[agent] job {} captured stdout:\n{}".format(job_id, out))
-            if err:
-                print("[agent] job {} captured stderr:\n{}".format(job_id, err))
-            print(
-                "[agent] job {} result summary -> ok={} return={} stdout_len={} stderr_len={}".format(
-                    job_id,
-                    ok,
-                    _format_for_log(ret),
-                    len(out or ""),
-                    len(err or ""),
-                )
-            )
+            print("[agent] exec ok={} ret={}".format(ok, ret))
             backoff = 0
             pending_result = (job_id, ok, ret, out, err)
             pending_attempt = 0
