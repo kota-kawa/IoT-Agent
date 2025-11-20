@@ -101,6 +101,10 @@ DEVICE_ID_PATH = Path(
 )
 
 DEVICE_TEST_DIR = Path(__file__).resolve().parent / "device_test"
+CAMERA_SAVE_DIR = Path(
+    os.getenv("IOT_AGENT_CAMERA_DIR", "/home/kota/iot-agent/test")
+).expanduser()
+CAMERA_WARMUP_SECONDS = float(os.getenv("IOT_AGENT_CAMERA_WARMUP", "1.2"))
 
 DISPLAY_NAME = os.getenv("IOT_AGENT_DISPLAY_NAME", "Raspberry Pi 4 Agent")
 LOCATION = os.getenv("IOT_AGENT_LOCATION", "Lab")
@@ -246,6 +250,81 @@ SUPPORTED_ACTIONS: Dict[str, Dict[str, Any]] = {
                 "type": "number",
                 "required": False,
                 "description": "Optional timeout in seconds before stopping the servo script.",
+            },
+        ],
+    },
+    "capture_camera_photo": {
+        "description": "Capture a still photo using the Picamera2 module and save it to the default test directory.",
+        "params": [
+            {
+                "name": "filename",
+                "type": "string",
+                "required": False,
+                "description": "Optional filename (JPEG) to use instead of the default timestamp-based name.",
+            },
+            {
+                "name": "directory",
+                "type": "string",
+                "required": False,
+                "description": "Optional output directory; defaults to /home/kota/iot-agent/test.",
+            },
+            {
+                "name": "warmup",
+                "type": "number",
+                "required": False,
+                "description": "Warmup time in seconds before capturing the photo.",
+            },
+        ],
+    },
+    "run_led_demo": {
+        "description": "Run the three-LED chase and blink demo using GPIO2, GPIO3, and GPIO16.",
+        "params": [
+            {
+                "name": "cycles",
+                "type": "integer",
+                "required": False,
+                "description": "Number of pattern cycles to run (0 for continuous until timeout).",
+            },
+            {
+                "name": "timeout",
+                "type": "number",
+                "required": False,
+                "description": "Optional timeout in seconds for the LED routine.",
+            },
+        ],
+    },
+    "run_dual_servo_demo": {
+        "description": "Run the dual-servo inverse sweep demo on GPIO12 and GPIO19.",
+        "params": [
+            {
+                "name": "cycles",
+                "type": "integer",
+                "required": False,
+                "description": "Number of sweep cycles to perform (0 for continuous until timeout).",
+            },
+            {
+                "name": "step",
+                "type": "number",
+                "required": False,
+                "description": "Angle step size in degrees for the sweep.",
+            },
+            {
+                "name": "delay",
+                "type": "number",
+                "required": False,
+                "description": "Delay in seconds between servo updates.",
+            },
+            {
+                "name": "pigpio",
+                "type": "boolean",
+                "required": False,
+                "description": "Use the PiGPIO pin factory for more stable PWM (if available).",
+            },
+            {
+                "name": "timeout",
+                "type": "number",
+                "required": False,
+                "description": "Optional timeout in seconds for the dual-servo routine.",
             },
         ],
     },
@@ -745,6 +824,8 @@ def _get_weather(params: Dict[str, Any]) -> Dict[str, Any]:
 _DEFAULT_MOTOR_TEST_TIMEOUT = 30.0
 _DEFAULT_OLED_DEMO_TIMEOUT = 60.0
 _DEFAULT_SERVO_TIMEOUT = 90.0
+_DEFAULT_LED_TIMEOUT = 45.0
+_DEFAULT_DUAL_SERVO_TIMEOUT = 120.0
 
 
 def _parse_timeout_parameter(parameters: Any, default: float) -> float:
@@ -821,6 +902,186 @@ class _ActionExecutionContext:
             return False
 
         return True
+
+
+_LED_PINS = {"led1": 2, "led2": 3, "led3": 16}
+
+
+def _capture_camera_photo(parameters: Any) -> Dict[str, Any]:
+    """Capture a still photo using Picamera2 with the same defaults as camera_test.py."""
+
+    try:
+        from picamera2 import Picamera2
+    except ImportError as exc:
+        raise RuntimeError(
+            "picamera2 is required to capture photos on the Raspberry Pi. Install it before running this action."
+        ) from exc
+
+    save_dir = CAMERA_SAVE_DIR
+    warmup = CAMERA_WARMUP_SECONDS
+    filename = f"rpi_{datetime.now():%Y%m%d_%H%M%S}.jpg"
+
+    if isinstance(parameters, dict):
+        dir_value = parameters.get("directory") or parameters.get("dir")
+        if isinstance(dir_value, str) and dir_value.strip():
+            save_dir = Path(dir_value).expanduser()
+
+        fname_value = parameters.get("filename")
+        if isinstance(fname_value, str) and fname_value.strip():
+            filename = fname_value.strip()
+
+        warmup_value = parameters.get("warmup")
+        if isinstance(warmup_value, (int, float)):
+            warmup = float(warmup_value)
+        elif isinstance(warmup_value, str) and warmup_value.strip():
+            try:
+                warmup = float(warmup_value)
+            except ValueError as exc:  # pragma: no cover - defensive
+                raise ValueError("warmup must be a number of seconds.") from exc
+
+    if warmup < 0:
+        raise ValueError("warmup must be zero or a positive number of seconds.")
+
+    save_dir.mkdir(parents=True, exist_ok=True)
+    outfile = (save_dir / filename).with_suffix(".jpg")
+
+    picam2 = Picamera2()
+    picam2.configure(picam2.create_still_configuration())
+
+    started = time.monotonic()
+    picam2.start()
+    if warmup:
+        time.sleep(warmup)
+    picam2.capture_file(str(outfile))
+    picam2.stop()
+    duration = time.monotonic() - started
+
+    return {
+        "saved_path": str(outfile),
+        "directory": str(save_dir),
+        "filename": outfile.name,
+        "warmup_seconds": warmup,
+        "duration_seconds": round(duration, 3),
+    }
+
+
+def _run_led_demo(parameters: Any) -> Dict[str, Any]:
+    """Run the three-LED chase/blink routine using gpiozero, matching led_test.py wiring."""
+
+    timeout = _parse_timeout_parameter(parameters, _DEFAULT_LED_TIMEOUT)
+    context = _ActionExecutionContext(timeout)
+
+    try:
+        from gpiozero import LED
+    except ImportError as exc:
+        raise RuntimeError(
+            "gpiozero is required to drive the LEDs. Install it on the Raspberry Pi."
+        ) from exc
+
+    cycles = 2
+    if isinstance(parameters, dict) and "cycles" in parameters:
+        try:
+            cycles_value = int(parameters["cycles"])
+        except (TypeError, ValueError) as exc:
+            raise ValueError("cycles must be an integer (0 for continuous).") from exc
+        if cycles_value < 0:
+            raise ValueError("cycles must be zero or a positive integer.")
+        cycles = cycles_value
+
+    led1 = LED(_LED_PINS["led1"])
+    led2 = LED(_LED_PINS["led2"])
+    led3 = LED(_LED_PINS["led3"])
+
+    def chase(delay: float = 0.15) -> bool:
+        led1.off()
+        led2.off()
+        led3.off()
+        if not context.sleep(delay):
+            return False
+        led1.on()
+        if not context.sleep(delay):
+            return False
+        led1.off()
+        led2.on()
+        if not context.sleep(delay):
+            return False
+        led2.off()
+        led3.on()
+        if not context.sleep(delay):
+            return False
+        led3.off()
+        return not context.timed_out
+
+    def all_on(delay: float = 0.4) -> bool:
+        led1.on()
+        led2.on()
+        led3.on()
+        if not context.sleep(delay):
+            return False
+        led1.off()
+        led2.off()
+        led3.off()
+        return not context.timed_out and context.sleep(delay)
+
+    def blink_all(delay: float = 0.07, times: int = 8) -> bool:
+        for _ in range(times):
+            led1.on()
+            led2.on()
+            led3.on()
+            if not context.sleep(delay):
+                return False
+            led1.off()
+            led2.off()
+            led3.off()
+            if not context.sleep(delay):
+                return False
+        return True
+
+    executed_cycles = 0
+    context.log(
+        "LED demo start",
+        pins=_LED_PINS,
+        cycles=cycles if cycles > 0 else "until timeout",
+        timeout_seconds=timeout,
+    )
+
+    try:
+        while not context.timed_out:
+            if cycles > 0 and executed_cycles >= cycles:
+                break
+
+            for _ in range(4):
+                if not chase():
+                    break
+            if context.timed_out:
+                break
+
+            for _ in range(3):
+                if not all_on():
+                    break
+            if context.timed_out:
+                break
+
+            if not blink_all():
+                break
+
+            executed_cycles += 1
+    finally:
+        led1.off()
+        led2.off()
+        led3.off()
+        led1.close()
+        led2.close()
+        led3.close()
+        context.log("LED demo finished", cycles_executed=executed_cycles, timed_out=context.timed_out)
+
+    return {
+        "events": context.events,
+        "timed_out": context.timed_out,
+        "duration_seconds": context.elapsed(),
+        "cycles_executed": executed_cycles,
+        "pins": _LED_PINS,
+    }
 
 
 def _run_motor_test(parameters: Any) -> Dict[str, Any]:
@@ -1524,6 +1785,170 @@ def _run_servo_demo(parameters: Any) -> Dict[str, Any]:
     }
 
 
+_DUAL_SERVO_PINS = {"servo1": 12, "servo2": 19}
+
+
+def _run_dual_servo_demo(parameters: Any) -> Dict[str, Any]:
+    """Dual-servo inverse sweep demo based on two_servo_test.py."""
+
+    timeout = _parse_timeout_parameter(parameters, _DEFAULT_DUAL_SERVO_TIMEOUT)
+    context = _ActionExecutionContext(timeout)
+
+    try:
+        from gpiozero import AngularServo, Device
+    except ImportError as exc:
+        raise RuntimeError(
+            "gpiozero is required for the dual-servo demo. Install it on the Raspberry Pi."
+        ) from exc
+
+    try:
+        from gpiozero.pins.pigpio import PiGPIOFactory  # type: ignore
+    except Exception:
+        PiGPIOFactory = None  # type: ignore
+
+    cycles = 3
+    step = 3.0
+    delay = 0.02
+    use_pigpio = False
+
+    if isinstance(parameters, dict):
+        if "cycles" in parameters:
+            try:
+                cycles_value = int(parameters["cycles"])
+            except (TypeError, ValueError) as exc:
+                raise ValueError("cycles must be an integer.") from exc
+            if cycles_value < 0:
+                raise ValueError("cycles must be zero or a positive integer.")
+            cycles = cycles_value
+
+        if "step" in parameters and parameters["step"] is not None:
+            try:
+                step = float(parameters["step"])
+            except (TypeError, ValueError) as exc:
+                raise ValueError("step must be a number.") from exc
+        if step <= 0:
+            raise ValueError("step must be greater than zero.")
+
+        if "delay" in parameters and parameters["delay"] is not None:
+            try:
+                delay = float(parameters["delay"])
+            except (TypeError, ValueError) as exc:
+                raise ValueError("delay must be a number.") from exc
+        if delay <= 0:
+            raise ValueError("delay must be greater than zero.")
+
+        use_pigpio = bool(parameters.get("pigpio"))
+
+    if use_pigpio:
+        if PiGPIOFactory is None or Device is None:
+            raise RuntimeError(
+                "pigpio pin factory is unavailable. Install pigpio and start pigpiod."
+            )
+        Device.pin_factory = PiGPIOFactory()
+
+    servo1 = AngularServo(
+        _DUAL_SERVO_PINS["servo1"],
+        min_pulse_width=0.0005,
+        max_pulse_width=0.0025,
+        min_angle=0.0,
+        max_angle=180.0,
+        frame_width=0.02,
+    )
+    servo2 = AngularServo(
+        _DUAL_SERVO_PINS["servo2"],
+        min_pulse_width=0.0005,
+        max_pulse_width=0.0025,
+        min_angle=0.0,
+        max_angle=180.0,
+        frame_width=0.02,
+    )
+
+    context.log(
+        "Dual-servo demo start",
+        pins=_DUAL_SERVO_PINS,
+        cycles=cycles if cycles > 0 else "until timeout",
+        step=step,
+        delay_seconds=delay,
+        pigpio=use_pigpio,
+    )
+
+    executed_cycles = 0
+    try:
+        servo1.angle = 90.0
+        servo2.angle = 90.0
+        context.log("Servos centered", angle1=90.0, angle2=90.0)
+        if context.timed_out or not context.sleep(0.5):
+            context.log("Timeout reached before starting sweep")
+            return {
+                "events": context.events,
+                "timed_out": context.timed_out,
+                "duration_seconds": context.elapsed(),
+                "cycles_executed": executed_cycles,
+                "pins": _DUAL_SERVO_PINS,
+                "step": step,
+                "delay": delay,
+                "pigpio": use_pigpio,
+            }
+
+        while not context.timed_out:
+            if cycles > 0 and executed_cycles >= cycles:
+                break
+
+            angle = 0.0
+            while angle <= 180.0 + 1e-9:
+                servo1.angle = angle
+                servo2.angle = 180.0 - angle
+                if int(angle) % 15 == 0 or angle in (0.0, 180.0):
+                    context.log(
+                        "Sweep up",
+                        angle1=round(angle, 1),
+                        angle2=round(180.0 - angle, 1),
+                    )
+                if not context.sleep(delay):
+                    break
+                angle += step
+
+            angle = 180.0
+            while angle >= 0.0 - 1e-9 and not context.timed_out:
+                servo1.angle = angle
+                servo2.angle = 180.0 - angle
+                if int(angle) % 15 == 0 or angle in (0.0, 180.0):
+                    context.log(
+                        "Sweep down",
+                        angle1=round(angle, 1),
+                        angle2=round(180.0 - angle, 1),
+                    )
+                if not context.sleep(delay):
+                    break
+                angle -= step
+
+            if context.timed_out:
+                break
+
+            executed_cycles += 1
+    finally:
+        servo1.value = None
+        servo2.value = None
+        servo1.close()
+        servo2.close()
+        context.log(
+            "Dual-servo demo finished",
+            cycles_executed=executed_cycles,
+            timed_out=context.timed_out,
+        )
+
+    return {
+        "events": context.events,
+        "timed_out": context.timed_out,
+        "duration_seconds": context.elapsed(),
+        "cycles_executed": executed_cycles,
+        "pins": _DUAL_SERVO_PINS,
+        "step": step,
+        "delay": delay,
+        "pigpio": use_pigpio,
+    }
+
+
 def _execute_action(action: str, parameters: Dict[str, Any]) -> Tuple[bool, Any, Optional[str]]:
     # アクション名に応じてローカル処理を実行し、成功可否と結果を返す
     logging.info(
@@ -1547,6 +1972,12 @@ def _execute_action(action: str, parameters: Dict[str, Any]) -> Tuple[bool, Any,
             return True, _run_oled_robot_demo(parameters or {}), None
         if action == "run_servo_demo":
             return True, _run_servo_demo(parameters or {}), None
+        if action == "capture_camera_photo":
+            return True, _capture_camera_photo(parameters or {}), None
+        if action == "run_led_demo":
+            return True, _run_led_demo(parameters or {}), None
+        if action == "run_dual_servo_demo":
+            return True, _run_dual_servo_demo(parameters or {}), None
         if action == "no_action":
             message = parameters.get("message") if isinstance(parameters, dict) else None
             return True, {"message": message or "No action executed."}, None
@@ -1964,12 +2395,22 @@ def _heuristic_multi_plan(instruction: str) -> List[Dict[str, Any]]:
                 params["units"] = units
             _add("get_weather", params)
 
+    if any(
+        keyword in lowered
+        for keyword in ["camera", "photo", "picture", "snapshot"]
+    ) or "カメラ" in text or "写真" in text or "撮影" in text:
+        _add("capture_camera_photo", {})
+
     motor_keywords = ["motor test", "motor demo", "l293d", "dc motor"]
     if (
         any(keyword in lowered for keyword in motor_keywords)
         or ("モーター" in text and "サーボ" not in text)
     ) and "servo" not in lowered:
         _add("run_motor_test", {})
+
+    led_keywords = ["led", "blink", "blinking", "light show"]
+    if any(keyword in lowered for keyword in led_keywords) or "ライト" in text or "点滅" in text:
+        _add("run_led_demo", {})
 
     oled_keywords = ["oled", "st7735", "robot face", "lcd animation"]
     if (
@@ -1982,6 +2423,10 @@ def _heuristic_multi_plan(instruction: str) -> List[Dict[str, Any]]:
     if "servo" in lowered or "サーボ" in text:
         servo_params = _build_servo_parameters_from_instruction(instruction, lowered)
         _add("run_servo_demo", servo_params)
+        if any(
+            keyword in lowered for keyword in ["dual servo", "two servo", "two servos", "double servo", "2 servo", "dual sweep"]
+        ) or "2つのサーボ" in text or "二つのサーボ" in text:
+            _add("run_dual_servo_demo", {})
 
     return plans
 
