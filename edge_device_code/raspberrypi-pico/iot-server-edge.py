@@ -477,6 +477,8 @@ _motor_pwm = None
 _MOTOR_INITIALISED = False
 _PWM_RANGE_MAX = 4095
 _U16_MAX = 65535
+_MOTOR_DEFAULT_SPEED = 4095  # high enough to overcome startup friction
+_MOTOR_MIN_START_SPEED = 3200  # below this many motors will not start reliably
 
 
 def _init_motor():
@@ -536,7 +538,7 @@ def brake_motor():
     _motor_pwm.duty_u16(0)
 
 
-def motor_drive(direction: str = "forward", speed: int = 3000, duration_ms: int = 1500, brake: bool = False):
+def motor_drive(direction: str = "forward", speed: int = _MOTOR_DEFAULT_SPEED, duration_ms: int = 1500, brake: bool = False):
     """
     モーターを一定時間回す。direction: forward/reverse, speed:0..4095。
     duration_ms<=0 の場合は即座に停止（またはブレーキ）のみ行う。
@@ -549,6 +551,10 @@ def motor_drive(direction: str = "forward", speed: int = 3000, duration_ms: int 
         speed_int = 0
     elif speed_int > _PWM_RANGE_MAX:
         speed_int = _PWM_RANGE_MAX
+    # トルク不足で回らないケースを避けるため、0でないのに小さすぎる速度は底上げする
+    if speed_int > 0 and speed_int < _MOTOR_MIN_START_SPEED:
+        print("[motor] requested speed {} too low; raising to {}".format(speed, _MOTOR_MIN_START_SPEED))
+        speed_int = _MOTOR_MIN_START_SPEED
     duration_ms_int = int(duration_ms)
     SetMotorSpeed(direction == "forward", speed_int)
     if duration_ms_int > 0:
@@ -907,7 +913,7 @@ FUNCTIONS = {
         "description": "Drive the motor via PWM enable (GPIO13) and IN1/IN2 (GPIO14/15).",
         "params": [
             {"name": "direction", "type": "str", "default": "forward", "required": False},
-            {"name": "speed", "type": "int", "default": 3000, "required": False},
+            {"name": "speed", "type": "int", "default": _MOTOR_DEFAULT_SPEED, "required": False},
             {"name": "duration_ms", "type": "int", "default": 1500, "required": False},
             {"name": "brake", "type": "bool", "default": False, "required": False},
         ],
