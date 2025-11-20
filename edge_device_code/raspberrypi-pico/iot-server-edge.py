@@ -543,6 +543,7 @@ def motor_drive(direction: str = "forward", speed: int = _MOTOR_DEFAULT_SPEED, d
     モーターを一定時間回す。direction: forward/reverse, speed:0..4095。
     duration_ms<=0 の場合は即座に停止（またはブレーキ）のみ行う。
     """
+    print("[motor_debug] received: dir={}, speed={}, duration_ms={}".format(direction, speed, duration_ms))
     direction = (direction or "").lower().strip()
     if direction not in ("forward", "reverse"):
         raise ValueError("direction must be 'forward' or 'reverse'")
