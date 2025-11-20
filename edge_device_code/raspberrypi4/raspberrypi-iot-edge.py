@@ -84,6 +84,17 @@ AUTO_REGISTRATION_REQUESTED = (
         "on",
     }
 )
+# Self-approval toggle so the agent can register capabilities without a dashboard
+_AUTO_APPROVE_RAW = os.getenv("IOT_AGENT_AUTO_APPROVE", "1")
+AUTO_APPROVE = (
+    (_AUTO_APPROVE_RAW or "").strip().lower()
+    in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+)
 
 # 天気情報取得に使う OpenWeather の資格情報
 OPEN_WEATHER_API_KEY = os.getenv("OPEN_WEATHER_API_KEY")
@@ -456,7 +467,9 @@ def _register_device(session: requests.Session, device_id: str) -> Tuple[bool, b
             "location": LOCATION,
             "action_catalog": ACTION_CATALOG,
             "note": "TinyLlama-powered Raspberry Pi agent",
+            "registered_via": "edge-device",
         },
+        "approved": AUTO_APPROVE,
     }
 
     _console(
@@ -2717,21 +2730,32 @@ def main() -> None:
         )
     )
 
-    if AUTO_REGISTRATION_REQUESTED:
-        logging.warning(
-            "IOT_AGENT_AUTO_REGISTER is deprecated. Manual approval is now required;"
-            " the device will not auto-register with the server."
+    if AUTO_APPROVE:
+        logging.info(
+            "Auto-approval enabled; device '%s' will register itself with capabilities.",
+            device_id,
         )
         _console(
-            "AUTO_REGISTER flag detected but manual approval workflow is in effect."
+            "Auto-approval ON. Registering '{}' directly with full capabilities.".format(
+                device_id
+            )
         )
-    logging.info(
-        "Manual registration is required. Add device '%s' from the dashboard to approve it.",
-        device_id,
-    )
-    _console(
-        "Manual approval required on dashboard for device '{}'.".format(device_id)
-    )
+    else:
+        if AUTO_REGISTRATION_REQUESTED:
+            logging.warning(
+                "IOT_AGENT_AUTO_REGISTER is deprecated. Manual approval is now required;"
+                " the device will not auto-register with the server."
+            )
+            _console(
+                "AUTO_REGISTER flag detected but manual approval workflow is in effect."
+            )
+        logging.info(
+            "Manual registration is required. Add device '%s' from the dashboard to approve it.",
+            device_id,
+        )
+        _console(
+            "Manual approval required on dashboard for device '{}'.".format(device_id)
+        )
 
     manual_approval_required_logged = False
     while True:

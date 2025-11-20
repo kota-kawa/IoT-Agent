@@ -84,6 +84,7 @@ docker run --rm -p 5006:5006 --env-file .env iot-agent
 - `edge_device_code/raspberrypi4/raspberrypi-iot-edge.py` — Raspberry Pi 4 向け。GPIO やセンサー制御をカスタマイズするためのテンプレート。
 - `edge_device_code/raspberrypi-pico/iot-server-edge.py` — MicroPython ベースの Pico W 用実装。Wi-Fi 経由でジョブを処理します。
 - 上記サンプルは `secrets.py` 等でサーバー URL・デバイス ID・認証情報を設定した後、ジョブポーリング (`/jobs/next`) と結果報告 (`/jobs/result`) を行います。
+- Raspberry Pi 4/Jetson エージェントは `IOT_AGENT_AUTO_APPROVE=1`（デフォルト）で起動するとサーバー側の手動承認なしで capabilities を登録します。セキュリティの都合で承認を必須にしたい場合は `IOT_AGENT_AUTO_APPROVE=0` を設定してください。
 
 ## フロントエンドの特徴
 - `app.js` は 5 秒間隔で `/api/devices` をポーリングし、カード表示やメタ情報を整形します。

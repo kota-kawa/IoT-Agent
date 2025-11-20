@@ -71,6 +71,16 @@ DEVICE_ID_PATH = Path(
 
 DISPLAY_NAME = os.getenv("IOT_AGENT_DISPLAY_NAME", "Jetson Orin Agent")
 LOCATION = os.getenv("IOT_AGENT_LOCATION", "Lab")
+_AUTO_APPROVE_RAW = os.getenv("IOT_AGENT_AUTO_APPROVE", "1")
+AUTO_APPROVE = (
+    (_AUTO_APPROVE_RAW or "").strip().lower()
+    in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+)
 
 REGISTER_PATH = "/api/devices/register"
 NEXT_PATH = "/api/devices/{device_id}/jobs/next"
@@ -251,7 +261,9 @@ def _register_device(session: requests.Session, device_id: str) -> Tuple[bool, b
             "location": LOCATION,
             "action_catalog": ACTION_CATALOG,
             "note": "TinySwallow-powered Jetson agent",
+            "registered_via": "edge-device",
         },
+        "approved": AUTO_APPROVE,
     }
 
     _console(
@@ -1051,6 +1063,25 @@ def main() -> None:
             LLAMA_GPU_LAYERS,
         )
     )
+
+    if AUTO_APPROVE:
+        logging.info(
+            "Auto-approval enabled; device '%s' will register itself with capabilities.",
+            device_id,
+        )
+        _console(
+            "Auto-approval ON. Registering '{}' directly with full capabilities.".format(
+                device_id
+            )
+        )
+    else:
+        logging.info(
+            "Manual registration is required. Add device '%s' from the dashboard to approve it.",
+            device_id,
+        )
+        _console(
+            "Manual approval required on dashboard for device '{}'.".format(device_id)
+        )
 
     manual_approval_required_logged = False
     while True:
