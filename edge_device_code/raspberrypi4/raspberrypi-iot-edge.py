@@ -308,6 +308,12 @@ SUPPORTED_ACTIONS: Dict[str, Dict[str, Any]] = {
         "description": "Run the dual-servo inverse sweep demo on GPIO12 and GPIO19.",
         "params": [
             {
+                "name": "command",
+                "type": "string",
+                "required": False,
+                "description": "Subcommand to run: demo, set, off, or info (defaults to demo).",
+            },
+            {
                 "name": "cycles",
                 "type": "integer",
                 "required": False,
@@ -330,6 +336,24 @@ SUPPORTED_ACTIONS: Dict[str, Dict[str, Any]] = {
                 "type": "boolean",
                 "required": False,
                 "description": "Use the PiGPIO pin factory for more stable PWM (if available).",
+            },
+            {
+                "name": "angle1",
+                "type": "number",
+                "required": False,
+                "description": "Angle for servo1 (GPIO12) when using the set command.",
+            },
+            {
+                "name": "angle2",
+                "type": "number",
+                "required": False,
+                "description": "Angle for servo2 (GPIO19) when using the set command.",
+            },
+            {
+                "name": "hold",
+                "type": "number",
+                "required": False,
+                "description": "Hold duration in seconds after executing set/off (0 for none).",
             },
             {
                 "name": "timeout",
@@ -1799,32 +1823,31 @@ def _run_servo_demo(parameters: Any) -> Dict[str, Any]:
 
 
 _DUAL_SERVO_PINS = {"servo1": 12, "servo2": 19}
+_DUAL_SERVO_MIN_ANGLE = 0.0
+_DUAL_SERVO_MAX_ANGLE = 180.0
+_DUAL_SERVO_MIN_PW = 0.0005
+_DUAL_SERVO_MAX_PW = 0.0025
 
 
 def _run_dual_servo_demo(parameters: Any) -> Dict[str, Any]:
-    """Dual-servo inverse sweep demo based on two_servo_test.py."""
+    """Dual-servo operations mirroring two_servo_test.py (demo/set/off/info)."""
 
     timeout = _parse_timeout_parameter(parameters, _DEFAULT_DUAL_SERVO_TIMEOUT)
     context = _ActionExecutionContext(timeout)
 
-    try:
-        from gpiozero import AngularServo, Device
-    except ImportError as exc:
-        raise RuntimeError(
-            "gpiozero is required for the dual-servo demo. Install it on the Raspberry Pi."
-        ) from exc
-
-    try:
-        from gpiozero.pins.pigpio import PiGPIOFactory  # type: ignore
-    except Exception:
-        PiGPIOFactory = None  # type: ignore
-
+    command = "demo"
     cycles = 3
     step = 3.0
     delay = 0.02
     use_pigpio = False
+    hold = 0.0
+    angle1: Optional[float] = None
+    angle2: Optional[float] = None
 
     if isinstance(parameters, dict):
+        if "command" in parameters and parameters["command"] is not None:
+            command = str(parameters["command"]).strip().lower()
+
         if "cycles" in parameters:
             try:
                 cycles_value = int(parameters["cycles"])
@@ -1839,18 +1862,82 @@ def _run_dual_servo_demo(parameters: Any) -> Dict[str, Any]:
                 step = float(parameters["step"])
             except (TypeError, ValueError) as exc:
                 raise ValueError("step must be a number.") from exc
-        if step <= 0:
-            raise ValueError("step must be greater than zero.")
+            if step <= 0:
+                raise ValueError("step must be greater than zero.")
 
         if "delay" in parameters and parameters["delay"] is not None:
             try:
                 delay = float(parameters["delay"])
             except (TypeError, ValueError) as exc:
                 raise ValueError("delay must be a number.") from exc
-        if delay <= 0:
-            raise ValueError("delay must be greater than zero.")
+            if delay <= 0:
+                raise ValueError("delay must be greater than zero.")
+
+        if "hold" in parameters and parameters["hold"] is not None:
+            try:
+                hold = float(parameters["hold"])
+            except (TypeError, ValueError) as exc:
+                raise ValueError("hold must be a number.") from exc
+            if hold < 0:
+                raise ValueError("hold must be zero or a positive value.")
+
+        if "angle1" in parameters and parameters["angle1"] is not None:
+            try:
+                angle1 = float(parameters["angle1"])
+            except (TypeError, ValueError) as exc:
+                raise ValueError("angle1 must be a number.") from exc
+
+        if "angle2" in parameters and parameters["angle2"] is not None:
+            try:
+                angle2 = float(parameters["angle2"])
+            except (TypeError, ValueError) as exc:
+                raise ValueError("angle2 must be a number.") from exc
 
         use_pigpio = bool(parameters.get("pigpio"))
+
+    command = command or "demo"
+    if command not in {"demo", "set", "off", "info"}:
+        raise ValueError("command must be one of: demo, set, off, info.")
+
+    def _validate_angle(label: str, value: float) -> float:
+        if not (_DUAL_SERVO_MIN_ANGLE <= value <= _DUAL_SERVO_MAX_ANGLE):
+            raise ValueError(
+                f"{label} must be between {_DUAL_SERVO_MIN_ANGLE} and {_DUAL_SERVO_MAX_ANGLE} degrees."
+            )
+        return value
+
+    if command == "set":
+        if angle1 is None or angle2 is None:
+            raise ValueError("angle1 and angle2 are required when command is 'set'.")
+        angle1 = _validate_angle("angle1", angle1)
+        angle2 = _validate_angle("angle2", angle2)
+
+    if command == "info":
+        context.log(
+            "Dual-servo wiring info",
+            pins=_DUAL_SERVO_PINS,
+            angle_range=(_DUAL_SERVO_MIN_ANGLE, _DUAL_SERVO_MAX_ANGLE),
+        )
+        return {
+            "events": context.events,
+            "timed_out": context.timed_out,
+            "duration_seconds": context.elapsed(),
+            "command": command,
+            "pins": _DUAL_SERVO_PINS,
+            "angle_range": (_DUAL_SERVO_MIN_ANGLE, _DUAL_SERVO_MAX_ANGLE),
+        }
+
+    try:
+        from gpiozero import AngularServo, Device
+    except ImportError as exc:
+        raise RuntimeError(
+            "gpiozero is required for the dual-servo demo. Install it on the Raspberry Pi."
+        ) from exc
+
+    try:
+        from gpiozero.pins.pigpio import PiGPIOFactory  # type: ignore
+    except Exception:
+        PiGPIOFactory = None  # type: ignore
 
     if use_pigpio:
         if PiGPIOFactory is None or Device is None:
@@ -1861,24 +1948,25 @@ def _run_dual_servo_demo(parameters: Any) -> Dict[str, Any]:
 
     servo1 = AngularServo(
         _DUAL_SERVO_PINS["servo1"],
-        min_pulse_width=0.0005,
-        max_pulse_width=0.0025,
-        min_angle=0.0,
-        max_angle=180.0,
+        min_pulse_width=_DUAL_SERVO_MIN_PW,
+        max_pulse_width=_DUAL_SERVO_MAX_PW,
+        min_angle=_DUAL_SERVO_MIN_ANGLE,
+        max_angle=_DUAL_SERVO_MAX_ANGLE,
         frame_width=0.02,
     )
     servo2 = AngularServo(
         _DUAL_SERVO_PINS["servo2"],
-        min_pulse_width=0.0005,
-        max_pulse_width=0.0025,
-        min_angle=0.0,
-        max_angle=180.0,
+        min_pulse_width=_DUAL_SERVO_MIN_PW,
+        max_pulse_width=_DUAL_SERVO_MAX_PW,
+        min_angle=_DUAL_SERVO_MIN_ANGLE,
+        max_angle=_DUAL_SERVO_MAX_ANGLE,
         frame_width=0.02,
     )
 
     context.log(
-        "Dual-servo demo start",
+        "Dual-servo routine start",
         pins=_DUAL_SERVO_PINS,
+        command=command,
         cycles=cycles if cycles > 0 else "until timeout",
         step=step,
         delay_seconds=delay,
@@ -1890,7 +1978,7 @@ def _run_dual_servo_demo(parameters: Any) -> Dict[str, Any]:
         servo1.angle = 90.0
         servo2.angle = 90.0
         context.log("Servos centered", angle1=90.0, angle2=90.0)
-        if context.timed_out or not context.sleep(0.5):
+        if command == "demo" and (context.timed_out or not context.sleep(0.5)):
             context.log("Timeout reached before starting sweep")
             return {
                 "events": context.events,
@@ -1901,53 +1989,76 @@ def _run_dual_servo_demo(parameters: Any) -> Dict[str, Any]:
                 "step": step,
                 "delay": delay,
                 "pigpio": use_pigpio,
+                "command": command,
             }
 
-        while not context.timed_out:
-            if cycles > 0 and executed_cycles >= cycles:
-                break
+        if command == "set":
+            servo1.angle = angle1  # type: ignore[arg-type]
+            servo2.angle = angle2  # type: ignore[arg-type]
+            context.log("Angles set", angle1=angle1, angle2=angle2)
+            if hold > 0 and not context.sleep(hold):
+                context.log("Timed out while holding angles")
 
-            angle = 0.0
-            while angle <= 180.0 + 1e-9:
-                servo1.angle = angle
-                servo2.angle = 180.0 - angle
-                if int(angle) % 15 == 0 or angle in (0.0, 180.0):
-                    context.log(
-                        "Sweep up",
-                        angle1=round(angle, 1),
-                        angle2=round(180.0 - angle, 1),
-                    )
-                if not context.sleep(delay):
+        elif command == "off":
+            servo1.value = None
+            servo2.value = None
+            context.log("PWM stopped for both servos")
+            if hold > 0 and not context.sleep(hold):
+                context.log("Timed out while holding off state")
+
+        else:  # demo
+            while not context.timed_out:
+                if cycles > 0 and executed_cycles >= cycles:
                     break
-                angle += step
 
-            angle = 180.0
-            while angle >= 0.0 - 1e-9 and not context.timed_out:
-                servo1.angle = angle
-                servo2.angle = 180.0 - angle
-                if int(angle) % 15 == 0 or angle in (0.0, 180.0):
-                    context.log(
-                        "Sweep down",
-                        angle1=round(angle, 1),
-                        angle2=round(180.0 - angle, 1),
-                    )
-                if not context.sleep(delay):
+                angle = 0.0
+                while angle <= _DUAL_SERVO_MAX_ANGLE + 1e-9:
+                    servo1.angle = angle
+                    servo2.angle = _DUAL_SERVO_MAX_ANGLE - angle
+                    if int(angle) % 15 == 0 or angle in (
+                        _DUAL_SERVO_MIN_ANGLE,
+                        _DUAL_SERVO_MAX_ANGLE,
+                    ):
+                        context.log(
+                            "Sweep up",
+                            angle1=round(angle, 1),
+                            angle2=round(_DUAL_SERVO_MAX_ANGLE - angle, 1),
+                        )
+                    if not context.sleep(delay):
+                        break
+                    angle += step
+
+                angle = _DUAL_SERVO_MAX_ANGLE
+                while angle >= _DUAL_SERVO_MIN_ANGLE - 1e-9 and not context.timed_out:
+                    servo1.angle = angle
+                    servo2.angle = _DUAL_SERVO_MAX_ANGLE - angle
+                    if int(angle) % 15 == 0 or angle in (
+                        _DUAL_SERVO_MIN_ANGLE,
+                        _DUAL_SERVO_MAX_ANGLE,
+                    ):
+                        context.log(
+                            "Sweep down",
+                            angle1=round(angle, 1),
+                            angle2=round(_DUAL_SERVO_MAX_ANGLE - angle, 1),
+                        )
+                    if not context.sleep(delay):
+                        break
+                    angle -= step
+
+                if context.timed_out:
                     break
-                angle -= step
 
-            if context.timed_out:
-                break
-
-            executed_cycles += 1
+                executed_cycles += 1
     finally:
         servo1.value = None
         servo2.value = None
         servo1.close()
         servo2.close()
         context.log(
-            "Dual-servo demo finished",
+            "Dual-servo routine finished",
             cycles_executed=executed_cycles,
             timed_out=context.timed_out,
+            command=command,
         )
 
     return {
@@ -1959,6 +2070,10 @@ def _run_dual_servo_demo(parameters: Any) -> Dict[str, Any]:
         "step": step,
         "delay": delay,
         "pigpio": use_pigpio,
+        "command": command,
+        "angle1": angle1,
+        "angle2": angle2,
+        "hold": hold,
     }
 
 
