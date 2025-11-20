@@ -1,0 +1,16 @@
+# /etc/systemd/system/pinmux-ph00-out.service
+[Unit]
+Description=Bootstrap J12 pinmux to GPIO (Jetson Orin Nano)
+DefaultDependencies=no
+After=local-fs.target
+Before=multi-user.target
+
+[Service]
+Type=oneshot
+# 新機能: 内蔵プル設定を確実化するために環境変数で指示（j12_gpio_bootstrap.py が devmem でPADCTLを更新）
+Environment=J12_FORCE_PUD=down
+ExecStart=/usr/local/sbin/j12_gpio_bootstrap.py
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
