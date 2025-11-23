@@ -23,7 +23,7 @@ OpenAI API を利用したチャット型オーケストレーションでデバ
    ```bash
    pip install -r requirements.txt
    ```
-3. **環境変数 (.env 推奨)**:
+3. **環境変数 (secrets.env 推奨)**:
    - `OPENAI_API_KEY` — LLM 呼び出しに使用する OpenAI API キー。
    - `FLASK_SECRET_KEY` — Flask セッション暗号化キー (未設定時は "change-this-secret")。
    - `MAX_COMPLETED_JOBS` — 完了ジョブの保持数 (デフォルト 200)。
@@ -41,7 +41,7 @@ flask run --host=0.0.0.0 --port=5006
 ### Gunicorn (Dockerfile)
 ```bash
 docker build -t iot-agent .
-docker run --rm -p 5006:5006 --env-file .env iot-agent
+docker run --rm -p 5006:5006 --env-file secrets.env iot-agent
 ```
 
 ## 認証とフロントエンド

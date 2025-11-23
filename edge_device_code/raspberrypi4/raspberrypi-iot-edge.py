@@ -37,18 +37,21 @@ import requests
 from dotenv import load_dotenv
 from llama_cpp import Llama
 
-# Load environment variables from potential .env locations before reading them.
-# .env ファイルを探索する候補パス
+# Load environment variables from potential secrets.env locations before reading them.
+# secrets.env ファイルを探索する候補パス（レガシー .env もフォールバック）
 _ENV_CANDIDATES = [
+    Path(__file__).resolve().parent / "secrets.env",
+    Path(__file__).resolve().parent.parent / "secrets.env",
+    Path.cwd() / "secrets.env",
     Path(__file__).resolve().parent / ".env",
     Path(__file__).resolve().parent.parent / ".env",
     Path.cwd() / ".env",
 ]
 for _env_file in _ENV_CANDIDATES:
-    # 各パスに .env があれば読み込んで環境変数を補完
+    # 各パスに secrets.env/.env があれば読み込んで環境変数を補完
     if _env_file.exists():
         load_dotenv(_env_file, override=False)
-# Also respect a .env in the current working directory if one exists.
+# Also respect any other default .env resolution from python-dotenv.
 load_dotenv(override=False)
 
 # ==== Configuration ========================================================
@@ -681,6 +684,17 @@ def _build_result_payload(
     error: Optional[str],
 ) -> Dict[str, Any]:
     # サーバーが期待するフォーマットに結果をまとめる
+    def _truncate_text(value: Any) -> Any:
+        if isinstance(value, str) and len(value) > _RETURN_TEXT_LIMIT:
+            head = value[:_RETURN_TEXT_KEEP]
+            tail = value[-_RETURN_TEXT_KEEP:]
+            return f"{head}...[truncated]...{tail}"
+        return value
+
+    truncated_message = _truncate_text(message)
+    truncated_result = _truncate_text(result) if isinstance(result, str) else result
+    truncated_error = _truncate_text(error)
+
     return {
         "device_id": device_id,
         "job_id": job_id,
@@ -688,12 +702,12 @@ def _build_result_payload(
         "return_value": {
             "action": action,
             "parameters": parameters or {},
-            "message": message,
-            "result": result,
+            "message": truncated_message,
+            "result": truncated_result,
         },
         "stdout": None,
         "stderr": None,
-        "error": error,
+        "error": truncated_error,
         "ts": time.time(),
     }
 
@@ -863,6 +877,9 @@ _DEFAULT_OLED_DEMO_TIMEOUT = 60.0
 _DEFAULT_SERVO_TIMEOUT = 90.0
 _DEFAULT_LED_TIMEOUT = 45.0
 _DEFAULT_DUAL_SERVO_TIMEOUT = 120.0
+_OLED_RESULT_RETURN_SECONDS = 3.0
+_RETURN_TEXT_LIMIT = 3000
+_RETURN_TEXT_KEEP = 1500
 
 
 def _parse_timeout_parameter(parameters: Any, default: float) -> float:
@@ -1217,6 +1234,7 @@ def _run_motor_test(parameters: Any) -> Dict[str, Any]:
 def _run_oled_robot_demo(parameters: Any) -> Dict[str, Any]:
     timeout = _parse_timeout_parameter(parameters, _DEFAULT_OLED_DEMO_TIMEOUT)
     context = _ActionExecutionContext(timeout)
+    max_run_seconds = min(timeout, _OLED_RESULT_RETURN_SECONDS)
 
     try:
         import math
@@ -1414,6 +1432,14 @@ def _run_oled_robot_demo(parameters: Any) -> Dict[str, Any]:
             if not context.sleep(frame_delay):
                 break
 
+            if context.elapsed() >= max_run_seconds:
+                context.log(
+                    "Reached OLED result return window; leaving display as-is",
+                    elapsed_seconds=round(context.elapsed(), 3),
+                    max_run_seconds=max_run_seconds,
+                )
+                break
+
         if context.timed_out:
             context.log("OLED demo stopped because the timeout was reached")
         else:
@@ -1425,17 +1451,12 @@ def _run_oled_robot_demo(parameters: Any) -> Dict[str, Any]:
             "duration_seconds": context.elapsed(),
             "frames_rendered": frames,
             "target_fps": FPS,
+            "display_left_on": True,
+            "max_run_seconds": max_run_seconds,
         }
     finally:
-        try:
-            if backlight is not None:
-                try:
-                    backlight.value = 0.0
-                except Exception:
-                    pass
-                backlight.close()
-        except Exception:
-            logging.exception("Failed to clean up OLED backlight PWM")
+        if backlight is not None:
+            context.log("Leaving OLED backlight on after demo")
 
 
 def _extract_servo_arguments(parameters: Any) -> Tuple[List[str], bool]:

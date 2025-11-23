@@ -36,6 +36,9 @@ except ImportError:  # pragma: no cover - Jetson-only dependency
 # ==== Environment bootstrap ==============================================
 
 _ENV_CANDIDATES = [
+    Path(__file__).resolve().parent / "secrets.env",
+    Path(__file__).resolve().parent.parent / "secrets.env",
+    Path.cwd() / "secrets.env",
     Path(__file__).resolve().parent / ".env",
     Path(__file__).resolve().parent.parent / ".env",
     Path.cwd() / ".env",
@@ -445,6 +448,17 @@ def _build_result_payload(
     result: Any,
     error: Optional[str],
 ) -> Dict[str, Any]:
+    def _truncate_text(value: Any) -> Any:
+        if isinstance(value, str) and len(value) > _RETURN_TEXT_LIMIT:
+            head = value[:_RETURN_TEXT_KEEP]
+            tail = value[-_RETURN_TEXT_KEEP:]
+            return f"{head}...[truncated]...{tail}"
+        return value
+
+    truncated_message = _truncate_text(message)
+    truncated_result = _truncate_text(result) if isinstance(result, str) else result
+    truncated_error = _truncate_text(error)
+
     return {
         "device_id": device_id,
         "job_id": job_id,
@@ -452,12 +466,12 @@ def _build_result_payload(
         "return_value": {
             "action": action,
             "parameters": parameters or {},
-            "message": message,
-            "result": result,
+            "message": truncated_message,
+            "result": truncated_result,
         },
         "stdout": None,
         "stderr": None,
-        "error": error,
+        "error": truncated_error,
         "ts": time.time(),
     }
 
@@ -581,6 +595,9 @@ FRAME_INTERVAL = 1.0 / FPS
 MAX_INIT_RETRY = 3
 MAX_ERROR_STREAK_BEFORE_RESET = 5
 MAX_RECOVER_RETRY = 3
+_OLED_RESULT_RETURN_SECONDS = 3.0
+_RETURN_TEXT_LIMIT = 3000
+_RETURN_TEXT_KEEP = 1500
 
 
 def _require_oled_lib() -> None:
@@ -675,6 +692,7 @@ def _draw_frame(device: sh1107, frame_no: int) -> None:
 def _run_oled_demo(parameters: Dict[str, Any]) -> Dict[str, Any]:
     _require_oled_lib()
     duration = _coerce_positive_float(parameters, "duration", 20.0)
+    effective_duration = min(duration, _OLED_RESULT_RETURN_SECONDS)
     context = _ActionContext(timeout=duration)
     device = _init_device_with_retry()
     frame = 0
@@ -699,6 +717,13 @@ def _run_oled_demo(parameters: Dict[str, Any]) -> Dict[str, Any]:
                     error_streak = 0
             frame += 1
             time.sleep(FRAME_INTERVAL)
+            if time.monotonic() - context.started >= effective_duration:
+                context.log(
+                    "Returning early after brief OLED run; leaving display on",
+                    elapsed_seconds=round(time.monotonic() - context.started, 3),
+                    max_run_seconds=effective_duration,
+                )
+                break
     finally:
         try:
             device.cleanup()  # type: ignore[call-arg]
@@ -710,6 +735,8 @@ def _run_oled_demo(parameters: Dict[str, Any]) -> Dict[str, Any]:
         "duration_seconds": round(time.monotonic() - context.started, 3),
         "events": context.events,
         "timed_out": context.timed_out,
+        "display_left_on": True,
+        "max_run_seconds": effective_duration,
     }
 
 

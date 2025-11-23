@@ -20,6 +20,7 @@ from iot_agent.llm import (
     _client,
     _normalise_conversation_messages,
 )
+from model_selection import update_override
 from iot_agent.models import DeviceState
 from iot_agent.state import _COMPLETED_JOBS, _DEVICES, _JOB_METADATA, _PENDING_JOBS
 from iot_agent.validation import _validate_device_command, _validate_device_command_sequence
@@ -89,6 +90,19 @@ def session_logout():
 
     session.clear()
     return jsonify({"authenticated": False})
+
+
+@app.post("/model_settings")
+def update_model_settings():
+    """Update LLM model selection without restarting the service."""
+
+    payload = request.get_json(silent=True) or {}
+    selection = payload if isinstance(payload, dict) else {}
+    try:
+        update_override(selection if selection else None)
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"error": f"モデル設定の更新に失敗しました: {exc}"}), 500
+    return jsonify({"status": "ok", "applied": selection or "from_file"})
 
 
 @app.get("/api/devices/ping")
