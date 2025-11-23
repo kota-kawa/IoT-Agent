@@ -74,6 +74,14 @@ try:
 except Exception:
     pass
 
+
+def _truncate_text(value):
+    if isinstance(value, str) and len(value) > RETURN_TEXT_LIMIT:
+        head = value[:RETURN_TEXT_KEEP]
+        tail = value[-RETURN_TEXT_KEEP:]
+        return "{}...[truncated]...{}".format(head, tail)
+    return value
+
 # ポーリングや登録関連の挙動を制御するパラメータ
 POLL_INTERVAL_SEC = 1  # 1秒間隔でサーバーをポーリング
 AUTO_REGISTER_ON_BOOT = False  # True にすると起動時に自動登録
@@ -82,6 +90,8 @@ CAPABILITY_RESYNC_INTERVAL_SEC = 30  # 同期失敗時の再試行間隔（秒�
 
 USER_AGENT = "MicroPython-IoT-Edge-Agent/1.1"
 HTTP_BODY_PREVIEW_LEN = 512
+RETURN_TEXT_LIMIT = 3000
+RETURN_TEXT_KEEP = 1500
 HTTP_TIMEOUT_SEC = 15
 _RECV_CHUNK = 1024
 RESULT_MAX_ATTEMPTS = 4
@@ -1304,11 +1314,9 @@ def agent_loop():
                 _call_function_by_name, {"name": name, "args": args}
             )
 
-            # 長文は切り詰め
-            if out and len(out) > HTTP_BODY_PREVIEW_LEN:
-                out = out[:HTTP_BODY_PREVIEW_LEN] + "\n...[truncated]"
-            if err and len(err) > HTTP_BODY_PREVIEW_LEN:
-                err = err[:HTTP_BODY_PREVIEW_LEN] + "\n...[truncated]"
+            ret = _truncate_text(ret)
+            out = _truncate_text(out)
+            err = _truncate_text(err)
 
             print(
                 "[agent] exec finished for job {}: ok={} return={}".format(

@@ -11,13 +11,13 @@
 - `pip install -r requirements.txt` installs Flask, dotenv, and the OpenAI SDK.
 - `export FLASK_APP=app && flask run --host=0.0.0.0 --port=5006` starts the reloadable dev server.
 - `docker-compose up --build` mirrors the dev setup with hot reload inside a container.
-- `docker build -t iot-agent . && docker run --rm -p 5006:5006 --env-file .env iot-agent` packages and runs the Gunicorn image.
+- `docker build -t iot-agent . && docker run --rm -p 5006:5006 --env-file secrets.env iot-agent` packages and runs the Gunicorn image.
 
 ## Coding Style & Naming Conventions
 - Python follows PEP 8 with 4-space indents, dataclasses for state, and explicit type hints; keep module-level constants in screaming snake case (e.g., `DEVICE_RESULT_TIMEOUT`).
 - JavaScript in `app.js` uses `const`/`let`, arrow utilities, and 2-space indents; prefer descriptive functions such as `formatRelativeTime`.
 - Align HTML ids with JS selectors (`#deviceGrid`, `#registerNotice`) and avoid inline styling.
-- Configuration secrets belong in `.env`; do not persist environment-specific values in source.
+- Configuration secrets belong in `secrets.env`; do not persist environment-specific values in source.
 
 ## Testing Guidelines
 - No central unit suite yet—add pytest modules under a future `tests/` directory when extending the server.
@@ -31,6 +31,6 @@
 - Request early review for schema or API shifts so edge client owners can adapt.
 
 ## Security & Configuration Tips
-- Update `APP_PASSWORD` and other secrets before deploying; store overrides in `.env` or platform secret managers.
+- Update `APP_PASSWORD` and other secrets before deploying; store overrides in `secrets.env` or platform secret managers.
 - Rotate OpenAI credentials regularly and document fallbacks in `app.py` when adding new providers.
 - Validate device capability schemas via `_normalise_capabilities` before exposing new agent actions.

@@ -7,6 +7,7 @@ from openai import OpenAI
 
 from .config import AGENT_ROLE_VALUE
 from .device_utils import _build_device_context, _format_result_for_prompt
+from model_selection import apply_model_selection, update_override
 
 
 def _current_datetime_line() -> str:
@@ -17,9 +18,12 @@ def _current_datetime_line() -> str:
 def _client() -> OpenAI:
     # OpenAI API クライアントを生成し、API キーが無い場合は例外を送出
 
+    _, model_name, base_url = apply_model_selection("iot")
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY is not set")
+    if base_url:
+        return OpenAI(api_key=api_key, base_url=base_url)
     return OpenAI(api_key=api_key)
 
 
@@ -57,8 +61,10 @@ def _structured_llm_prompt(messages: List[Dict[str, str]]) -> Dict[str, Any]:
         else "No devices are currently registered."
     )
 
+    _, model_name, _ = apply_model_selection("iot")
+
     return {
-        "model": "gpt-4.1-2025-04-14",
+        "model": model_name,
         "input": [
             {"role": "system", "content": system_prompt},
             {"role": "system", "content": context_message},
@@ -302,16 +308,21 @@ def _structured_agent_instruction_prompt(messages: List[Dict[str, str]]) -> Dict
     timestamp_line = _current_datetime_line()
     system_prompt = (
         f"{timestamp_line}\n"
-        "You translate the latest user instruction into a single, simple "
-        "English sentence that describes the IoT task to perform. Use clear "
-        "imperative phrasing and avoid technical jargon. If no action is "
-        "required or the request cannot be fulfilled, respond with "
-        "'No action required.'"
-    )
-
-    guidance = (
-        "When referencing device capabilities, prefer the official names "
-        "listed in the available context. Keep the response under 25 words."
+        "You are an assistant that interprets user instructions and generates "
+        "IoT device operation commands. Always respond with a strict JSON "
+        "object containing the key 'device_commands'. The 'device_commands' "
+        "field must be either null, an empty array, or an array of objects "
+        "with the keys 'device_id', 'name', and 'args'. Each array element "
+        "represents one sequential task for the devices to execute. Do not "
+        "wrap the JSON inside code fences. If no device action is required, "
+        "set 'device_commands' to null. Only use device IDs and capability "
+        "names provided in the context. When an action is required and "
+        "multiple devices exist, you MUST select the single most "
+        "appropriate device_id for each step by comparing the roles and "
+        "capabilities described. Never omit 'device_id' or use an unknown "
+        "value. If the correct device cannot be determined, set "
+        "'device_commands' to null and ask the user to clarify which device "
+        "should be used."
     )
 
     context_message = (
@@ -324,13 +335,8 @@ def _structured_agent_instruction_prompt(messages: List[Dict[str, str]]) -> Dict
         "model": "gpt-4.1-2025-04-14",
         "input": [
             {"role": "system", "content": system_prompt},
-            {"role": "system", "content": guidance},
             {"role": "system", "content": context_message},
             *messages,
-            {
-                "role": "system",
-                "content": "Reply with one English sentence and no additional formatting.",
-            },
         ],
     }
 
@@ -366,4 +372,3 @@ def _structured_agent_followup_prompt(
     messages.append({"role": "system", "content": summary_instruction})
 
     return {"model": "gpt-4.1-2025-04-14", "input": messages}
-
