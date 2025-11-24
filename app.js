@@ -24,6 +24,76 @@ const escapeHtml = (s) =>
     { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" }[m]
   ));
 
+/** ---------- モデル選択 ---------- */
+const MODELS = [
+  // OpenAI
+  { provider: "openai", model: "gpt-4o", label: "GPT-4o (OpenAI)" },
+  { provider: "openai", model: "gpt-4-turbo", label: "GPT-4 Turbo (OpenAI)" },
+  { provider: "openai", model: "gpt-3.5-turbo", label: "GPT-3.5 Turbo (OpenAI)" },
+  // Claude
+  { provider: "claude", model: "claude-3-opus-20240229", label: "Claude 3 Opus (Anthropic)" },
+  { provider: "claude", model: "claude-3-sonnet-20240229", label: "Claude 3 Sonnet (Anthropic)" },
+  { provider: "claude", model: "claude-3-haiku-20240307", label: "Claude 3 Haiku (Anthropic)" },
+  // Gemini
+  { provider: "gemini", model: "gemini-1.5-pro-latest", label: "Gemini 1.5 Pro (Google)" },
+  { provider: "gemini", model: "gemini-1.5-flash-latest", label: "Gemini 1.5 Flash (Google)" },
+  { provider: "gemini", model: "gemini-1.0-pro", label: "Gemini 1.0 Pro (Google)" },
+  // Groq
+  { provider: "groq", model: "llama3-70b-8192", label: "Llama 3 70B (Groq)" },
+  { provider: "groq", model: "llama3-8b-8192", label: "Llama 3 8B (Groq)" },
+  { provider: "groq", model: "mixtral-8x7b-32768", label: "Mixtral 8x7B (Groq)" },
+];
+const DEFAULT_MODEL = { provider: "openai", model: "gpt-4o" };
+let currentModel = { ...DEFAULT_MODEL };
+
+const modelSelectEl = $("#modelSelect");
+
+// ドロップダウンをモデルリストで埋める
+function populateModelSelect(){
+  if(!modelSelectEl) return;
+  modelSelectEl.innerHTML = ""; // 既存のオプションをクリア
+
+  MODELS.forEach((m) => {
+    const option = document.createElement("option");
+    option.value = `${m.provider}:${m.model}`;
+    option.textContent = m.label;
+    if(m.provider === currentModel.provider && m.model === currentModel.model){
+      option.selected = true;
+    }
+    modelSelectEl.appendChild(option);
+  });
+}
+
+// モデル選択が変更されたときにバックエンドを更新
+async function handleModelChange(){
+  if(!modelSelectEl) return;
+  const [provider, model] = modelSelectEl.value.split(":");
+  currentModel = { provider, model };
+
+  try{
+    const res = await fetch("/model_settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(currentModel),
+    });
+    if(!res.ok){
+      throw new Error(`HTTP ${res.status}`);
+    }
+    console.log("Model updated successfully:", currentModel);
+  }catch(err){
+    console.error("Failed to update model:", err);
+    // エラーが発生した場合は、UIを以前の状態に戻すか、ユーザーに通知する
+    alert(`モデルの更新に失敗しました: ${err.message}`);
+    // Optionally, revert the selection in the UI
+    // populateModelSelect();
+  }
+}
+
+// ドロップダウンの変更イベントリスナーを設定
+if(modelSelectEl){
+  modelSelectEl.addEventListener("change", handleModelChange);
+}
+
 /** ---------- デバイス描画 ---------- */
 // デバイスカードを表示するグリッド要素
 const gridEl = $("#deviceGrid");
@@ -866,6 +936,8 @@ if(chatResetBtn){
 /** ---------- 初期化 ---------- */
 // ページ読み込み時の初期化処理：挨拶メッセージ、UI 更新、デバイス取得
 (async function init(){
+  populateModelSelect(); // Populate the model selection dropdown
+  await handleModelChange(); // Set the initial model
   pushMessage("assistant", INITIAL_GREETING);
   updateChatControls();
   await fetchDevices();
