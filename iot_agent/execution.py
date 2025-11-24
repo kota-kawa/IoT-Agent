@@ -763,13 +763,8 @@ def _structured_multi_command_followup_prompt(
 def _chat_via_legacy(messages: List[Dict[str, str]]) -> Tuple[Dict[str, Any], int]:
     # エージェントデバイス不在時にレガシーフローでチャットを処理
 
-    try:
-        client = _client()
-        parsed_response = _call_llm_and_parse(client, messages)
-    except RuntimeError as exc:
-        return {"error": str(exc)}, 500
-    except Exception as exc:  # pragma: no cover - network/SDK errors
-        return {"error": str(exc)}, 500
+    client = _client()
+    parsed_response = _call_llm_and_parse(client, messages)
 
     reply_message = parsed_response.get("reply")
     if not isinstance(reply_message, str):
