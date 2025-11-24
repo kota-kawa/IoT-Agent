@@ -110,7 +110,7 @@ def _dependency_report() -> Dict[str, Any]:
         "FLASK_SECRET_KEY": bool(os.getenv("FLASK_SECRET_KEY")),
     }
 
-    provider, model, base_url = apply_model_selection("iot")
+    provider, model, base_url, _ = apply_model_selection("iot")
 
     return {
         "packages": packages,
@@ -211,7 +211,7 @@ def update_model_settings():
 def list_models():
     """Expose available model choices and the active selection to the UI."""
 
-    provider, model, base_url = apply_model_selection("iot")
+    provider, model, base_url, _ = apply_model_selection("iot")
     return jsonify(
         {
             "models": current_available_models(),
@@ -251,7 +251,7 @@ def chat():
         return jsonify({"error": "last message must be from user"}), 400
 
     agent_device = _agent_device()
-    provider, _, _ = apply_model_selection("iot")
+    provider, _, _, _ = apply_model_selection("iot")
     vision_supported = provider_supports_vision(provider)
     wants_environment_view = _user_requests_environment_photo(formatted_messages)
     capture_supported = bool(

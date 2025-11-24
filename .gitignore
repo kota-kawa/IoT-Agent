@@ -16,4 +16,5 @@
 
 # 仮想環境ディレクトリを無視
 venv/
-.venv/
+.venv/__pycache__/
+*.pyc

@@ -148,7 +148,7 @@ def _resolve_base_url(meta: Dict[str, str | List[str] | None]) -> str | None:
     return None
 
 
-def apply_model_selection(agent_key: str = "iot", override: Dict[str, str] | None = None) -> Tuple[str, str, str | None]:
+def apply_model_selection(agent_key: str = "iot", override: Dict[str, str] | None = None) -> Tuple[str, str, str | None, str]:
     selection = _coerce_selection(override or _OVERRIDE_SELECTION or _load_selection(agent_key))
     provider = selection["provider"]
     model = selection["model"]
@@ -157,23 +157,14 @@ def apply_model_selection(agent_key: str = "iot", override: Dict[str, str] | Non
     api_key = _resolve_api_key(meta)
     base_url = _resolve_base_url(meta)
 
-    # Apply to environment for OpenAI SDK to pick up automatically
-    if api_key:
-        os.environ["OPENAI_API_KEY"] = api_key
-    
-    # 修正箇所: 以前の環境変数が残っていると誤動作するため、
-    # Base URLが指定されていない(純正OpenAIなど)場合は環境変数を削除する
-    if base_url:
-        os.environ["OPENAI_BASE_URL"] = base_url
-    else:
-        # 以前Groqなどが設定されていた場合に削除しないと、OpenAIへのリクエストがGroqに飛んでしまう
-        if "OPENAI_BASE_URL" in os.environ:
-            del os.environ["OPENAI_BASE_URL"]
+    # Note: We do NOT modify os.environ here to avoid polluting the global state
+    # or overwriting the user's original OPENAI_API_KEY.
+    # The caller is responsible for passing api_key and base_url to the client.
 
-    return provider, model, base_url
+    return provider, model, base_url, api_key
 
 
-def update_override(selection: Dict[str, str] | None) -> Tuple[str, str, str | None]:
+def update_override(selection: Dict[str, str] | None) -> Tuple[str, str, str | None, str]:
     """Set in-memory override and return applied config."""
 
     global _OVERRIDE_SELECTION
