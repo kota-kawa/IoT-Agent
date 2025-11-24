@@ -322,6 +322,7 @@ def _call_llm_and_parse(client: UnifiedClient, messages: List[Dict[str, str]]) -
         if provider in ["openai", "groq", "gemini"]:
             extra_args["response_format"] = {"type": "json_object"}
 
+        parsed_payload = None
         try:
             response = client.chat.completions.create(**prompt_kwargs, **extra_args)
             choice = response.choices[0] if response and response.choices else None
@@ -344,7 +345,8 @@ def _call_llm_and_parse(client: UnifiedClient, messages: List[Dict[str, str]]) -
             parsed_obj, cleaned_text = _extract_json_object(reply_text)
 
         raw_text = reply_text or (json.dumps(parsed_obj) if parsed_obj is not None else "")
-        last_raw = raw_text
+        if raw_text:
+            last_raw = raw_text
         last_cleaned = cleaned_text or raw_text.strip()
 
         validated, validation_errors = _validate_payload(parsed_obj, raw_text)
