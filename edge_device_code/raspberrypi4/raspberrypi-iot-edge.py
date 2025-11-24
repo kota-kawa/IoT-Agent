@@ -1078,7 +1078,8 @@ def _oled_draw_mono_eye(draw: Any, t: float, width: int, height: int, panel_heig
     track_left = visor_left + _OLED_TRACK_PADDING
     track_right = visor_right - _OLED_TRACK_PADDING
     track_mid_y = (visor_top + visor_bottom) // 2
-    track_height = 20
+    eye_scale = 3.0  # triple the mono-eye diameter
+    track_height = int(20 * eye_scale)
     track_top = track_mid_y - track_height // 2
     track_bottom = track_mid_y + track_height // 2
     draw.rectangle((track_left, track_top, track_right, track_bottom), fill=_OLED_COL_TRACK, outline=_OLED_COL_FRAME, width=1)
@@ -1088,12 +1089,18 @@ def _oled_draw_mono_eye(draw: Any, t: float, width: int, height: int, panel_heig
     if beam_x < track_right:
         draw.line((beam_x, visor_top + 4, beam_x, visor_bottom - 4), fill=_OLED_COL_BEAM, width=2)
 
+    glow_r = int(16 * eye_scale)
+    eye_r = int(10 * eye_scale)
+    core_r = int(6 * eye_scale)
     eye_band = ((math.sin(t * 1.2) * _OLED_EYE_SWEEP) + (math.sin(t * 0.37) * 0.22)) * 0.5 + 0.5
-    eye_x = int(track_left + 8 + eye_band * max(4, (track_right - track_left - 16)))
+    eye_min_x = visor_left + glow_r + 2
+    eye_max_x = visor_right - glow_r - 2
+    if eye_min_x >= eye_max_x:
+        eye_x = (visor_left + visor_right) // 2
+    else:
+        eye_x = int(eye_min_x + eye_band * (eye_max_x - eye_min_x))
     eye_y = track_mid_y + int(math.sin(t * 0.7) * 3)
-    glow_r = 16
-    eye_r = 10
-    core_r = 6
+    eye_y = max(visor_top + glow_r, min(visor_bottom - glow_r, eye_y))
 
     draw.ellipse((eye_x - glow_r, eye_y - glow_r, eye_x + glow_r, eye_y + glow_r), fill=_OLED_COL_GLOW_SOFT)
     draw.ellipse((eye_x - eye_r, eye_y - eye_r, eye_x + eye_r, eye_y + eye_r), fill=_OLED_COL_GLOW, outline=_OLED_COL_FRAME, width=1)

@@ -54,6 +54,7 @@ docker run --rm -p 5006:5006 --env-file secrets.env iot-agent
   日本語回答とデバイスコマンド候補を生成します。
 - エージェント用デバイスが登録済みの場合は、指示文を英語へ変換してエッジ側に送信し、結果を待機・要約します。
 - エージェント不在時は LLM 応答のみを返し、コマンドは実行されません。
+- 周囲確認やカメラ撮影を求める発話があれば、視覚モデル選択時に `capture_camera_photo` を自動キューイングし、Raspberry Pi が Picamera2 で JPEG を撮影して base64 付きでサーバーへ返送します。サーバーは受け取った画像データ URL をビジョン対応 LLM へ渡し、画像内容を踏まえた最終回答を返します（保存先は `IOT_AGENT_CAMERA_DIR`、ウォームアップ秒数は `IOT_AGENT_CAMERA_WARMUP` で調整可能）。
 
 ## REST API ダイジェスト
 | メソッド | パス | 説明 |
