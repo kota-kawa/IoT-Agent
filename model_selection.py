@@ -7,24 +7,22 @@ import os
 from pathlib import Path
 from typing import Dict, List, Tuple
 
-DEFAULT_SELECTION = {"provider": "openai", "model": "gpt-4o-mini"}
+DEFAULT_SELECTION = {"provider": "gemini", "model": "gemini-2.0-flash-001"}
 
 AVAILABLE_MODELS: List[Dict[str, str]] = [
-    # OpenAI - Latest models
-    {"provider": "openai", "model": "gpt-4o-mini", "label": "GPT-4o Mini (Fast)"},
-    {"provider": "openai", "model": "gpt-4o", "label": "GPT-4o (High Intellect)"},
+    # OpenAI
+    {"provider": "openai", "model": "gpt-4o", "label": "GPT-4o"},
+    {"provider": "openai", "model": "o1-mini", "label": "o1 Mini (Fast/Reasoning)"},
     
-    # Gemini - Updated to latest 1.5-002 and 2.0 Flash
-    # Note: "Gemini 2.5" does not exist yet. 2.0 Flash is the latest experimental, 1.5 Pro-002 is the latest stable.
-    {"provider": "gemini", "model": "gemini-2.0-flash-exp", "label": "Gemini 2.0 Flash (Newest/Exp)"},
+    # Gemini
+    {"provider": "gemini", "model": "gemini-2.0-flash-001", "label": "Gemini 2.0 Flash (New)"},
     {"provider": "gemini", "model": "gemini-1.5-pro-002", "label": "Gemini 1.5 Pro-002 (Stable)"},
-    {"provider": "gemini", "model": "gemini-1.5-flash-002", "label": "Gemini 1.5 Flash-002 (Fast)"},
 
-    # Claude - via OpenRouter or similar compatible layer usually
-    {"provider": "claude", "model": "claude-3-5-sonnet-latest", "label": "Claude 3.5 Sonnet (Latest)"},
-    {"provider": "claude", "model": "claude-3-5-haiku-latest", "label": "Claude 3.5 Haiku (Fast)"},
+    # Claude
+    {"provider": "claude", "model": "claude-3-5-sonnet-latest", "label": "Claude 3.5 Sonnet"},
+    {"provider": "claude", "model": "claude-3-5-haiku-latest", "label": "Claude 3.5 Haiku"},
 
-    # Groq - Llama models
+    # Groq
     {"provider": "groq", "model": "llama-3.1-70b-versatile", "label": "Llama 3.1 70B (Groq)"},
     {"provider": "groq", "model": "llama-3.1-8b-instant", "label": "Llama 3.1 8B (Groq)"},
 ]
