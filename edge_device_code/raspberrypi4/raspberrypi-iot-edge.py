@@ -15,11 +15,13 @@ import argparse
 import base64
 import json
 import logging
+import math
 import os
 import random
 import re
 import shlex
 import sys
+import threading
 import time
 import uuid
 from datetime import datetime, timezone
@@ -417,6 +419,7 @@ LLM_SYSTEM_PROMPT = (
     + ".\n"
     "Always choose the action that best fulfills the instruction.\n"
     "Only respond with 'no_action' when the request is impossible or unrelated to the available actions.\n"
+    "When a request mentions moving two servos (two/dual/both servos), always choose 'run_dual_servo_demo' instead of 'run_servo_demo' so both servos move together.\n"
     "Include all required parameters.\n"
     "Examples:\n"
     "Instruction: Let's play rock paper scissors, I choose rock.\n"
@@ -889,6 +892,42 @@ _DEFAULT_SERVO_TIMEOUT = 60.0
 _DEFAULT_LED_TIMEOUT = 45.0
 _DEFAULT_DUAL_SERVO_TIMEOUT = 60.0
 _OLED_RESULT_RETURN_SECONDS = 3.0
+_OLED_SPI_PORT = 1
+_OLED_SPI_DEVICE = 0
+_OLED_PIN_DC = 26
+_OLED_PIN_RST = 6
+_OLED_PIN_BL = 13
+_OLED_BUS_HZ = 16_000_000
+
+_OLED_WIDTH = 160
+_OLED_HEIGHT = 128
+_OLED_ROTATE = 0
+_OLED_BGR = False
+_OLED_H_OFFSET = 0
+_OLED_V_OFFSET = 0
+
+_OLED_COL_BG = (6, 18, 10)
+_OLED_COL_HEAD = (20, 44, 26)
+_OLED_COL_VISOR = (10, 12, 16)
+_OLED_COL_FRAME = (90, 150, 96)
+_OLED_COL_TRACK = (24, 36, 30)
+_OLED_COL_GLOW_SOFT = (82, 20, 44)
+_OLED_COL_GLOW = (200, 54, 104)
+_OLED_COL_GLOW_CORE = (255, 148, 196)
+_OLED_COL_BEAM = (120, 210, 170)
+_OLED_COL_TEXT = (225, 240, 228)
+_OLED_COL_TEXT_BG = (12, 26, 16)
+_OLED_COL_TEXT_BORDER = (60, 120, 74)
+_OLED_COL_ACCENT = (36, 76, 46)
+
+_OLED_FPS = 50
+_OLED_TEXT_PANEL_HEIGHT = 34
+_OLED_EYE_SWEEP = 0.48
+_OLED_TRACK_PADDING = 18
+_OLED_TEXT_PADDING = 18
+_OLED_BACKLIGHT_STEPS = (20, 40, 60, 80, 100)
+_OLED_TEXT_DURATION_LIMIT = 60.0
+_OLED_TEXT_MIN_DURATION = 1.5
 _RETURN_TEXT_LIMIT = 3000
 _RETURN_TEXT_KEEP = 1500
 
@@ -920,6 +959,161 @@ def _parse_timeout_parameter(parameters: Any, default: float) -> float:
         raise ValueError("timeout must be greater than zero.")
 
     return timeout_value
+
+
+def _oled_ensure_spidev_exists() -> None:
+    path = f"/dev/spidev{_OLED_SPI_PORT}.{_OLED_SPI_DEVICE}"
+    if not os.path.exists(path):
+        raise FileNotFoundError(
+            f"{path} が見つかりません。/boot(または /boot/firmware)/config.txt に 'dtoverlay=spi1-1cs' を追記して再起動してください。"
+        )
+
+
+def _oled_setup_backlight() -> Any:
+    from gpiozero import PWMLED
+
+    return PWMLED(_OLED_PIN_BL, frequency=1000, active_high=True, initial_value=1.0)
+
+
+def _oled_set_backlight_percent(backlight: Any, percent: float) -> None:
+    value = max(0.0, min(100.0, percent)) / 100.0
+    backlight.value = value
+
+
+def _oled_create_device() -> Any:
+    from luma.core.interface.serial import spi
+    from luma.lcd.device import st7735
+
+    serial_if = spi(
+        port=_OLED_SPI_PORT,
+        device=_OLED_SPI_DEVICE,
+        gpio_DC=_OLED_PIN_DC,
+        gpio_RST=_OLED_PIN_RST,
+        bus_speed_hz=_OLED_BUS_HZ,
+    )
+    return st7735(
+        serial_interface=serial_if,
+        width=_OLED_WIDTH,
+        height=_OLED_HEIGHT,
+        rotate=_OLED_ROTATE,
+        bgr=_OLED_BGR,
+        h_offset=_OLED_H_OFFSET,
+        v_offset=_OLED_V_OFFSET,
+    )
+
+
+def _oled_load_font() -> Any:
+    from PIL import ImageFont
+
+    return ImageFont.load_default()
+
+
+def _oled_text_width(font: Any, text: str) -> int:
+    if hasattr(font, "getbbox"):
+        bbox = font.getbbox(text)
+        return bbox[2] - bbox[0]
+    return font.getsize(text)[0]
+
+
+def _oled_text_line_height(font: Any) -> int:
+    if hasattr(font, "getbbox"):
+        return (font.getbbox("Ag")[3] - font.getbbox("Ag")[1]) + 2
+    return font.getsize("Ag")[1] + 2
+
+
+def _oled_wrap_text_lines(text: str, font: Any, max_width: int) -> List[str]:
+    if not text:
+        return []
+    lines: List[str] = []
+    current = ""
+    words = text.split()
+    for word in words:
+        candidate = word if not current else f"{current} {word}"
+        if _oled_text_width(font, candidate) <= max_width:
+            current = candidate
+            continue
+        if current:
+            lines.append(current)
+        chunk = ""
+        for char in word:
+            candidate_chunk = f"{chunk}{char}"
+            if _oled_text_width(font, candidate_chunk) <= max_width:
+                chunk = candidate_chunk
+            else:
+                if chunk:
+                    lines.append(chunk)
+                chunk = char
+        current = chunk
+    if current:
+        lines.append(current)
+    return lines[:3]
+
+
+def _oled_draw_text_screen(draw: Any, font: Any, lines: List[str], width: int, height: int) -> None:
+    draw.rectangle((0, 0, width, height), fill=_OLED_COL_TEXT_BG, outline=_OLED_COL_TEXT_BORDER, width=1)
+    line_height = _oled_text_line_height(font)
+    total_height = len(lines) * line_height
+    y = max(8, (height - total_height) // 2)
+    for line in lines:
+        x = max(8, (width - _oled_text_width(font, line)) // 2)
+        draw.text((x, y), line, fill=_OLED_COL_TEXT, font=font)
+        y += line_height
+
+
+def _oled_draw_mono_eye(draw: Any, t: float, width: int, height: int, panel_height: int) -> None:
+    head_bottom = height - panel_height
+    draw.rectangle((0, 0, width, height), fill=_OLED_COL_BG)
+    draw.rectangle((0, 0, width, head_bottom), fill=_OLED_COL_HEAD)
+
+    visor_left = 10
+    visor_right = width - 10
+    visor_top = 18
+    visor_bottom = head_bottom - 8
+    draw.rectangle((visor_left, visor_top, visor_right, visor_bottom), outline=_OLED_COL_FRAME, fill=_OLED_COL_VISOR, width=2)
+
+    ridge_height = 8
+    ridge_y = visor_top - ridge_height
+    draw.rectangle((visor_left + 6, ridge_y, visor_right - 6, visor_top + 2), fill=_OLED_COL_HEAD, outline=_OLED_COL_ACCENT, width=1)
+
+    track_left = visor_left + _OLED_TRACK_PADDING
+    track_right = visor_right - _OLED_TRACK_PADDING
+    track_mid_y = (visor_top + visor_bottom) // 2
+    track_height = 20
+    track_top = track_mid_y - track_height // 2
+    track_bottom = track_mid_y + track_height // 2
+    draw.rectangle((track_left, track_top, track_right, track_bottom), fill=_OLED_COL_TRACK, outline=_OLED_COL_FRAME, width=1)
+
+    beam_phase = (t * 60) % (track_right - track_left)
+    beam_x = track_left + beam_phase
+    if beam_x < track_right:
+        draw.line((beam_x, visor_top + 4, beam_x, visor_bottom - 4), fill=_OLED_COL_BEAM, width=2)
+
+    eye_band = ((math.sin(t * 1.2) * _OLED_EYE_SWEEP) + (math.sin(t * 0.37) * 0.22)) * 0.5 + 0.5
+    eye_x = int(track_left + 8 + eye_band * max(4, (track_right - track_left - 16)))
+    eye_y = track_mid_y + int(math.sin(t * 0.7) * 3)
+    glow_r = 16
+    eye_r = 10
+    core_r = 6
+
+    draw.ellipse((eye_x - glow_r, eye_y - glow_r, eye_x + glow_r, eye_y + glow_r), fill=_OLED_COL_GLOW_SOFT)
+    draw.ellipse((eye_x - eye_r, eye_y - eye_r, eye_x + eye_r, eye_y + eye_r), fill=_OLED_COL_GLOW, outline=_OLED_COL_FRAME, width=1)
+    draw.ellipse((eye_x - core_r, eye_y - core_r, eye_x + core_r, eye_y + core_r), fill=_OLED_COL_GLOW_CORE)
+    draw.line((eye_x - eye_r - 6, eye_y - core_r // 2, eye_x + eye_r + 6, eye_y + core_r // 2), fill=_OLED_COL_GLOW_CORE, width=1)
+
+    meter_height = 20
+    meter_width = 6
+    meter_x = visor_left + 6
+    meter_y = visor_bottom - meter_height - 6
+    meter_value = int((math.sin(t * 1.5) * 0.5 + 0.5) * (meter_height - 4))
+    draw.rectangle((meter_x, meter_y, meter_x + meter_width, meter_y + meter_height), outline=_OLED_COL_FRAME, width=1)
+    draw.rectangle((meter_x + 1, meter_y + meter_height - meter_value, meter_x + meter_width - 1, meter_y + meter_height - 2), fill=_OLED_COL_ACCENT)
+
+    right_meter_x = visor_right - meter_width - 6
+    draw.rectangle((right_meter_x, meter_y, right_meter_x + meter_width, meter_y + meter_height), outline=_OLED_COL_FRAME, width=1)
+    draw.rectangle(
+        (right_meter_x + 1, meter_y + meter_height - meter_value, right_meter_x + meter_width - 1, meter_y + meter_height - 2),
+        fill=_OLED_COL_ACCENT,
+    )
 
 
 class _ActionExecutionContext:
@@ -967,6 +1161,152 @@ class _ActionExecutionContext:
             return False
 
         return True
+
+
+class _MonoEyeDisplayManager:
+    def __init__(self) -> None:
+        self.device: Any = None
+        self.backlight: Any = None
+        self.font: Any = None
+        self.thread: Optional[threading.Thread] = None
+        self.stop_event = threading.Event()
+        self.lock = threading.Lock()
+        self.text_lines: List[str] = []
+        self.text_until = 0.0
+        self.started_at = 0.0
+        self.last_error: Optional[str] = None
+
+    @property
+    def is_running(self) -> bool:
+        return bool(self.thread and self.thread.is_alive() and self.device is not None)
+
+    def start(self) -> bool:
+        if self.is_running:
+            return True
+
+        try:
+            _oled_ensure_spidev_exists()
+            device = _oled_create_device()
+            backlight = _oled_setup_backlight()
+            font = _oled_load_font()
+        except Exception as exc:  # pragma: no cover - hardware dependent
+            self.last_error = str(exc)
+            logging.warning("OLED mono-eye display could not start: %s", exc)
+            return False
+
+        self.device = device
+        self.backlight = backlight
+        self.font = font
+        self.last_error = None
+        self.stop_event.clear()
+        self.thread = threading.Thread(
+            target=self._run_loop,
+            name="oled-mono-eye",
+            daemon=True,
+        )
+        self.thread.start()
+        return True
+
+    def show_text(self, text: str, duration_seconds: float) -> Dict[str, Any]:
+        if not text.strip():
+            return {"ok": False, "error": "Text must be a non-empty string."}
+
+        if not self.is_running or self.device is None or self.font is None:
+            return {"ok": False, "error": self.last_error or "OLED display is not running."}
+
+        clamped_duration = max(_OLED_TEXT_MIN_DURATION, min(_OLED_TEXT_DURATION_LIMIT, duration_seconds))
+        lines = _oled_wrap_text_lines(text, self.font, self.device.width - _OLED_TEXT_PADDING)
+        if not lines:
+            return {"ok": False, "error": "Unable to render empty text payload."}
+
+        with self.lock:
+            self.text_lines = lines
+            self.text_until = time.monotonic() + clamped_duration
+
+        return {
+            "ok": True,
+            "lines": lines,
+            "duration_seconds": clamped_duration,
+            "until": self.text_until,
+        }
+
+    def _run_loop(self) -> None:  # pragma: no cover - hardware dependent
+        try:
+            from luma.core.render import canvas
+        except Exception as exc:
+            self.last_error = str(exc)
+            logging.warning("Failed to import luma canvas for OLED: %s", exc)
+            return
+
+        if self.device is None:
+            self.last_error = "OLED device not initialized."
+            return
+
+        self.started_at = time.time()
+        frame_delay = 1.0 / _OLED_FPS
+
+        for duty in _OLED_BACKLIGHT_STEPS:
+            try:
+                if self.backlight is not None:
+                    _oled_set_backlight_percent(self.backlight, duty)
+                with canvas(self.device) as draw:
+                    _oled_draw_mono_eye(draw, 0.0, self.device.width, self.device.height, 0)
+                time.sleep(0.05)
+            except Exception as exc:
+                self.last_error = str(exc)
+                logging.warning("OLED backlight warm-up failed: %s", exc)
+                return
+
+        while not self.stop_event.is_set():
+            try:
+                now = time.time()
+                with self.lock:
+                    active_text = bool(self.text_lines) and now < self.text_until
+                    if not active_text and self.text_lines:
+                        self.text_lines = []
+                        self.text_until = 0.0
+                    text_lines = list(self.text_lines) if active_text else []
+
+                with canvas(self.device) as draw:
+                    if active_text:
+                        _oled_draw_text_screen(draw, self.font, text_lines, self.device.width, self.device.height)
+                    else:
+                        _oled_draw_mono_eye(draw, now - self.started_at, self.device.width, self.device.height, 0)
+
+                time.sleep(frame_delay)
+            except Exception as exc:
+                self.last_error = str(exc)
+                logging.warning("OLED mono-eye loop stopped: %s", exc)
+                return
+
+
+_mono_eye_display_manager: Optional[_MonoEyeDisplayManager] = None
+_oled_daemon_logged = False
+
+
+def _get_or_start_oled_manager() -> Optional[_MonoEyeDisplayManager]:
+    global _mono_eye_display_manager
+
+    if _mono_eye_display_manager and _mono_eye_display_manager.is_running:
+        return _mono_eye_display_manager
+
+    manager = _MonoEyeDisplayManager()
+    if manager.start():
+        _mono_eye_display_manager = manager
+        return manager
+    return None
+
+
+def _start_mono_eye_daemon_if_possible() -> None:
+    global _oled_daemon_logged
+    manager = _get_or_start_oled_manager()
+    if manager and manager.is_running and not _oled_daemon_logged:
+        logging.info("OLED mono-eye display started in background.")
+        _console("OLED mono-eye display is running in the background.")
+        _oled_daemon_logged = True
+    elif manager is None and not _oled_daemon_logged:
+        logging.info("OLED mono-eye display not started (missing hardware drivers or SPI not enabled).")
+        _oled_daemon_logged = True
 
 
 _LED_PINS = {"led1": 2, "led2": 3, "led3": 16}
@@ -1251,7 +1591,6 @@ def _run_motor_test(parameters: Any) -> Dict[str, Any]:
 def _run_oled_robot_demo(parameters: Any) -> Dict[str, Any]:
     timeout = _parse_timeout_parameter(parameters, _DEFAULT_OLED_DEMO_TIMEOUT)
     context = _ActionExecutionContext(timeout)
-    max_run_seconds = min(timeout, _OLED_RESULT_RETURN_SECONDS)
     text_override: Optional[str] = None
 
     if isinstance(parameters, dict):
@@ -1261,215 +1600,86 @@ def _run_oled_robot_demo(parameters: Any) -> Dict[str, Any]:
         if isinstance(candidate_text, str) and candidate_text.strip():
             text_override = " ".join(candidate_text.split())
 
+    manager = _get_or_start_oled_manager()
+    if manager and manager.is_running:
+        display_seconds = min(timeout, _OLED_TEXT_DURATION_LIMIT)
+        if text_override:
+            scheduled = manager.show_text(text_override, display_seconds)
+            if scheduled.get("ok"):
+                context.log(
+                    "OLED text scheduled on mono-eye daemon",
+                    lines=scheduled.get("lines"),
+                    duration_seconds=scheduled.get("duration_seconds", display_seconds),
+                )
+                wait_window = min(
+                    scheduled.get("duration_seconds", display_seconds),
+                    _OLED_RESULT_RETURN_SECONDS,
+                )
+                if wait_window > 0:
+                    context.sleep(wait_window)
+                return {
+                    "events": context.events,
+                    "timed_out": context.timed_out,
+                    "duration_seconds": context.elapsed(),
+                    "display_seconds": scheduled.get("duration_seconds", display_seconds),
+                    "text_lines": scheduled.get("lines"),
+                    "mono_eye_background": True,
+                }
+
+            context.log("OLED daemon could not render text", error=scheduled.get("error"))
+        else:
+            context.log(
+                "OLED mono-eye daemon already running",
+                duration_hint=min(timeout, _OLED_RESULT_RETURN_SECONDS),
+            )
+            context.sleep(min(timeout, _OLED_RESULT_RETURN_SECONDS))
+            return {
+                "events": context.events,
+                "timed_out": context.timed_out,
+                "duration_seconds": context.elapsed(),
+                "display_seconds": min(timeout, _OLED_RESULT_RETURN_SECONDS),
+                "text_lines": [],
+                "mono_eye_background": True,
+            }
+
     try:
-        import math
-        import os
-        from gpiozero import PWMLED
-        from PIL import ImageDraw, ImageFont
-        from luma.core.interface.serial import spi
         from luma.core.render import canvas
-        from luma.lcd.device import st7735
     except ImportError as exc:
         raise RuntimeError(
             "The OLED demo requires gpiozero, Pillow, and luma.lcd to be installed on the Raspberry Pi."
         ) from exc
 
-    SPI_PORT = 1
-    SPI_DEVICE = 0
-    PIN_DC = 26
-    PIN_RST = 6
-    PIN_BL = 13
-    BUS_HZ = 16_000_000
+    _oled_ensure_spidev_exists()
+    context.log("SPI device is available", device=f"/dev/spidev{_OLED_SPI_PORT}.{_OLED_SPI_DEVICE}")
 
-    WIDTH, HEIGHT = 160, 128
-    ROTATE = 0
-    BGR = False
-    H_OFF, V_OFF = 0, 0
-
-    COL_BG = (6, 18, 10)
-    COL_HEAD = (20, 44, 26)
-    COL_VISOR = (10, 12, 16)
-    COL_FRAME = (90, 150, 96)
-    COL_TRACK = (24, 36, 30)
-    COL_GLOW_SOFT = (82, 20, 44)
-    COL_GLOW = (200, 54, 104)
-    COL_GLOW_CORE = (255, 148, 196)
-    COL_BEAM = (120, 210, 170)
-    COL_TEXT = (225, 240, 228)
-    COL_TEXT_BG = (12, 26, 16)
-    COL_TEXT_BORDER = (60, 120, 74)
-    COL_ACCENT = (36, 76, 46)
-
-    FPS = 50
-    TEXT_PANEL_HEIGHT = 34
-    EYE_SWEEP = 0.48
-    TRACK_PADDING = 18
-
-    def ensure_spidev() -> None:
-        path = f"/dev/spidev{SPI_PORT}.{SPI_DEVICE}"
-        if not os.path.exists(path):
-            raise FileNotFoundError(
-                f"{path} が見つかりません。/boot(または /boot/firmware)/config.txt に 'dtoverlay=spi1-1cs' を追記して再起動してください。"
-            )
-
-    def setup_backlight() -> PWMLED:
-        return PWMLED(PIN_BL, frequency=1000, active_high=True, initial_value=1.0)
-
-    def set_backlight_percent(bl: PWMLED, percent: float) -> None:
-        value = max(0.0, min(100.0, percent)) / 100.0
-        bl.value = value
-
-    def init_device() -> st7735:
-        serial_if = spi(
-            port=SPI_PORT,
-            device=SPI_DEVICE,
-            gpio_DC=PIN_DC,
-            gpio_RST=PIN_RST,
-            bus_speed_hz=BUS_HZ,
-        )
-        return st7735(
-            serial_interface=serial_if,
-            width=WIDTH,
-            height=HEIGHT,
-            rotate=ROTATE,
-            bgr=BGR,
-            h_offset=H_OFF,
-            v_offset=V_OFF,
-        )
-
-    font = ImageFont.load_default()
-
-    def _text_width(text: str) -> int:
-        if hasattr(font, "getbbox"):
-            bbox = font.getbbox(text)
-            return bbox[2] - bbox[0]
-        return font.getsize(text)[0]
-
-    def wrap_text_lines(text: str, max_width: int) -> List[str]:
-        if not text:
-            return []
-        lines: List[str] = []
-        current = ""
-        words = text.split()
-        for word in words:
-            candidate = word if not current else f"{current} {word}"
-            if _text_width(candidate) <= max_width:
-                current = candidate
-                continue
-            if current:
-                lines.append(current)
-            chunk = ""
-            for char in word:
-                candidate_chunk = f"{chunk}{char}"
-                if _text_width(candidate_chunk) <= max_width:
-                    chunk = candidate_chunk
-                else:
-                    if chunk:
-                        lines.append(chunk)
-                    chunk = char
-            current = chunk
-        if current:
-            lines.append(current)
-        return lines[:3]
-
-    text_lines = wrap_text_lines(text_override or "", WIDTH - 18)
+    font = _oled_load_font()
+    text_lines = _oled_wrap_text_lines(text_override or "", _OLED_WIDTH - _OLED_TEXT_PADDING, font)
     show_text_only = bool(text_lines)
-    panel_height = TEXT_PANEL_HEIGHT if show_text_only else 0
-
-    def draw_text_screen(draw: ImageDraw.ImageDraw, lines: List[str], W: int, H: int) -> None:
-        draw.rectangle((0, 0, W, H), fill=COL_TEXT_BG, outline=COL_TEXT_BORDER, width=1)
-        if hasattr(font, "getbbox"):
-            line_height = (font.getbbox("Ag")[3] - font.getbbox("Ag")[1]) + 2
-        else:
-            line_height = font.getsize("Ag")[1] + 2
-        total_height = len(lines) * line_height
-        y = max(8, (H - total_height) // 2)
-        for line in lines:
-            x = max(8, (W - _text_width(line)) // 2)
-            draw.text((x, y), line, fill=COL_TEXT, font=font)
-            y += line_height
-
-    def draw_mono_eye(draw: ImageDraw.ImageDraw, t: float, W: int, H: int) -> None:
-        head_bottom = H - panel_height
-        draw.rectangle((0, 0, W, H), fill=COL_BG)
-        draw.rectangle((0, 0, W, head_bottom), fill=COL_HEAD)
-
-        visor_left = 10
-        visor_right = W - 10
-        visor_top = 18
-        visor_bottom = head_bottom - 8
-        draw.rectangle((visor_left, visor_top, visor_right, visor_bottom), outline=COL_FRAME, fill=COL_VISOR, width=2)
-
-        ridge_height = 8
-        ridge_y = visor_top - ridge_height
-        draw.rectangle((visor_left + 6, ridge_y, visor_right - 6, visor_top + 2), fill=COL_HEAD, outline=COL_ACCENT, width=1)
-
-        track_left = visor_left + TRACK_PADDING
-        track_right = visor_right - TRACK_PADDING
-        track_mid_y = (visor_top + visor_bottom) // 2
-        track_height = 20
-        track_top = track_mid_y - track_height // 2
-        track_bottom = track_mid_y + track_height // 2
-        draw.rectangle((track_left, track_top, track_right, track_bottom), fill=COL_TRACK, outline=COL_FRAME, width=1)
-
-        beam_phase = (t * 60) % (track_right - track_left)
-        beam_x = track_left + beam_phase
-        if beam_x < track_right:
-            draw.line((beam_x, visor_top + 4, beam_x, visor_bottom - 4), fill=COL_BEAM, width=2)
-
-        eye_band = ((math.sin(t * 1.2) * EYE_SWEEP) + (math.sin(t * 0.37) * 0.22)) * 0.5 + 0.5
-        eye_x = int(track_left + 8 + eye_band * max(4, (track_right - track_left - 16)))
-        eye_y = track_mid_y + int(math.sin(t * 0.7) * 3)
-        glow_r = 16
-        eye_r = 10
-        core_r = 6
-
-        draw.ellipse((eye_x - glow_r, eye_y - glow_r, eye_x + glow_r, eye_y + glow_r), fill=COL_GLOW_SOFT)
-        draw.ellipse((eye_x - eye_r, eye_y - eye_r, eye_x + eye_r, eye_y + eye_r), fill=COL_GLOW, outline=COL_FRAME, width=1)
-        draw.ellipse((eye_x - core_r, eye_y - core_r, eye_x + core_r, eye_y + core_r), fill=COL_GLOW_CORE)
-        draw.line((eye_x - eye_r - 6, eye_y - core_r // 2, eye_x + eye_r + 6, eye_y + core_r // 2), fill=COL_GLOW_CORE, width=1)
-
-        meter_height = 20
-        meter_width = 6
-        meter_x = visor_left + 6
-        meter_y = visor_bottom - meter_height - 6
-        meter_value = int((math.sin(t * 1.5) * 0.5 + 0.5) * (meter_height - 4))
-        draw.rectangle((meter_x, meter_y, meter_x + meter_width, meter_y + meter_height), outline=COL_FRAME, width=1)
-        draw.rectangle((meter_x + 1, meter_y + meter_height - meter_value, meter_x + meter_width - 1, meter_y + meter_height - 2), fill=COL_ACCENT)
-
-        right_meter_x = visor_right - meter_width - 6
-        draw.rectangle((right_meter_x, meter_y, right_meter_x + meter_width, meter_y + meter_height), outline=COL_FRAME, width=1)
-        draw.rectangle(
-            (right_meter_x + 1, meter_y + meter_height - meter_value, right_meter_x + meter_width - 1, meter_y + meter_height - 2),
-            fill=COL_ACCENT,
-        )
-
-
-    ensure_spidev()
-    context.log("SPI device is available", device=f"/dev/spidev{SPI_PORT}.{SPI_DEVICE}")
+    panel_height = _OLED_TEXT_PANEL_HEIGHT if show_text_only else 0
     if text_lines:
         context.log("OLED text prepared", lines=text_lines)
 
-    backlight: Optional[PWMLED] = None
+    backlight: Optional[Any] = None
     frames = 0
+    max_run_seconds = min(timeout, _OLED_RESULT_RETURN_SECONDS)
 
     try:
-        backlight = setup_backlight()
-        context.log("Backlight PWM initialized", pin=PIN_BL)
-        device = init_device()
-        context.log("ST7735 display initialized", resolution=f"{WIDTH}x{HEIGHT}")
+        backlight = _oled_setup_backlight()
+        context.log("Backlight PWM initialized", pin=_OLED_PIN_BL)
+        device = _oled_create_device()
+        context.log("ST7735 display initialized", resolution=f"{_OLED_WIDTH}x{_OLED_HEIGHT}")
 
         t0 = time.time()
-        frame_delay = 1.0 / FPS
+        frame_delay = 1.0 / _OLED_FPS
 
-        for duty in (20, 40, 60, 80, 100):
+        for duty in _OLED_BACKLIGHT_STEPS:
             if backlight is not None:
-                set_backlight_percent(backlight, duty)
+                _oled_set_backlight_percent(backlight, duty)
             with canvas(device) as draw:
                 if show_text_only:
-                    draw_text_screen(draw, text_lines or ["Showing message..."], device.width, device.height)
+                    _oled_draw_text_screen(draw, font, text_lines or ["Showing message..."], device.width, device.height)
                 else:
-                    draw_mono_eye(draw, 0.0, device.width, device.height)
+                    _oled_draw_mono_eye(draw, 0.0, device.width, device.height, panel_height)
             context.log("Backlight fade-in step", percent=duty, text_mode=show_text_only)
             if not context.sleep(0.05):
                 break
@@ -1483,9 +1693,9 @@ def _run_oled_robot_demo(parameters: Any) -> Dict[str, Any]:
             t = time.time() - t0
             with canvas(device) as draw:
                 if show_text_only:
-                    draw_text_screen(draw, text_lines, device.width, device.height)
+                    _oled_draw_text_screen(draw, font, text_lines, device.width, device.height)
                 else:
-                    draw_mono_eye(draw, t, device.width, device.height)
+                    _oled_draw_mono_eye(draw, t, device.width, device.height, panel_height)
             frames += 1
 
             if not context.sleep(frame_delay):
@@ -1509,7 +1719,7 @@ def _run_oled_robot_demo(parameters: Any) -> Dict[str, Any]:
             "timed_out": context.timed_out,
             "duration_seconds": context.elapsed(),
             "frames_rendered": frames,
-            "target_fps": FPS,
+            "target_fps": _OLED_FPS,
             "display_left_on": True,
             "max_run_seconds": max_run_seconds,
             "text_lines": text_lines,
@@ -2287,12 +2497,20 @@ def _plan_from_instruction(llm: Llama, instruction: str) -> Dict[str, Any]:
 
 def _build_multi_action_plan(llm: Llama, instruction: str) -> List[Dict[str, Any]]:
     # 単一アクションまたはヒューリスティックから多段プランを生成
+    normalized_text = _normalize_digits(instruction).strip()
+    lowered = normalized_text.lower()
+    wants_dual_servos = _is_dual_servo_request(normalized_text, lowered)
+
     heuristic = _heuristic_multi_plan(instruction)
     if heuristic:
         return heuristic
 
     plan = _plan_from_instruction(llm, instruction)
     if isinstance(plan, dict) and plan:
+        if wants_dual_servos and plan.get("action") == "run_servo_demo":
+            plan = dict(plan)
+            plan["action"] = "run_dual_servo_demo"
+            plan["parameters"] = {}
         return [plan]
 
     return []
@@ -2454,6 +2672,62 @@ def _extract_float(patterns: List[str], text: str) -> Optional[str]:
         if match:
             return match.group(1)
     return None
+
+
+def _is_dual_servo_request(text: str, lowered: str) -> bool:
+    """Return True when the instruction explicitly asks for two servos to move."""
+
+    if not text:
+        return False
+
+    dual_keywords = [
+        "dual servo",
+        "dual servos",
+        "dual servo motors",
+        "two servo",
+        "two servos",
+        "two servo motors",
+        "double servo",
+        "2 servo",
+        "2 servos",
+        "both servos",
+        "both servo",
+        "both servo motors",
+        "pair of servos",
+    ]
+    if any(keyword in lowered for keyword in dual_keywords):
+        return True
+
+    jp_phrases = [
+        "2つのサーボ",
+        "二つのサーボ",
+        "サーボ2つ",
+        "サーボ２つ",
+        "サーボ2個",
+        "サーボ２個",
+        "サーボ2基",
+        "サーボ２基",
+        "二基のサーボ",
+        "サーボ2台",
+        "サーボ２台",
+        "2台のサーボ",
+        "二台のサーボ",
+        "サーボ二台",
+        "両方のサーボ",
+        "両サーボ",
+        "左右のサーボ",
+        "サーボを2つ",
+        "サーボを２つ",
+    ]
+    if any(phrase in text for phrase in jp_phrases):
+        return True
+
+    if re.search(r"(サーボ).*(?:2つ|2個|二つ|二個|2基|二基|2台|二台)", text):
+        return True
+    if re.search(r"(?:2つ|2個|二つ|二個|2基|二基|2台|二台).*(サーボ)", text):
+        return True
+
+    return False
 
 
 def _build_servo_parameters_from_instruction(
@@ -2676,12 +2950,12 @@ def _heuristic_multi_plan(instruction: str) -> List[Dict[str, Any]]:
         _add("run_oled_robot_demo", {})
 
     if "servo" in lowered or "サーボ" in text:
-        servo_params = _build_servo_parameters_from_instruction(text, lowered)
-        _add("run_servo_demo", servo_params)
-        if any(
-            keyword in lowered for keyword in ["dual servo", "two servo", "two servos", "double servo", "2 servo", "dual sweep"]
-        ) or "2つのサーボ" in text or "二つのサーボ" in text:
+        dual_servos = _is_dual_servo_request(text, lowered)
+        if dual_servos:
             _add("run_dual_servo_demo", {})
+        else:
+            servo_params = _build_servo_parameters_from_instruction(text, lowered)
+            _add("run_servo_demo", servo_params)
 
     return plans
 
@@ -2980,6 +3254,7 @@ def main() -> None:
     session = requests.Session()
     device_id = _load_device_id()
     _console("Device ID resolved: {}".format(device_id))
+    _start_mono_eye_daemon_if_possible()
     llm = _create_llm()
     _console(
         "Model ready (path='{}', threads={}, context={}).".format(
