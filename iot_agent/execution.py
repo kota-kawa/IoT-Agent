@@ -495,7 +495,7 @@ def _summarize_device_command_sequence(
     if client is None:
         return fallback_reply
 
-    provider, model_name, _ = apply_model_selection("iot")
+    provider, model_name, _, _ = apply_model_selection("iot")
     vision_model = os.getenv("IOT_VISION_MODEL") or model_name
     vision_supported = provider_supports_vision(provider)
     if vision_supported:
