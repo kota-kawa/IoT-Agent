@@ -146,6 +146,23 @@ SUPPORTED_ACTIONS: Dict[str, Dict[str, Any]] = {
             }
         ],
     },
+    "play_passive_buzzer": {
+        "description": "Play a tone on the passive buzzer wired to BCM21 (physical pin 40) via PWM.",
+        "params": [
+            {
+                "name": "frequency",
+                "type": "number",
+                "required": False,
+                "description": "Tone frequency in Hz (default: 1000).",
+            },
+            {
+                "name": "duration",
+                "type": "number",
+                "required": False,
+                "description": "Duration in seconds (default: 2).",
+            },
+        ],
+    },
     "no_action": {
         "description": "Used when the request should not trigger a device operation.",
         "params": [
@@ -488,6 +505,7 @@ IN4 = 22
 TRIG_PIN = 5
 ECHO_PIN = 6
 PIR_PIN = 26
+BUZZER_PIN = 21
 
 
 class _ActionContext:
@@ -817,6 +835,38 @@ def _monitor_motion(parameters: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _play_passive_buzzer(parameters: Dict[str, Any]) -> Dict[str, Any]:
+    _require_gpio()
+    frequency = _coerce_positive_float(parameters, "frequency", 1000.0)
+    duration = _coerce_positive_float(parameters, "duration", 2.0)
+    context = _ActionContext(timeout=duration + 0.5)
+
+    GPIO.setmode(GPIO.BCM)
+    GPIO.setwarnings(False)
+    GPIO.setup(BUZZER_PIN, GPIO.OUT, initial=GPIO.LOW)
+
+    pwm = GPIO.PWM(BUZZER_PIN, frequency)
+    try:
+        pwm.start(50.0)
+        context.log("Buzzer start", frequency_hz=frequency, duty_cycle=50.0)
+        time.sleep(duration)
+        pwm.ChangeDutyCycle(0.0)
+        context.log("Buzzer stop", duration_seconds=duration)
+    finally:
+        try:
+            pwm.stop()
+        except Exception:
+            pass
+        GPIO.cleanup([BUZZER_PIN])
+
+    return {
+        "frequency_hz": frequency,
+        "duration_seconds": duration,
+        "events": context.events,
+        "timed_out": context.timed_out,
+    }
+
+
 # ==== LLM interaction =====================================================
 
 
@@ -849,6 +899,8 @@ def _keyword_plan(instruction: str) -> Dict[str, Any]:
         return {"action": "measure_distance_cm", "parameters": {}}
     if "motion" in lowered or "pir" in lowered or "sr501" in lowered:
         return {"action": "monitor_motion", "parameters": {}}
+    if "buzzer" in lowered or "beep" in lowered or "alarm" in lowered:
+        return {"action": "play_passive_buzzer", "parameters": {}}
     return {"action": "no_action", "parameters": {}, "message": "No relevant action found."}
 
 
@@ -939,6 +991,8 @@ def _execute_action(action: str, parameters: Dict[str, Any]) -> Tuple[bool, Any,
             return True, _measure_distance(parameters or {}), None
         if action == "monitor_motion":
             return True, _monitor_motion(parameters or {}), None
+        if action == "play_passive_buzzer":
+            return True, _play_passive_buzzer(parameters or {}), None
         if action == "no_action":
             message = parameters.get("message") if isinstance(parameters, dict) else None
             return True, {"message": message or "No action executed."}, None
