@@ -34,6 +34,7 @@ class _CommandExecutionSummary:
 
     device_id: Optional[str]
     command_name: str
+    job_id: Optional[str] = None
     args: Dict[str, Any] = field(default_factory=dict)
     manual_reply: str = ""
     result: Optional[Dict[str, Any]] = None
@@ -41,4 +42,3 @@ class _CommandExecutionSummary:
     is_agent: bool = False
     status: int = 200
     error_text: Optional[str] = None
-

@@ -180,13 +180,19 @@ SUPPORTED_ACTIONS: Dict[str, Dict[str, Any]] = {
         ],
     },
     "run_oled_robot_demo": {
-        "description": "Show the integrated ST7735 robot face animation demo on the connected display.",
+        "description": "Show the ST7735 mono-eye animation (Zaku-style) on the connected display and optionally render text.",
         "params": [
             {
                 "name": "timeout",
                 "type": "number",
                 "required": False,
                 "description": "Optional timeout in seconds before stopping the animation demo.",
+            },
+            {
+                "name": "text",
+                "type": "string",
+                "required": False,
+                "description": "Optional English text to draw under the mono-eye.",
             }
         ],
     },
@@ -435,6 +441,15 @@ LLM_SYSTEM_PROMPT = (
 def _build_url(path: str) -> str:
     # API パスをベース URL と結合してアクセス先を得る
     return f"{SERVER_BASE_URL}{path}"
+
+
+_DIGIT_NORMALIZATION = str.maketrans("０１２３４５６７８９", "0123456789")
+
+
+def _normalize_digits(text: str) -> str:
+    """Convert full-width digits to ASCII so heuristics catch Japanese numerals."""
+
+    return text.translate(_DIGIT_NORMALIZATION)
 
 
 def _load_device_id() -> str:
@@ -1235,6 +1250,14 @@ def _run_oled_robot_demo(parameters: Any) -> Dict[str, Any]:
     timeout = _parse_timeout_parameter(parameters, _DEFAULT_OLED_DEMO_TIMEOUT)
     context = _ActionExecutionContext(timeout)
     max_run_seconds = min(timeout, _OLED_RESULT_RETURN_SECONDS)
+    text_override: Optional[str] = None
+
+    if isinstance(parameters, dict):
+        candidate_text = parameters.get("text") or parameters.get("message")
+        if isinstance(candidate_text, list):
+            candidate_text = " ".join(str(item) for item in candidate_text if item is not None)
+        if isinstance(candidate_text, str) and candidate_text.strip():
+            text_override = " ".join(candidate_text.split())
 
     try:
         import math
@@ -1261,23 +1284,24 @@ def _run_oled_robot_demo(parameters: Any) -> Dict[str, Any]:
     BGR = False
     H_OFF, V_OFF = 0, 0
 
-    COL_BG = (12, 18, 26)
-    COL_PANEL = (20, 30, 42)
-    COL_FRAME = (220, 220, 230)
-    COL_EYE = (235, 235, 245)
-    COL_PUPIL = (30, 40, 55)
-    COL_MOUTH = (120, 200, 255)
-    COL_ACCENT = (80, 140, 255)
-    COL_TEXT = (230, 230, 240)
+    COL_BG = (6, 18, 10)
+    COL_HEAD = (20, 44, 26)
+    COL_VISOR = (10, 12, 16)
+    COL_FRAME = (90, 150, 96)
+    COL_TRACK = (24, 36, 30)
+    COL_GLOW_SOFT = (82, 20, 44)
+    COL_GLOW = (200, 54, 104)
+    COL_GLOW_CORE = (255, 148, 196)
+    COL_BEAM = (120, 210, 170)
+    COL_TEXT = (225, 240, 228)
+    COL_TEXT_BG = (12, 26, 16)
+    COL_TEXT_BORDER = (60, 120, 74)
+    COL_ACCENT = (36, 76, 46)
 
     FPS = 50
-    BLINK_PERIOD = 3.2
-    BLINK_LEN = 0.14
-    EYE_H_SWEEP = 10
-    EYE_V_SWEEP = 2
-    EYE_OPEN_BASE = 1.0
-    MOUTH_OPEN_MAX = 14
-    BREATH_PERIOD = 5.0
+    TEXT_PANEL_HEIGHT = 34
+    EYE_SWEEP = 0.48
+    TRACK_PADDING = 18
 
     def ensure_spidev() -> None:
         path = f"/dev/spidev{SPI_PORT}.{SPI_DEVICE}"
@@ -1311,90 +1335,114 @@ def _run_oled_robot_demo(parameters: Any) -> Dict[str, Any]:
             v_offset=V_OFF,
         )
 
-    def triangle_wave(t: float, period: float, lo: float, hi: float) -> float:
-        x = (t % period) / period
-        if x < 0.5:
-            y = x * 2.0
-        else:
-            y = 2.0 - x * 2.0
-        return lo + (hi - lo) * y
+    font = ImageFont.load_default()
 
-    def blink_open_ratio(t: float) -> float:
-        phase = t % BLINK_PERIOD
-        if phase < BLINK_LEN:
-            return max(0.0, 1.0 - (phase / BLINK_LEN) * 1.5)
-        return 1.0
+    def _text_width(text: str) -> int:
+        if hasattr(font, "getbbox"):
+            bbox = font.getbbox(text)
+            return bbox[2] - bbox[0]
+        return font.getsize(text)[0]
 
-    def draw_face(draw: ImageDraw.ImageDraw, t: float, W: int, H: int) -> None:
-        margin = 4
+    def wrap_text_lines(text: str, max_width: int) -> List[str]:
+        if not text:
+            return []
+        lines: List[str] = []
+        current = ""
+        words = text.split()
+        for word in words:
+            candidate = word if not current else f"{current} {word}"
+            if _text_width(candidate) <= max_width:
+                current = candidate
+                continue
+            if current:
+                lines.append(current)
+            chunk = ""
+            for char in word:
+                candidate_chunk = f"{chunk}{char}"
+                if _text_width(candidate_chunk) <= max_width:
+                    chunk = candidate_chunk
+                else:
+                    if chunk:
+                        lines.append(chunk)
+                    chunk = char
+            current = chunk
+        if current:
+            lines.append(current)
+        return lines[:3]
+
+    text_lines = wrap_text_lines(text_override or "MONO-EYE ONLINE", WIDTH - 18)
+
+    def draw_mono_eye(draw: ImageDraw.ImageDraw, t: float, W: int, H: int) -> None:
+        head_bottom = H - TEXT_PANEL_HEIGHT
         draw.rectangle((0, 0, W, H), fill=COL_BG)
-        draw.rectangle((margin, margin, W - margin, H - margin), outline=COL_FRAME, fill=COL_PANEL, width=2)
+        draw.rectangle((0, 0, W, head_bottom), fill=COL_HEAD)
 
-        breath = int(math.sin(2 * math.pi * t / BREATH_PERIOD) * 1.5)
+        visor_left = 10
+        visor_right = W - 10
+        visor_top = 18
+        visor_bottom = head_bottom - 8
+        draw.rectangle((visor_left, visor_top, visor_right, visor_bottom), outline=COL_FRAME, fill=COL_VISOR, width=2)
 
-        eye_w, eye_h = 42, 28
-        eye_spacing = 18
-        eye_y = 36 + breath
-        left_eye_x = W // 2 - eye_spacing // 2 - eye_w
-        right_eye_x = W // 2 + eye_spacing // 2
+        ridge_height = 8
+        ridge_y = visor_top - ridge_height
+        draw.rectangle((visor_left + 6, ridge_y, visor_right - 6, visor_top + 2), fill=COL_HEAD, outline=COL_ACCENT, width=1)
 
-        open_ratio = max(0.0, min(1.0, EYE_OPEN_BASE * blink_open_ratio(t)))
+        track_left = visor_left + TRACK_PADDING
+        track_right = visor_right - TRACK_PADDING
+        track_mid_y = (visor_top + visor_bottom) // 2
+        track_height = 20
+        track_top = track_mid_y - track_height // 2
+        track_bottom = track_mid_y + track_height // 2
+        draw.rectangle((track_left, track_top, track_right, track_bottom), fill=COL_TRACK, outline=COL_FRAME, width=1)
 
-        px_off = int(math.sin(t * 1.4) * EYE_H_SWEEP)
-        py_off = int(math.sin(t * 1.9) * EYE_V_SWEEP)
+        beam_phase = (t * 60) % (track_right - track_left)
+        beam_x = track_left + beam_phase
+        if beam_x < track_right:
+            draw.line((beam_x, visor_top + 4, beam_x, visor_bottom - 4), fill=COL_BEAM, width=2)
 
-        for ex in (left_eye_x, right_eye_x):
-            ebox = (ex, eye_y, ex + eye_w, eye_y + eye_h)
-            draw.ellipse(ebox, fill=COL_EYE, outline=COL_FRAME, width=2)
+        eye_band = ((math.sin(t * 1.2) * EYE_SWEEP) + (math.sin(t * 0.37) * 0.22)) * 0.5 + 0.5
+        eye_x = int(track_left + 8 + eye_band * max(4, (track_right - track_left - 16)))
+        eye_y = track_mid_y + int(math.sin(t * 0.7) * 3)
+        glow_r = 16
+        eye_r = 10
+        core_r = 6
 
-            if open_ratio < 1.0:
-                close_amt = int((1.0 - open_ratio) * (eye_h // 2))
-                draw.rectangle((ex - 2, eye_y - 2, ex + eye_w + 2, eye_y + close_amt), fill=COL_PANEL)
-                draw.rectangle((ex - 2, eye_y + eye_h - close_amt, ex + eye_w + 2, eye_y + eye_h + 2), fill=COL_PANEL)
+        draw.ellipse((eye_x - glow_r, eye_y - glow_r, eye_x + glow_r, eye_y + glow_r), fill=COL_GLOW_SOFT)
+        draw.ellipse((eye_x - eye_r, eye_y - eye_r, eye_x + eye_r, eye_y + eye_r), fill=COL_GLOW, outline=COL_FRAME, width=1)
+        draw.ellipse((eye_x - core_r, eye_y - core_r, eye_x + core_r, eye_y + core_r), fill=COL_GLOW_CORE)
+        draw.line((eye_x - eye_r - 6, eye_y - core_r // 2, eye_x + eye_r + 6, eye_y + core_r // 2), fill=COL_GLOW_CORE, width=1)
 
-            pr = 9
-            cx = ex + eye_w // 2 + px_off
-            cy = eye_y + eye_h // 2 + py_off
-            cx = max(ex + pr + 3, min(ex + eye_w - pr - 3, cx))
-            cy = max(eye_y + pr + 3, min(eye_y + eye_h - pr - 3, cy))
-            draw.ellipse((cx - pr, cy - pr, cx + pr, cy + pr), fill=COL_PUPIL)
+        meter_height = 20
+        meter_width = 6
+        meter_x = visor_left + 6
+        meter_y = visor_bottom - meter_height - 6
+        meter_value = int((math.sin(t * 1.5) * 0.5 + 0.5) * (meter_height - 4))
+        draw.rectangle((meter_x, meter_y, meter_x + meter_width, meter_y + meter_height), outline=COL_FRAME, width=1)
+        draw.rectangle((meter_x + 1, meter_y + meter_height - meter_value, meter_x + meter_width - 1, meter_y + meter_height - 2), fill=COL_ACCENT)
 
-        mouth_w = 80
-        mouth_h_base = 6
-        mouth_x = (W - mouth_w) // 2
-        mouth_y = 88 + breath
-
-        mouth_open = int((math.sin(t * 2.2) * 0.5 + 0.5) * MOUTH_OPEN_MAX)
-        if int(t) % 11 in (0, 1):
-            mouth_open = max(mouth_open, MOUTH_OPEN_MAX - 2)
-
+        right_meter_x = visor_right - meter_width - 6
+        draw.rectangle((right_meter_x, meter_y, right_meter_x + meter_width, meter_y + meter_height), outline=COL_FRAME, width=1)
         draw.rectangle(
-            (mouth_x - 2, mouth_y - 10, mouth_x + mouth_w + 2, mouth_y + 18),
-            outline=COL_FRAME,
-            width=1,
-        )
-        top = mouth_y - mouth_open // 2
-        bottom = mouth_y + mouth_open // 2 + mouth_h_base
-        draw.rectangle((mouth_x, top, mouth_x + mouth_w, bottom), fill=COL_MOUTH)
-
-        meter_h = 64
-        meter_w = 6
-        meter_y = 28 + breath
-        lv = int(triangle_wave(t, 1.6, 8, meter_h - 8))
-        draw.rectangle((margin + 2, meter_y, margin + 2 + meter_w, meter_y + meter_h), outline=COL_FRAME, width=1)
-        draw.rectangle((margin + 3, meter_y + meter_h - lv, margin + 1 + meter_w, meter_y + meter_h - 1), fill=COL_ACCENT)
-
-        rv = int(triangle_wave(t + 0.7, 1.9, 8, meter_h - 8))
-        draw.rectangle((W - margin - 2 - meter_w, meter_y, W - margin - 2, meter_y + meter_h), outline=COL_FRAME, width=1)
-        draw.rectangle(
-            (W - margin - 1 - meter_w, meter_y + meter_h - rv, W - margin - 3, meter_y + meter_h - 1),
+            (right_meter_x + 1, meter_y + meter_height - meter_value, right_meter_x + meter_width - 1, meter_y + meter_height - 2),
             fill=COL_ACCENT,
         )
 
-        draw.text((6, 4), "Robot Face", fill=COL_TEXT, font=ImageFont.load_default())
+        panel_top = head_bottom
+        if text_lines:
+            draw.rectangle((0, panel_top, W, H), fill=COL_TEXT_BG, outline=COL_TEXT_BORDER, width=1)
+            y = panel_top + 4
+            if hasattr(font, "getbbox"):
+                line_height = (font.getbbox("Ag")[3] - font.getbbox("Ag")[1]) + 2
+            else:
+                line_height = font.getsize("Ag")[1] + 2
+            for line in text_lines:
+                draw.text((8, y), line, fill=COL_TEXT, font=font)
+                y += line_height
 
     ensure_spidev()
     context.log("SPI device is available", device=f"/dev/spidev{SPI_PORT}.{SPI_DEVICE}")
+    if text_lines:
+        context.log("OLED text prepared", lines=text_lines)
 
     backlight: Optional[PWMLED] = None
     frames = 0
@@ -1413,7 +1461,7 @@ def _run_oled_robot_demo(parameters: Any) -> Dict[str, Any]:
                 set_backlight_percent(backlight, duty)
             with canvas(device) as draw:
                 draw.rectangle((0, 0, device.width, device.height), fill=COL_BG)
-                draw.text((10, device.height // 2 - 6), "Starting robot face...", fill=COL_TEXT)
+                draw.text((10, device.height // 2 - 6), "Activating mono-eye...", fill=COL_TEXT, font=font)
             context.log("Backlight fade-in step", percent=duty)
             if not context.sleep(0.05):
                 break
@@ -1426,7 +1474,7 @@ def _run_oled_robot_demo(parameters: Any) -> Dict[str, Any]:
 
             t = time.time() - t0
             with canvas(device) as draw:
-                draw_face(draw, t, device.width, device.height)
+                draw_mono_eye(draw, t, device.width, device.height)
             frames += 1
 
             if not context.sleep(frame_delay):
@@ -1453,6 +1501,7 @@ def _run_oled_robot_demo(parameters: Any) -> Dict[str, Any]:
             "target_fps": FPS,
             "display_left_on": True,
             "max_run_seconds": max_run_seconds,
+            "text_lines": text_lines,
         }
     finally:
         if backlight is not None:
@@ -2360,6 +2409,9 @@ def _build_servo_parameters_from_instruction(
 ) -> Dict[str, Any]:
     """Translate common servo-related phrases into script parameters."""
 
+    instruction = _normalize_digits(instruction)
+    lowered = instruction.lower()
+
     params: Dict[str, Any] = {}
     command_parts: List[str] = []
 
@@ -2494,7 +2546,7 @@ def _heuristic_multi_plan(instruction: str) -> List[Dict[str, Any]]:
     """Resolve an instruction into a deterministic sequence of actions."""
 
     # ヒューリスティックで複数アクションを導出
-    text = instruction.strip()
+    text = _normalize_digits(instruction).strip()
     if not text:
         return []
 
@@ -2561,16 +2613,18 @@ def _heuristic_multi_plan(instruction: str) -> List[Dict[str, Any]]:
     if any(keyword in lowered for keyword in led_keywords) or "ライト" in text or "点滅" in text:
         _add("run_led_demo", {})
 
-    oled_keywords = ["oled", "st7735", "robot face", "lcd animation"]
+    oled_keywords = ["oled", "st7735", "robot face", "lcd animation", "mono eye", "zaku", "mono-eye"]
     if (
         any(keyword in lowered for keyword in oled_keywords)
         or ("ロボット" in text and "顔" in text)
+        or "モノアイ" in text
+        or "ザク" in text
         or "液晶" in text
     ):
         _add("run_oled_robot_demo", {})
 
     if "servo" in lowered or "サーボ" in text:
-        servo_params = _build_servo_parameters_from_instruction(instruction, lowered)
+        servo_params = _build_servo_parameters_from_instruction(text, lowered)
         _add("run_servo_demo", servo_params)
         if any(
             keyword in lowered for keyword in ["dual servo", "two servo", "two servos", "double servo", "2 servo", "dual sweep"]
