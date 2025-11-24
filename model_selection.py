@@ -20,8 +20,8 @@ AVAILABLE_MODELS: List[Dict[str, str]] = [
     {"provider": "gemini", "model": "gemini-1.5-pro", "label": "Gemini 1.5 Pro"},
 
     # Claude (Anthropic)
-    {"provider": "claude", "model": "claude-3-5-sonnet-latest", "label": "Claude 3.5 Sonnet"},
-    {"provider": "claude", "model": "claude-3-5-haiku-latest", "label": "Claude 3.5 Haiku"},
+    {"provider": "claude", "model": "claude-3-5-sonnet-20241022", "label": "Claude 3.5 Sonnet"},
+    {"provider": "claude", "model": "claude-3-5-haiku-20241022", "label": "Claude 3.5 Haiku"},
 
     # Groq (Llama)
     {"provider": "groq", "model": "llama-3.3-70b-versatile", "label": "Llama 3.3 70B (Groq)"},
