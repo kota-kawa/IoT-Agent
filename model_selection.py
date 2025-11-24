@@ -7,23 +7,24 @@ import os
 from pathlib import Path
 from typing import Dict, List, Tuple
 
-DEFAULT_SELECTION = {"provider": "gemini", "model": "gemini-2.0-flash-001"}
+# 2025年11月時点の推奨デフォルトに変更
+DEFAULT_SELECTION = {"provider": "gemini", "model": "gemini-2.0-flash"}
 
 AVAILABLE_MODELS: List[Dict[str, str]] = [
     # OpenAI
     {"provider": "openai", "model": "gpt-4o", "label": "GPT-4o"},
-    {"provider": "openai", "model": "o1-mini", "label": "o1 Mini (Fast/Reasoning)"},
+    {"provider": "openai", "model": "o3-mini", "label": "o3 Mini (Reasoning)"},
     
-    # Gemini
-    {"provider": "gemini", "model": "gemini-2.0-flash-001", "label": "Gemini 2.0 Flash (New)"},
-    {"provider": "gemini", "model": "gemini-1.5-pro-002", "label": "Gemini 1.5 Pro-002 (Stable)"},
+    # Gemini (Google)
+    {"provider": "gemini", "model": "gemini-2.0-flash", "label": "Gemini 2.0 Flash"},
+    {"provider": "gemini", "model": "gemini-1.5-pro", "label": "Gemini 1.5 Pro"},
 
-    # Claude
-    {"provider": "claude", "model": "claude-3-5-sonnet-latest", "label": "Claude 3.5 Sonnet"},
-    {"provider": "claude", "model": "claude-3-5-haiku-latest", "label": "Claude 3.5 Haiku"},
+    # Claude (via OpenRouter) - Prefix required
+    {"provider": "claude", "model": "anthropic/claude-3.7-sonnet", "label": "Claude 3.7 Sonnet"},
+    {"provider": "claude", "model": "anthropic/claude-3.5-haiku", "label": "Claude 3.5 Haiku"},
 
-    # Groq
-    {"provider": "groq", "model": "llama-3.1-70b-versatile", "label": "Llama 3.1 70B (Groq)"},
+    # Groq (Llama)
+    {"provider": "groq", "model": "llama-3.3-70b-versatile", "label": "Llama 3.3 70B (Groq)"},
     {"provider": "groq", "model": "llama-3.1-8b-instant", "label": "Llama 3.1 8B (Groq)"},
 ]
 
