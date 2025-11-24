@@ -1,4 +1,5 @@
 import json
+import threading
 from typing import Any, Dict, List, Optional, Tuple
 
 from openai import OpenAI
@@ -200,6 +201,7 @@ def _execute_standard_device_command(
         return _CommandExecutionSummary(
             device_id=device_id,
             command_name=command_name,
+            job_id=job_id,
             args=args_dict,
             manual_reply=combined,
         )
@@ -212,6 +214,7 @@ def _execute_standard_device_command(
         return _CommandExecutionSummary(
             device_id=device_id,
             command_name=command_name,
+            job_id=job_id,
             args=args_dict,
             manual_reply=manual_reply,
             result=result,
@@ -224,6 +227,7 @@ def _execute_standard_device_command(
     return _CommandExecutionSummary(
         device_id=device_id,
         command_name=command_name,
+        job_id=job_id,
         args=args_dict,
         manual_reply=timeout_reply,
     )
@@ -235,35 +239,61 @@ def _execute_device_command_sequence(
     initial_reply: str,
     commands: List[Dict[str, Any]],
 ) -> Tuple[str, int]:
-    # 連続コマンドを順に処理し、レスポンス文と言語コードを返す
+    # 連続コマンドをできるだけ同時に処理し、レスポンス文と言語コードを返す
 
     if not commands:
         return initial_reply, 200
 
-    summaries: List[_CommandExecutionSummary] = []
-    current_initial = initial_reply
+    summaries: List[Optional[_CommandExecutionSummary]] = [None] * len(commands)
+    threads: List[threading.Thread] = []
 
-    for command in commands:
+    def _run_command(index: int, command: Dict[str, Any]) -> None:
         device_id = command.get("device_id")
         device = _DEVICES.get(device_id) if isinstance(device_id, str) else None
 
-        if device and _device_is_agent(device):
-            summary = _execute_agent_device_command(
-                client, device, messages, current_initial, command
-            )
-        else:
-            summary = _execute_standard_device_command(
-                client, messages, current_initial, command
+        try:
+            if device and _device_is_agent(device):
+                summary = _execute_agent_device_command(
+                    client, device, messages, initial_reply, command
+                )
+            else:
+                summary = _execute_standard_device_command(
+                    client, messages, initial_reply, command
+                )
+        except Exception as exc:  # pragma: no cover - defensive guard
+            message = str(exc)
+            summary = _CommandExecutionSummary(
+                device_id=device_id,
+                command_name=str(command.get("name") or "不明なコマンド"),
+                args=command.get("args") if isinstance(command.get("args"), dict) else {},
+                manual_reply=message,
+                status=500,
+                error_text=message,
             )
 
+        summaries[index] = summary
+
+    for index, command in enumerate(commands):
+        worker = threading.Thread(target=_run_command, args=(index, command))
+        worker.daemon = True
+        threads.append(worker)
+        worker.start()
+
+    for worker in threads:
+        worker.join()
+
+    completed_summaries: List[_CommandExecutionSummary] = [
+        summary for summary in summaries if isinstance(summary, _CommandExecutionSummary)
+    ]
+
+    if not completed_summaries:
+        return initial_reply, 200
+
+    failure_messages: List[str] = []
+    failure_status: Optional[int] = None
+
+    for summary in completed_summaries:
         if summary.status != 200:
-            failure_messages: List[str] = []
-            for existing in summaries:
-                if isinstance(existing.manual_reply, str):
-                    text = existing.manual_reply.strip()
-                    if text:
-                        failure_messages.append(text)
-
             candidate = ""
             if isinstance(summary.manual_reply, str) and summary.manual_reply.strip():
                 candidate = summary.manual_reply.strip()
@@ -272,20 +302,13 @@ def _execute_device_command_sequence(
 
             if candidate:
                 failure_messages.append(candidate)
+            failure_status = failure_status or summary.status
 
-            if failure_messages:
-                return "\n\n".join(failure_messages), summary.status
-            return initial_reply, summary.status
-
-        summaries.append(summary)
-        if isinstance(summary.manual_reply, str) and summary.manual_reply.strip():
-            current_initial = summary.manual_reply
-
-    if not summaries:
-        return initial_reply, 200
+    if failure_messages:
+        return "\n\n".join(failure_messages), failure_status or 500
 
     final_reply = _summarize_device_command_sequence(
-        client, messages, initial_reply, summaries
+        client, messages, initial_reply, completed_summaries
     )
     return final_reply, 200
 
@@ -352,6 +375,7 @@ def _execute_agent_device_command(
         return _CommandExecutionSummary(
             device_id=agent.device_id,
             command_name=AGENT_COMMAND_NAME,
+            job_id=job_id,
             args=command_args,
             manual_reply=combined,
             instruction=english_instruction,
@@ -369,6 +393,7 @@ def _execute_agent_device_command(
         return _CommandExecutionSummary(
             device_id=agent.device_id,
             command_name=AGENT_COMMAND_NAME,
+            job_id=job_id,
             args=command_args,
             manual_reply=manual_reply,
             result=result,
@@ -387,6 +412,7 @@ def _execute_agent_device_command(
     return _CommandExecutionSummary(
         device_id=agent.device_id,
         command_name=AGENT_COMMAND_NAME,
+        job_id=job_id,
         args=command_args,
         manual_reply=timeout_reply,
         instruction=english_instruction,
