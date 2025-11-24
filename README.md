@@ -25,9 +25,12 @@ OpenAI API を利用したチャット型オーケストレーションでデバ
    ```
 3. **環境変数 (secrets.env 推奨)**:
    - `OPENAI_API_KEY` — LLM 呼び出しに使用する OpenAI API キー。
+   - `CLAUDE_API_KEY` または `ANTHROPIC_API_KEY` — Claude 系モデルを選択する場合に使用。
+   - `GEMINI_API_KEY` または `GOOGLE_API_KEY` — Gemini 系モデルを選択する場合に使用。
+   - `GROQ_API_KEY` — Groq (Llama) モデルを選択する場合に使用。
    - `FLASK_SECRET_KEY` — Flask セッション暗号化キー (未設定時は "change-this-secret")。
    - `MAX_COMPLETED_JOBS` — 完了ジョブの保持数 (デフォルト 200)。
-  - `DEVICE_RESULT_TIMEOUT` — エッジ結果待機の秒数 (デフォルト 60 秒)。
+   - `DEVICE_RESULT_TIMEOUT` — エッジ結果待機の秒数 (デフォルト 60 秒)。
    - `APP_PASSWORD` はコード上で `kkawagoe` に固定されています。運用時は `app.py` の定数を変更してください。
 
 ## 起動方法
@@ -50,7 +53,7 @@ docker run --rm -p 5006:5006 --env-file secrets.env iot-agent
 - ダッシュボードは左にチャット、右にデバイス一覧カードを表示し、登録ダイアログからデバイスを追加できます。
 
 ## チャットと LLM 連携
-- `/api/chat` にユーザーとアシスタントの会話履歴を JSON で送信すると、OpenAI Responses API (`gpt-4.1-2025-04-14`) を介して
+- `/api/chat` にユーザーとアシスタントの会話履歴を JSON で送信すると、OpenAI Responses API（デフォルトは `gpt-4.1-mini`、ドロップダウンから即時切替可）を介して
   日本語回答とデバイスコマンド候補を生成します。
 - エージェント用デバイスが登録済みの場合は、指示文を英語へ変換してエッジ側に送信し、結果を待機・要約します。
 - エージェント不在時は LLM 応答のみを返し、コマンドは実行されません。
@@ -62,6 +65,8 @@ docker run --rm -p 5006:5006 --env-file secrets.env iot-agent
 | GET | `/` | 認証済みならダッシュボード、未認証ならログイン画面。
 | GET/POST/DELETE | `/api/session` | セッション状態確認、JSON ログイン、ログアウト。
 | POST | `/api/chat` | チャットメッセージを処理し、LLM 応答と実行結果を返却。
+| GET | `/api/models` | 利用可能な LLM モデル一覧と現在の選択を返却。
+| GET | `/api/dependencies` | 主要依存関係と必須環境変数のセット状況を返却（値は返さない）。
 | POST | `/api/devices/register` | 新規デバイス登録 (能力一覧とメタ情報を受け取る)。
 | GET | `/api/devices` | 登録済みデバイス一覧。
 | PATCH | `/api/devices/<device_id>/name` | 表示名の更新。

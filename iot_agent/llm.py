@@ -286,8 +286,10 @@ def _structured_conversation_review_prompt(messages: List[Dict[str, str]]) -> Di
 
     conversation_dump = "\n".join(conversation_dump_lines) or "Conversation log was empty."
 
+    review_model = apply_model_selection("iot")[1] or "gpt-4.1"
+
     return {
-        "model": "gpt-4.1-2025-04-14",
+        "model": review_model,
         "input": [
             {"role": "system", "content": system_prompt},
             {"role": "system", "content": context_message},

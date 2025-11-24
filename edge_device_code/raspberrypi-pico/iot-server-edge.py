@@ -116,6 +116,8 @@ def _format_for_log(value, max_length=400):
 # ハードウェア初期化
 # =========================
 LED_PIN = Pin("LED", Pin.OUT)
+led0 = Pin(0, Pin.OUT)
+led1 = Pin(1, Pin.OUT)
 TEMP_ADC = ADC(4)
 ADC_TO_VOLT = 3.3 / 65535.0
 
@@ -380,6 +382,30 @@ def read_temperature(samples: int = 16, sample_interval_sec: float = 0.01):
     temp_c = 27.0 - (vtemp - 0.706) / 0.001721
     print("[temp] est -> {:.2f} C (avg of {})".format(temp_c, samples))
     return round(temp_c, 2)
+
+def led0_on():
+    """Turn on LED 0 (GPIO0)"""
+    led0.value(1)
+    print("[led0] on")
+    return True
+
+def led0_off():
+    """Turn off LED 0 (GPIO0)"""
+    led0.value(0)
+    print("[led0] off")
+    return True
+
+def led1_on():
+    """Turn on LED 1 (GPIO1)"""
+    led1.value(1)
+    print("[led1] on")
+    return True
+
+def led1_off():
+    """Turn off LED 1 (GPIO1)"""
+    led1.value(0)
+    print("[led1] off")
+    return True
 
 
 # =========================
@@ -896,6 +922,26 @@ FUNCTIONS = {
             {"name": "times", "type": "int", "default": 5, "required": False},
             {"name": "interval_sec", "type": "float", "default": 0.2, "required": False},
         ],
+    },
+    "led0_on": {
+        "callable": led0_on,
+        "description": "Turn on LED 0 (GPIO0).",
+        "params": [],
+    },
+    "led0_off": {
+        "callable": led0_off,
+        "description": "Turn off LED 0 (GPIO0).",
+        "params": [],
+    },
+    "led1_on": {
+        "callable": led1_on,
+        "description": "Turn on LED 1 (GPIO1).",
+        "params": [],
+    },
+    "led1_off": {
+        "callable": led1_off,
+        "description": "Turn off LED 1 (GPIO1).",
+        "params": [],
     },
     "temp": {
         "callable": read_temperature,
