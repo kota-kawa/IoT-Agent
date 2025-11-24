@@ -10,6 +10,46 @@ from .device_utils import _build_device_context, _format_result_for_prompt
 from model_selection import apply_model_selection, provider_supports_vision, update_override
 
 
+def _content_to_text(content: Any) -> str:
+    """Normalise chat completion content into a plain string."""
+
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+
+    if hasattr(content, "text") and isinstance(content.text, str):
+        return content.text
+
+    # Newer SDKs and some providers return a list of content parts
+    if isinstance(content, list):
+        parts: List[str] = []
+        for part in content:
+            if isinstance(part, str):
+                parts.append(part)
+                continue
+            if hasattr(part, "text") and isinstance(part.text, str):
+                parts.append(part.text)
+                continue
+            if isinstance(part, dict):
+                for key in ("text", "data", "content"):
+                    value = part.get(key)
+                    if isinstance(value, str):
+                        parts.append(value)
+                        break
+        joined = "\n".join(p.strip() for p in parts if isinstance(p, str) and p.strip())
+        if joined:
+            return joined
+
+    if isinstance(content, dict):
+        for key in ("text", "data", "content"):
+            value = content.get(key)
+            if isinstance(value, str) and value.strip():
+                return value
+
+    return str(content).strip()
+
+
 def _current_datetime_line() -> str:
     """Return the timestamp string used in system prompts."""
     return datetime.now().strftime("現在の日時ー%Y年%m月%d日%H時%M分")
@@ -18,13 +58,21 @@ def _current_datetime_line() -> str:
 def _client() -> OpenAI:
     # OpenAI API クライアントを生成し、API キーが無い場合は例外を送出
 
-    _, model_name, base_url = apply_model_selection("iot")
+    provider, model_name, base_url = apply_model_selection("iot")
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY is not set")
+
+    client_kwargs: Dict[str, Any] = {"api_key": api_key}
     if base_url:
-        return OpenAI(api_key=api_key, base_url=base_url)
-    return OpenAI(api_key=api_key)
+        client_kwargs["base_url"] = base_url
+
+    # Gemini (Google AI) OpenAI 互換エンドポイントは API キーをクエリ/ヘッダーで受け付ける
+    if provider == "gemini" and base_url and "generativelanguage.googleapis.com" in base_url:
+        client_kwargs["default_headers"] = {"X-Goog-Api-Key": api_key}
+        client_kwargs["default_query"] = {"key": api_key}
+
+    return OpenAI(**client_kwargs)
 
 
 def _structured_llm_prompt(
@@ -98,12 +146,19 @@ def _structured_llm_prompt(
     }
 
 
-def _extract_json_object(text: str) -> Tuple[Optional[Any], Optional[str]]:
+def _extract_json_object(text: Any) -> Tuple[Optional[Any], Optional[str]]:
     # LLM 応答文字列から先頭の JSON オブジェクトを抽出する
-    if not text:
+    if text is None:
         return None, ""
 
-    stripped = text.strip()
+    if isinstance(text, dict):
+        return text, ""
+
+    if isinstance(text, list):
+        joined = "\n".join(_content_to_text(part) for part in text)
+        text = joined
+
+    stripped = str(text).strip()
     # コードフェンスの削除
     if stripped.startswith("```json"):
         stripped = stripped[7:]
@@ -207,7 +262,13 @@ def _call_llm_and_parse(client: OpenAI, messages: List[Dict[str, str]]) -> Dict[
 
         try:
             response = client.chat.completions.create(**prompt_kwargs, **extra_args)
-            reply_text = response.choices[0].message.content or ""
+            choice = response.choices[0] if response and response.choices else None
+            message = choice.message if choice else None
+            parsed_payload = getattr(message, "parsed", None) if message else None
+            if parsed_payload is None and isinstance(message, dict):
+                parsed_payload = message.get("parsed")
+            content = getattr(message, "content", None) if message else None
+            reply_text = _content_to_text(content)
         except Exception as e:
             # 呼び出しエラーの場合は即座に失敗扱いせず、ログに残してリトライするか例外を投げる
             # ここではエラーとして処理を継続
@@ -215,12 +276,16 @@ def _call_llm_and_parse(client: OpenAI, messages: List[Dict[str, str]]) -> Dict[
             last_raw = str(e)
             # ネットワークエラーなどはリトライしても無駄な場合があるため、attemptを進める
 
-        parsed_obj, cleaned_text = _extract_json_object(reply_text)
+        parsed_obj = parsed_payload
+        cleaned_text = ""
+        if parsed_obj is None:
+            parsed_obj, cleaned_text = _extract_json_object(reply_text)
 
-        last_raw = reply_text
-        last_cleaned = cleaned_text or reply_text.strip()
+        raw_text = reply_text or (json.dumps(parsed_obj) if parsed_obj is not None else "")
+        last_raw = raw_text
+        last_cleaned = cleaned_text or raw_text.strip()
 
-        validated, validation_errors = _validate_payload(parsed_obj, reply_text)
+        validated, validation_errors = _validate_payload(parsed_obj, raw_text)
         if validated:
             return validated
 
@@ -346,9 +411,18 @@ def _call_llm_for_conversation_review(
         extra_args["response_format"] = {"type": "json_object"}
 
     response = client.chat.completions.create(**kwargs, **extra_args)
-    reply_text = response.choices[0].message.content or ""
+    choice = response.choices[0] if response and response.choices else None
+    message = choice.message if choice else None
+    parsed_payload = getattr(message, "parsed", None) if message else None
+    if parsed_payload is None and isinstance(message, dict):
+        parsed_payload = message.get("parsed")
+    content = getattr(message, "content", None) if message else None
+    reply_text = _content_to_text(content)
 
-    parsed_obj, cleaned_text = _extract_json_object(reply_text)
+    parsed_obj = parsed_payload
+    cleaned_text = ""
+    if parsed_obj is None:
+        parsed_obj, cleaned_text = _extract_json_object(reply_text)
 
     result: Dict[str, Any] = {
         "action_required": False,
@@ -416,7 +490,10 @@ def _call_llm_text(client: OpenAI, payload: Dict[str, Any]) -> str:
         raise ValueError("Invalid payload for _call_llm_text")
 
     response = client.chat.completions.create(model=model, messages=messages)
-    text = response.choices[0].message.content or ""
+    choice = response.choices[0] if response and response.choices else None
+    message = choice.message if choice else None
+    content = getattr(message, "content", None) if message else None
+    text = _content_to_text(content)
     return text.strip()
 
 
