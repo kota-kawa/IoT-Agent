@@ -1345,7 +1345,7 @@ class _MonoEyeDisplayManager:
             self.last_error = "OLED device not initialized."
             return
 
-        self.started_at = time.time()
+        self.started_at = time.monotonic()
         frame_delay = 1.0 / _OLED_FPS
 
         for duty in _OLED_BACKLIGHT_STEPS:
@@ -1362,7 +1362,7 @@ class _MonoEyeDisplayManager:
 
         while not self.stop_event.is_set():
             try:
-                now = time.time()
+                now = time.monotonic()
                 with self.lock:
                     active_text = bool(self.text_lines) and now < self.text_until
                     if not active_text and self.text_lines:
