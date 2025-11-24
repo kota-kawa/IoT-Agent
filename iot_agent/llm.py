@@ -7,7 +7,12 @@ from openai import OpenAI
 
 from .config import AGENT_ROLE_VALUE
 from .device_utils import _build_device_context, _format_result_for_prompt
-from model_selection import apply_model_selection, provider_supports_vision, update_override
+from model_selection import (
+    PROVIDER_DEFAULTS,
+    apply_model_selection,
+    provider_supports_vision,
+    update_override,
+)
 
 
 def _content_to_text(content: Any) -> str:
@@ -61,7 +66,12 @@ def _client() -> OpenAI:
     provider, model_name, base_url = apply_model_selection("iot")
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
-        raise RuntimeError("OPENAI_API_KEY is not set")
+        # Look up the expected key for the selected provider for a better error message
+        provider_meta = PROVIDER_DEFAULTS.get(provider, {})
+        expected_key = provider_meta.get("api_key_env", "OPENAI_API_KEY")
+        raise RuntimeError(
+            f"API key for provider '{provider}' is not set. Please set '{expected_key}' in your secrets.env file."
+        )
 
     client_kwargs: Dict[str, Any] = {"api_key": api_key}
     if base_url:
