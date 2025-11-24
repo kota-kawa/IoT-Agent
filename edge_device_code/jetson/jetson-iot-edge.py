@@ -147,7 +147,7 @@ SUPPORTED_ACTIONS: Dict[str, Dict[str, Any]] = {
         ],
     },
     "play_passive_buzzer": {
-        "description": "Play a tone on the passive buzzer wired to BCM12 (physical pin 32) via PWM.",
+        "description": "Play a tone on the passive buzzer wired to BCM20 (physical pin 38) via PWM.",
         "params": [
             {
                 "name": "frequency",
@@ -505,7 +505,7 @@ IN4 = 22
 TRIG_PIN = 5
 ECHO_PIN = 6
 PIR_PIN = 26
-BUZZER_PIN = 12
+BUZZER_PIN = 20
 
 
 class _ActionContext:
