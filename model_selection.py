@@ -7,20 +7,24 @@ import os
 from pathlib import Path
 from typing import Dict, List, Tuple
 
-DEFAULT_SELECTION = {"provider": "openai", "model": "gpt-4.1-mini"}
+DEFAULT_SELECTION = {"provider": "openai", "model": "gpt-4o-mini"}
 
 AVAILABLE_MODELS: List[Dict[str, str]] = [
-    # OpenAI - latest instant/fast models
-    {"provider": "openai", "model": "gpt-4.1-mini", "label": "GPT-4.1 Mini (OpenAI)"},
-    {"provider": "openai", "model": "gpt-4.1", "label": "GPT-4.1 (OpenAI)"},
-    {"provider": "openai", "model": "gpt-4o-mini-2024-07-18", "label": "GPT-4o Mini 2024-07-18 (OpenAI)"},
-    # Claude - latest Sonnet for quality, Haiku for speed
-    {"provider": "claude", "model": "claude-3-5-sonnet-20241022", "label": "Claude 3.5 Sonnet (2024-10)"},
-    {"provider": "claude", "model": "claude-3-haiku-20240307", "label": "Claude 3 Haiku (fast)"},
-    # Gemini - current fast/prod OpenAI-compatible endpoints
-    {"provider": "gemini", "model": "gemini-1.5-flash-002", "label": "Gemini 1.5 Flash-002"},
-    {"provider": "gemini", "model": "gemini-1.5-pro-002", "label": "Gemini 1.5 Pro-002"},
-    # Groq - low-latency open models
+    # OpenAI - Latest models
+    {"provider": "openai", "model": "gpt-4o-mini", "label": "GPT-4o Mini (Fast)"},
+    {"provider": "openai", "model": "gpt-4o", "label": "GPT-4o (High Intellect)"},
+    
+    # Gemini - Updated to latest 1.5-002 and 2.0 Flash
+    # Note: "Gemini 2.5" does not exist yet. 2.0 Flash is the latest experimental, 1.5 Pro-002 is the latest stable.
+    {"provider": "gemini", "model": "gemini-2.0-flash-exp", "label": "Gemini 2.0 Flash (Newest/Exp)"},
+    {"provider": "gemini", "model": "gemini-1.5-pro-002", "label": "Gemini 1.5 Pro-002 (Stable)"},
+    {"provider": "gemini", "model": "gemini-1.5-flash-002", "label": "Gemini 1.5 Flash-002 (Fast)"},
+
+    # Claude - via OpenRouter or similar compatible layer usually
+    {"provider": "claude", "model": "claude-3-5-sonnet-latest", "label": "Claude 3.5 Sonnet (Latest)"},
+    {"provider": "claude", "model": "claude-3-5-haiku-latest", "label": "Claude 3.5 Haiku (Fast)"},
+
+    # Groq - Llama models
     {"provider": "groq", "model": "llama-3.1-70b-versatile", "label": "Llama 3.1 70B (Groq)"},
     {"provider": "groq", "model": "llama-3.1-8b-instant", "label": "Llama 3.1 8B (Groq)"},
 ]
@@ -38,6 +42,7 @@ PROVIDER_DEFAULTS: Dict[str, Dict[str, str | List[str] | None]] = {
         "api_key_aliases": ["ANTHROPIC_API_KEY"],
         "base_url_env": "CLAUDE_API_BASE",
         "base_url_env_aliases": [],
+        # Using OpenRouter as default for Claude if using OpenAI SDK
         "default_base_url": "https://openrouter.ai/api/v1",
     },
     "gemini": {
@@ -45,7 +50,8 @@ PROVIDER_DEFAULTS: Dict[str, Dict[str, str | List[str] | None]] = {
         "api_key_aliases": ["GOOGLE_API_KEY", "PALM_API_KEY"],
         "base_url_env": "GEMINI_API_BASE",
         "base_url_env_aliases": [],
-        "default_base_url": "https://generativelanguage.googleapis.com/openai/v1",
+        # Correct Google OpenAI-compatible endpoint
+        "default_base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
     },
     "groq": {
         "api_key_env": "GROQ_API_KEY",
@@ -152,6 +158,7 @@ def apply_model_selection(agent_key: str = "iot", override: Dict[str, str] | Non
     api_key = _resolve_api_key(meta)
     base_url = _resolve_base_url(meta)
 
+    # Apply to environment for OpenAI SDK to pick up automatically
     if api_key:
         os.environ["OPENAI_API_KEY"] = api_key
 
