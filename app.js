@@ -28,20 +28,19 @@ const escapeHtml = (s) =>
 const MODELS = [
   // OpenAI
   { provider: "openai", model: "gpt-4o", label: "GPT-4o (OpenAI)" },
+  { provider: "openai", model: "gpt-4o-mini", label: "GPT-4o Mini (OpenAI)" },
   { provider: "openai", model: "gpt-4-turbo", label: "GPT-4 Turbo (OpenAI)" },
-  { provider: "openai", model: "gpt-3.5-turbo", label: "GPT-3.5 Turbo (OpenAI)" },
   // Claude
+  { provider: "claude", model: "claude-3-5-sonnet-20240620", label: "Claude 3.5 Sonnet (Anthropic)" },
   { provider: "claude", model: "claude-3-opus-20240229", label: "Claude 3 Opus (Anthropic)" },
   { provider: "claude", model: "claude-3-sonnet-20240229", label: "Claude 3 Sonnet (Anthropic)" },
   { provider: "claude", model: "claude-3-haiku-20240307", label: "Claude 3 Haiku (Anthropic)" },
   // Gemini
-  { provider: "gemini", model: "gemini-1.5-pro-latest", label: "Gemini 1.5 Pro (Google)" },
-  { provider: "gemini", model: "gemini-1.5-flash-latest", label: "Gemini 1.5 Flash (Google)" },
-  { provider: "gemini", model: "gemini-1.0-pro", label: "Gemini 1.0 Pro (Google)" },
+  { provider: "gemini", model: "gemini-2.5-pro", label: "Gemini 2.5 Pro (Google)" },
+  { provider: "gemini", model: "gemini-2.5-flash", label: "Gemini 2.5 Flash (Google)" },
   // Groq
   { provider: "groq", model: "llama3-70b-8192", label: "Llama 3 70B (Groq)" },
   { provider: "groq", model: "llama3-8b-8192", label: "Llama 3 8B (Groq)" },
-  { provider: "groq", model: "mixtral-8x7b-32768", label: "Mixtral 8x7B (Groq)" },
 ];
 const DEFAULT_MODEL = { provider: "openai", model: "gpt-4o" };
 let currentModel = { ...DEFAULT_MODEL };
