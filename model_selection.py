@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 from typing import Dict, List, Tuple
 
-# 2025年11月時点の推奨デフォルトに変更
+# 2025年11月時点の推奨デフォルト
 DEFAULT_SELECTION = {"provider": "gemini", "model": "gemini-2.0-flash"}
 
 AVAILABLE_MODELS: List[Dict[str, str]] = [
@@ -34,14 +34,14 @@ PROVIDER_DEFAULTS: Dict[str, Dict[str, str | List[str] | None]] = {
         "api_key_aliases": [],
         "base_url_env": "OPENAI_BASE_URL",
         "base_url_env_aliases": [],
-        "default_base_url": None,
+        "default_base_url": None,  # 純正OpenAIはNone (デフォルト)
     },
     "claude": {
         "api_key_env": "CLAUDE_API_KEY",
         "api_key_aliases": ["ANTHROPIC_API_KEY"],
         "base_url_env": "CLAUDE_API_BASE",
         "base_url_env_aliases": [],
-        # Using OpenRouter as default for Claude if using OpenAI SDK
+        # OpenAI SDK経由でClaudeを使う場合はOpenRouter等を想定
         "default_base_url": "https://openrouter.ai/api/v1",
     },
     "gemini": {
@@ -49,7 +49,7 @@ PROVIDER_DEFAULTS: Dict[str, Dict[str, str | List[str] | None]] = {
         "api_key_aliases": ["GOOGLE_API_KEY", "PALM_API_KEY"],
         "base_url_env": "GEMINI_API_BASE",
         "base_url_env_aliases": [],
-        # Correct Google OpenAI-compatible endpoint
+        # GoogleのOpenAI互換エンドポイント
         "default_base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
     },
     "groq": {
@@ -121,8 +121,8 @@ def _resolve_api_key(meta: Dict[str, str | List[str] | None]) -> str:
     return fallback or ""
 
 
-def _resolve_base_url(meta: Dict[str, str | List[str] | None]) -> str:
-    """Resolve base URL override for non-OpenAI providers."""
+def _resolve_base_url(meta: Dict[str, str | List[str] | None]) -> str | None:
+    """Resolve base URL override for non-OpenAI providers. Returns None if using default."""
 
     env_names: List[str] = []
     base_env = meta.get("base_url_env")
@@ -145,10 +145,10 @@ def _resolve_base_url(meta: Dict[str, str | List[str] | None]) -> str:
     if isinstance(default_base, str):
         return default_base
 
-    return ""
+    return None
 
 
-def apply_model_selection(agent_key: str = "iot", override: Dict[str, str] | None = None) -> Tuple[str, str, str]:
+def apply_model_selection(agent_key: str = "iot", override: Dict[str, str] | None = None) -> Tuple[str, str, str | None]:
     selection = _coerce_selection(override or _OVERRIDE_SELECTION or _load_selection(agent_key))
     provider = selection["provider"]
     model = selection["model"]
@@ -160,16 +160,20 @@ def apply_model_selection(agent_key: str = "iot", override: Dict[str, str] | Non
     # Apply to environment for OpenAI SDK to pick up automatically
     if api_key:
         os.environ["OPENAI_API_KEY"] = api_key
+    
+    # 修正箇所: 以前の環境変数が残っていると誤動作するため、
+    # Base URLが指定されていない(純正OpenAIなど)場合は環境変数を削除する
+    if base_url:
+        os.environ["OPENAI_BASE_URL"] = base_url
+    else:
+        # 以前Groqなどが設定されていた場合に削除しないと、OpenAIへのリクエストがGroqに飛んでしまう
+        if "OPENAI_BASE_URL" in os.environ:
+            del os.environ["OPENAI_BASE_URL"]
 
-    existing_base = os.getenv("OPENAI_BASE_URL", "")
-    resolved_base = base_url or existing_base
-    if resolved_base:
-        os.environ["OPENAI_BASE_URL"] = resolved_base
-
-    return provider, model, resolved_base
+    return provider, model, base_url
 
 
-def update_override(selection: Dict[str, str] | None) -> Tuple[str, str, str]:
+def update_override(selection: Dict[str, str] | None) -> Tuple[str, str, str | None]:
     """Set in-memory override and return applied config."""
 
     global _OVERRIDE_SELECTION
