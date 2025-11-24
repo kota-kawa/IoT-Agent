@@ -1,6 +1,8 @@
 import json
+import os
 import time
 from collections import deque
+from importlib import metadata
 from typing import Any, Dict, List, Optional, Tuple
 
 from flask import Flask, jsonify, redirect, request, session, url_for
@@ -22,7 +24,12 @@ from iot_agent.llm import (
     _client,
     _normalise_conversation_messages,
 )
-from model_selection import apply_model_selection, provider_supports_vision, update_override
+from model_selection import (
+    apply_model_selection,
+    current_available_models,
+    provider_supports_vision,
+    update_override,
+)
 from iot_agent.models import DeviceState
 from iot_agent.state import _COMPLETED_JOBS, _DEVICES, _JOB_METADATA, _PENDING_JOBS
 from iot_agent.validation import _validate_device_command, _validate_device_command_sequence
@@ -79,6 +86,37 @@ def _user_requests_environment_photo(messages: List[Dict[str, str]]) -> bool:
         return False
 
     return False
+
+
+def _dependency_report() -> Dict[str, Any]:
+    """Return a lightweight snapshot of dependency and environment readiness."""
+
+    packages = {}
+    for pkg in ("flask", "openai", "python-dotenv"):
+        try:
+            packages[pkg] = metadata.version(pkg)
+        except metadata.PackageNotFoundError:
+            packages[pkg] = "missing"
+
+    env_flags = {
+        "OPENAI_API_KEY": bool(os.getenv("OPENAI_API_KEY")),
+        "CLAUDE_API_KEY|ANTHROPIC_API_KEY": bool(
+            os.getenv("CLAUDE_API_KEY") or os.getenv("ANTHROPIC_API_KEY")
+        ),
+        "GEMINI_API_KEY|GOOGLE_API_KEY": bool(
+            os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or os.getenv("PALM_API_KEY")
+        ),
+        "GROQ_API_KEY": bool(os.getenv("GROQ_API_KEY")),
+        "FLASK_SECRET_KEY": bool(os.getenv("FLASK_SECRET_KEY")),
+    }
+
+    provider, model, base_url = apply_model_selection("iot")
+
+    return {
+        "packages": packages,
+        "environment": env_flags,
+        "model": {"provider": provider, "model": model, "base_url": base_url},
+    }
 
 
 def _llm_unavailable_response(exc: Exception) -> Tuple[Dict[str, Any], int]:
@@ -167,6 +205,19 @@ def update_model_settings():
     except Exception as exc:  # noqa: BLE001
         return jsonify({"error": f"モデル設定の更新に失敗しました: {exc}"}), 500
     return jsonify({"status": "ok", "applied": selection or "from_file"})
+
+
+@app.get("/api/models")
+def list_models():
+    """Expose available model choices and the active selection to the UI."""
+
+    provider, model, base_url = apply_model_selection("iot")
+    return jsonify(
+        {
+            "models": current_available_models(),
+            "current": {"provider": provider, "model": model, "base_url": base_url},
+        }
+    )
 
 
 @app.get("/api/devices/ping")
@@ -926,6 +977,13 @@ def post_result(device_id: str):
         response_payload["warning"] = "device_id mismatch resolved via job_id"
 
     return jsonify(response_payload)
+
+
+@app.get("/api/dependencies")
+def dependencies_status():
+    """Return dependency and environment readiness without exposing secrets."""
+
+    return jsonify(_dependency_report())
 
 
 if __name__ == "__main__":

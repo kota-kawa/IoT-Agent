@@ -25,24 +25,8 @@ const escapeHtml = (s) =>
   ));
 
 /** ---------- モデル選択 ---------- */
-const MODELS = [
-  // OpenAI
-  { provider: "openai", model: "gpt-4o", label: "GPT-4o (OpenAI)" },
-  { provider: "openai", model: "gpt-4o-mini", label: "GPT-4o Mini (OpenAI)" },
-  { provider: "openai", model: "gpt-4-turbo", label: "GPT-4 Turbo (OpenAI)" },
-  // Claude
-  { provider: "claude", model: "claude-3-5-sonnet-20240620", label: "Claude 3.5 Sonnet (Anthropic)" },
-  { provider: "claude", model: "claude-3-opus-20240229", label: "Claude 3 Opus (Anthropic)" },
-  { provider: "claude", model: "claude-3-sonnet-20240229", label: "Claude 3 Sonnet (Anthropic)" },
-  { provider: "claude", model: "claude-3-haiku-20240307", label: "Claude 3 Haiku (Anthropic)" },
-  // Gemini
-  { provider: "gemini", model: "gemini-2.5-pro", label: "Gemini 2.5 Pro (Google)" },
-  { provider: "gemini", model: "gemini-2.5-flash", label: "Gemini 2.5 Flash (Google)" },
-  // Groq
-  { provider: "groq", model: "llama3-70b-8192", label: "Llama 3 70B (Groq)" },
-  { provider: "groq", model: "llama3-8b-8192", label: "Llama 3 8B (Groq)" },
-];
-const DEFAULT_MODEL = { provider: "openai", model: "gpt-4o" };
+const DEFAULT_MODEL = { provider: "openai", model: "gpt-4.1-mini" };
+let availableModels = [];
 let currentModel = { ...DEFAULT_MODEL };
 
 const modelSelectEl = $("#modelSelect");
@@ -52,10 +36,14 @@ function populateModelSelect(){
   if(!modelSelectEl) return;
   modelSelectEl.innerHTML = ""; // 既存のオプションをクリア
 
-  MODELS.forEach((m) => {
+  const options = availableModels.length
+    ? availableModels
+    : [{ ...DEFAULT_MODEL, label: "Default (OpenAI gpt-4.1-mini)" }];
+
+  options.forEach((m) => {
     const option = document.createElement("option");
     option.value = `${m.provider}:${m.model}`;
-    option.textContent = m.label;
+    option.textContent = m.label || `${m.provider}:${m.model}`;
     if(m.provider === currentModel.provider && m.model === currentModel.model){
       option.selected = true;
     }
@@ -63,10 +51,41 @@ function populateModelSelect(){
   });
 }
 
+// サーバーから利用可能なモデル一覧と現在の選択を取得
+async function loadModelOptions(){
+  if(!modelSelectEl) return;
+
+  try{
+    const res = await fetch("/api/models", { cache: "no-store" });
+    if(!res.ok){
+      throw new Error(`HTTP ${res.status}`);
+    }
+    const data = await res.json();
+    if(Array.isArray(data.models)){
+      availableModels = data.models.filter(
+        (m) => m && m.provider && m.model
+      );
+    }
+    const current = data.current;
+    if(current && typeof current === "object" && current.provider && current.model){
+      currentModel = { provider: current.provider, model: current.model };
+    }
+  }catch(err){
+    console.error("Failed to load model options", err);
+    availableModels = [];
+    currentModel = { ...DEFAULT_MODEL };
+  }
+
+  populateModelSelect();
+}
+
 // モデル選択が変更されたときにバックエンドを更新
 async function handleModelChange(){
   if(!modelSelectEl) return;
-  const [provider, model] = modelSelectEl.value.split(":");
+  const fallbackValue = `${DEFAULT_MODEL.provider}:${DEFAULT_MODEL.model}`;
+  const [providerRaw, modelRaw] = (modelSelectEl.value || fallbackValue).split(":");
+  const provider = providerRaw || DEFAULT_MODEL.provider;
+  const model = modelRaw || DEFAULT_MODEL.model;
   currentModel = { provider, model };
 
   try{
@@ -935,7 +954,7 @@ if(chatResetBtn){
 /** ---------- 初期化 ---------- */
 // ページ読み込み時の初期化処理：挨拶メッセージ、UI 更新、デバイス取得
 (async function init(){
-  populateModelSelect(); // Populate the model selection dropdown
+  await loadModelOptions(); // Populate the model selection dropdown
   await handleModelChange(); // Set the initial model
   pushMessage("assistant", INITIAL_GREETING);
   updateChatControls();
