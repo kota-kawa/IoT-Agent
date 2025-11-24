@@ -7,7 +7,7 @@ from openai import OpenAI
 
 from .config import AGENT_ROLE_VALUE
 from .device_utils import _build_device_context, _format_result_for_prompt
-from model_selection import apply_model_selection, update_override
+from model_selection import apply_model_selection, provider_supports_vision, update_override
 
 
 def _current_datetime_line() -> str:
@@ -27,41 +27,56 @@ def _client() -> OpenAI:
     return OpenAI(api_key=api_key)
 
 
-def _structured_llm_prompt(messages: List[Dict[str, str]]) -> Dict[str, Any]:
+def _structured_llm_prompt(
+    messages: List[Dict[str, str]], retry_instruction: Optional[str] = None
+) -> Dict[str, Any]:
     # LLM へ投げる構造化プロンプトとコンテキストを組み立てる
     device_context = _build_device_context()
     timestamp_line = _current_datetime_line()
     system_prompt = (
         f"{timestamp_line}\n"
         "You are an assistant that manages IoT devices for the user. "
-        "Always respond with a strict JSON object containing the keys "
-        "'reply' and 'device_commands'. The 'reply' field is a natural "
-        "language response to the user. The 'device_commands' field must "
-        "be either null, an empty array, or an array of objects with the "
-        "keys 'device_id', 'name', and 'args'. Each array element "
-        "represents one sequential task for the devices to execute. Do "
-        "not wrap the JSON inside code fences. If no device action is "
-        "required, set 'device_commands' to null. Only use device IDs and "
-        "capability names provided in the context. When an action is "
-        "requested without a runtime or duration, default the operation to "
-        "5 seconds. When an action is "
-        "required and multiple devices exist, you MUST select the single "
-        "most appropriate device_id for each step by comparing the roles "
-        "and capabilities described. Never omit 'device_id' or use an "
-        "unknown value. If the correct device cannot be determined, set "
-        "'device_commands' to null and ask the user to clarify which "
-        "device should be used. Do not propose or attempt any device "
-        "operation that is unavailable or unsupported by the provided "
-        "capabilities; if an action cannot be executed, explain that and "
-        "set 'device_commands' to null. When the user requests a device "
-        "action and it is possible to execute with the available devices "
-        "and capabilities, you MUST return the executable command JSON in "
-        "'device_commands'. Prefer devices tagged with the "
-        f"'{AGENT_ROLE_VALUE}' role for complex or conversational tasks. "
-        "The 'reply' value must be written in Japanese prose without "
-        "including JSON syntax, code formatting, or explicit mentions of "
+        "Always respond with a strict JSON object containing ONLY the keys "
+        "'reply' and 'device_commands'. Your entire output must parse as JSON "
+        "without code fences or trailing text. Valid shapes are exactly:\n"
+        '{"reply": "日本語の返答", "device_commands": null}\n'
+        '{"reply": "日本語の返答", "device_commands": []}\n'
+        '{"reply": "日本語の返答", "device_commands": [{"device_id": "device-id", "name": "capability", "args": {"duration": 5}}]}\n'
+        "The 'reply' field is a natural language response to the user in Japanese. "
+        "The 'device_commands' field must be either null, an empty array, or an "
+        "array of objects with the keys 'device_id', 'name', and 'args'. Each array "
+        "element represents one sequential task for the devices to execute. Do "
+        "not wrap the JSON inside code fences. If no device action is required, "
+        "set 'device_commands' to null. Only use device IDs and capability names "
+        "provided in the context. When an action is requested without a runtime "
+        "or duration, default the operation to 5 seconds. When an action is "
+        "required and multiple devices exist, you MUST select the single most "
+        "appropriate device_id for each step by comparing the roles and "
+        "capabilities described. Never omit 'device_id' or use an unknown value. "
+        "If the correct device cannot be determined, set 'device_commands' to null "
+        "and ask the user to clarify which device should be used. Do not propose "
+        "or attempt any device operation that is unavailable or unsupported by the "
+        "provided capabilities; if an action cannot be executed, explain that and "
+        "set 'device_commands' to null. When the user requests a device action and "
+        "it is possible to execute with the available devices and capabilities, you "
+        "MUST return the executable command JSON in 'device_commands'. Prefer "
+        f"devices tagged with the '{AGENT_ROLE_VALUE}' role for complex or "
+        "conversational tasks. The 'reply' value must be written in Japanese prose "
+        "without including JSON syntax, code formatting, or explicit mentions of "
         "'JSON'. Summarise any structured information conversationally."
     )
+    provider, model_name, _ = apply_model_selection("iot")
+    if provider_supports_vision(provider):
+        system_prompt += (
+            " When the user asks to see the surroundings or wants to know what the camera sees, "
+            "enqueue the 'capture_camera_photo' capability first so you can base your reply on the photo."
+        )
+    else:
+        system_prompt += (
+            " Camera-based situational awareness is disabled for the current model selection; "
+            "if the user asks to see the surroundings, explain that the current model cannot use the camera "
+            "and do not add the 'capture_camera_photo' capability."
+        )
 
     context_message = (
         "Available device information:\n" + device_context
@@ -69,15 +84,17 @@ def _structured_llm_prompt(messages: List[Dict[str, str]]) -> Dict[str, Any]:
         else "No devices are currently registered."
     )
 
-    _, model_name, _ = apply_model_selection("iot")
+    prompt_messages: List[Dict[str, str]] = [
+        {"role": "system", "content": system_prompt},
+        {"role": "system", "content": context_message},
+        *messages,
+    ]
+    if retry_instruction:
+        prompt_messages.append({"role": "system", "content": retry_instruction})
 
     return {
         "model": model_name,
-        "input": [
-            {"role": "system", "content": system_prompt},
-            {"role": "system", "content": context_message},
-            *messages,
-        ],
+        "input": prompt_messages,
     }
 
 
@@ -112,41 +129,90 @@ def _extract_json_object(text: str) -> Tuple[Optional[Any], Optional[str]]:
 def _call_llm_and_parse(client: OpenAI, messages: List[Dict[str, str]]) -> Dict[str, Any]:
     # LLM 応答から reply と device_commands を抽出して辞書化
 
-    response = client.responses.create(**_structured_llm_prompt(messages))
-    reply_text = getattr(response, "output_text", None) or ""
+    max_attempts = 3
+    last_cleaned: str = ""
+    last_raw: str = ""
 
-    parsed_obj, cleaned_text = _extract_json_object(reply_text)
+    def _validate_payload(payload: Any, raw_text: str) -> Tuple[Optional[Dict[str, Any]], List[str]]:
+        if not isinstance(payload, dict):
+            return None, ["LLM response was not a JSON object with 'reply' and 'device_commands' keys."]
 
-    if isinstance(parsed_obj, dict):
-        parsed = parsed_obj
-    else:
-        parsed = {"reply": cleaned_text or reply_text.strip(), "device_command": None}
+        errors: List[str] = []
+        reply_field = payload.get("reply")
+        if not isinstance(reply_field, str) or not reply_field.strip():
+            errors.append("reply must be a non-empty string.")
 
-    reply_message = parsed.get("reply")
-    if not isinstance(reply_message, str):
-        reply_message = (cleaned_text or reply_text).strip()
+        device_commands_field = payload.get("device_commands")
+        commands: List[Dict[str, Any]] = []
+        if device_commands_field is None:
+            commands = []
+        elif isinstance(device_commands_field, dict):
+            device_commands_field = [device_commands_field]
+        if isinstance(device_commands_field, list):
+            for index, item in enumerate(device_commands_field, start=1):
+                if not isinstance(item, dict):
+                    errors.append(f"device_commands[{index}] must be an object.")
+                    continue
+                device_id = item.get("device_id")
+                name = item.get("name")
+                args = item.get("args")
+                if not isinstance(device_id, str) or not device_id.strip():
+                    errors.append(f"device_commands[{index}].device_id must be a non-empty string.")
+                if not isinstance(name, str) or not name.strip():
+                    errors.append(f"device_commands[{index}].name must be a non-empty string.")
+                if args is None:
+                    args = {}
+                if not isinstance(args, dict):
+                    errors.append(f"device_commands[{index}].args must be a JSON object.")
+                commands.append(
+                    {
+                        "device_id": device_id.strip() if isinstance(device_id, str) else "",
+                        "name": name.strip() if isinstance(name, str) else "",
+                        "args": args if isinstance(args, dict) else {},
+                    }
+                )
+        elif device_commands_field is not None:
+            errors.append("device_commands must be null or an array of objects.")
 
-    device_commands_field = parsed.get("device_commands")
-    if isinstance(device_commands_field, dict):
-        device_commands: List[Dict[str, Any]] = [device_commands_field]
-    elif isinstance(device_commands_field, list):
-        device_commands = [
-            command
-            for command in device_commands_field
-            if isinstance(command, dict)
-        ]
-    else:
-        device_commands = []
+        if errors:
+            return None, errors
 
-    if not device_commands:
-        single_command = parsed.get("device_command")
-        if isinstance(single_command, dict):
-            device_commands = [single_command]
+        reply_message = reply_field.strip()
+        return {
+            "reply": reply_message,
+            "device_commands": commands,
+            "raw": raw_text,
+        }, []
+
+    retry_instruction: Optional[str] = None
+
+    for attempt in range(1, max_attempts + 1):
+        response = client.responses.create(**_structured_llm_prompt(messages, retry_instruction))
+        reply_text = getattr(response, "output_text", None) or ""
+        parsed_obj, cleaned_text = _extract_json_object(reply_text)
+
+        last_raw = reply_text
+        last_cleaned = cleaned_text or reply_text.strip()
+
+        validated, validation_errors = _validate_payload(parsed_obj, reply_text)
+        if validated:
+            return validated
+
+        if attempt == max_attempts:
+            break
+
+        error_line = "; ".join(validation_errors) if validation_errors else "Output was not valid JSON."
+        retry_instruction = (
+            "The previous reply was invalid and could not be parsed. Reason: "
+            f"{error_line} Regenerate NOW using only a valid JSON object that matches "
+            'the schema {"reply": "<string>", "device_commands": null | [] | [{"device_id": "<id>", "name": "<capability>", "args": {}}]}. '
+            "Do not include code fences, markdown, or any commentary."
+        )
 
     return {
-        "reply": reply_message,
-        "device_commands": device_commands,
-        "raw": reply_text,
+        "reply": last_cleaned or last_raw or "LLM response could not be parsed.",
+        "device_commands": [],
+        "raw": last_raw,
     }
 
 
@@ -344,8 +410,10 @@ def _structured_agent_instruction_prompt(messages: List[Dict[str, str]]) -> Dict
         else "No devices are currently registered."
     )
 
+    model_name = apply_model_selection("iot")[1]
+
     return {
-        "model": "gpt-4.1-2025-04-14",
+        "model": model_name,
         "input": [
             {"role": "system", "content": system_prompt},
             {"role": "system", "content": context_message},
@@ -384,4 +452,5 @@ def _structured_agent_followup_prompt(
     messages.extend(base_messages)
     messages.append({"role": "system", "content": summary_instruction})
 
-    return {"model": "gpt-4.1-2025-04-14", "input": messages}
+    model_name = apply_model_selection("iot")[1]
+    return {"model": model_name, "input": messages}

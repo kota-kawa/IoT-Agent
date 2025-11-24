@@ -1235,6 +1235,10 @@ def agent_loop():
     pending_result = None
     pending_attempt = 0
     while True:
+        job = None
+        job_id = ""
+        name = ""
+        args = {}
         try:
             if CAPABILITY_SYNC_ENABLED and not capability_synced:
                 now_sec = _current_seconds()
@@ -1348,6 +1352,20 @@ def agent_loop():
             break
         except Exception as e:
             print("[agent] loop error: {}".format(e))
+            if job_id:
+                try:
+                    post_result(
+                        BASE_URL,
+                        device_id,
+                        job_id,
+                        False,
+                        None,
+                        "",
+                        _truncate_text(str(e)),
+                        max_attempts=1,
+                    )
+                except Exception as post_err:
+                    print("[agent] failed to report error for job {}: {}".format(job_id, post_err))
             # 軽いバックオフ
             sleep_s = POLL_INTERVAL_SEC + min(5, backoff)
             backoff = min(5, backoff + 1)

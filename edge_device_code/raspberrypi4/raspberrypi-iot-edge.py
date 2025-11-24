@@ -11,14 +11,8 @@ The implementation avoids hardware-specific features so that it runs on a
 plain Raspberry Pi 4 without additional peripherals.
 """
 
-"""使う候補のモデル
-Llama-3.2-3B-Instruct-Q3_K_M.gguf 1min 25sec 
-Phi-3-mini-4k-instruct-q4 1min 20sec 
-tinyllama-1.1b-chat-v1.0.Q3_K_M 1min
-tinyllama-1.1b-chat-v1.0.Q4_K_M 1min
-"""
-
 import argparse
+import base64
 import json
 import logging
 import os
@@ -73,7 +67,7 @@ SERVER_BASE_URL = os.getenv(
 # operations, while still allowing customization through the environment
 # variable.
 # HTTP タイムアウトやポーリング間隔など通信関連の設定
-REQUEST_TIMEOUT = float(os.getenv("IOT_AGENT_HTTP_TIMEOUT", "180"))
+REQUEST_TIMEOUT = float(os.getenv("IOT_AGENT_HTTP_TIMEOUT", "60"))
 POLL_INTERVAL = float(os.getenv("IOT_AGENT_POLL_INTERVAL", "2.0"))
 
 # 自動登録フラグ（ブール文字列を解釈）
@@ -415,7 +409,9 @@ def _console(message: str) -> None:
 
 LLM_SYSTEM_PROMPT = (
     "You convert simple English instructions into JSON commands for a Raspberry Pi automation agent.\n"
-    "Return ONLY a JSON object with the keys 'action', 'parameters', and optional 'message'.\n"
+    "Return ONLY a single JSON object that exactly matches the schema:\n"
+    '{"action": "<one of the supported actions>", "parameters": { ... }, "message": "<optional string>"}\n'
+    "Do not include code fences, explanations, or any trailing text.\n"
     "Valid actions are: "
     + ", ".join(sorted(SUPPORTED_ACTIONS.keys()))
     + ".\n"
@@ -889,9 +885,9 @@ def _get_weather(params: Dict[str, Any]) -> Dict[str, Any]:
 
 _DEFAULT_MOTOR_TEST_TIMEOUT = 30.0
 _DEFAULT_OLED_DEMO_TIMEOUT = 60.0
-_DEFAULT_SERVO_TIMEOUT = 90.0
+_DEFAULT_SERVO_TIMEOUT = 60.0
 _DEFAULT_LED_TIMEOUT = 45.0
-_DEFAULT_DUAL_SERVO_TIMEOUT = 120.0
+_DEFAULT_DUAL_SERVO_TIMEOUT = 60.0
 _OLED_RESULT_RETURN_SECONDS = 3.0
 _RETURN_TEXT_LIMIT = 3000
 _RETURN_TEXT_KEEP = 1500
@@ -1024,6 +1020,9 @@ def _capture_camera_photo(parameters: Any) -> Dict[str, Any]:
     picam2.capture_file(str(outfile))
     picam2.stop()
     duration = time.monotonic() - started
+    with outfile.open("rb") as image_file:
+        image_bytes = image_file.read()
+    image_base64 = base64.b64encode(image_bytes).decode("ascii")
 
     return {
         "saved_path": str(outfile),
@@ -1031,6 +1030,9 @@ def _capture_camera_photo(parameters: Any) -> Dict[str, Any]:
         "filename": outfile.name,
         "warmup_seconds": warmup,
         "duration_seconds": round(duration, 3),
+        "image_base64": image_base64,
+        "image_mime_type": "image/jpeg",
+        "file_size_bytes": len(image_bytes),
     }
 
 
@@ -1370,10 +1372,25 @@ def _run_oled_robot_demo(parameters: Any) -> Dict[str, Any]:
             lines.append(current)
         return lines[:3]
 
-    text_lines = wrap_text_lines(text_override or "MONO-EYE ONLINE", WIDTH - 18)
+    text_lines = wrap_text_lines(text_override or "", WIDTH - 18)
+    show_text_only = bool(text_lines)
+    panel_height = TEXT_PANEL_HEIGHT if show_text_only else 0
+
+    def draw_text_screen(draw: ImageDraw.ImageDraw, lines: List[str], W: int, H: int) -> None:
+        draw.rectangle((0, 0, W, H), fill=COL_TEXT_BG, outline=COL_TEXT_BORDER, width=1)
+        if hasattr(font, "getbbox"):
+            line_height = (font.getbbox("Ag")[3] - font.getbbox("Ag")[1]) + 2
+        else:
+            line_height = font.getsize("Ag")[1] + 2
+        total_height = len(lines) * line_height
+        y = max(8, (H - total_height) // 2)
+        for line in lines:
+            x = max(8, (W - _text_width(line)) // 2)
+            draw.text((x, y), line, fill=COL_TEXT, font=font)
+            y += line_height
 
     def draw_mono_eye(draw: ImageDraw.ImageDraw, t: float, W: int, H: int) -> None:
-        head_bottom = H - TEXT_PANEL_HEIGHT
+        head_bottom = H - panel_height
         draw.rectangle((0, 0, W, H), fill=COL_BG)
         draw.rectangle((0, 0, W, head_bottom), fill=COL_HEAD)
 
@@ -1427,17 +1444,6 @@ def _run_oled_robot_demo(parameters: Any) -> Dict[str, Any]:
             fill=COL_ACCENT,
         )
 
-        panel_top = head_bottom
-        if text_lines:
-            draw.rectangle((0, panel_top, W, H), fill=COL_TEXT_BG, outline=COL_TEXT_BORDER, width=1)
-            y = panel_top + 4
-            if hasattr(font, "getbbox"):
-                line_height = (font.getbbox("Ag")[3] - font.getbbox("Ag")[1]) + 2
-            else:
-                line_height = font.getsize("Ag")[1] + 2
-            for line in text_lines:
-                draw.text((8, y), line, fill=COL_TEXT, font=font)
-                y += line_height
 
     ensure_spidev()
     context.log("SPI device is available", device=f"/dev/spidev{SPI_PORT}.{SPI_DEVICE}")
@@ -1460,9 +1466,11 @@ def _run_oled_robot_demo(parameters: Any) -> Dict[str, Any]:
             if backlight is not None:
                 set_backlight_percent(backlight, duty)
             with canvas(device) as draw:
-                draw.rectangle((0, 0, device.width, device.height), fill=COL_BG)
-                draw.text((10, device.height // 2 - 6), "Activating mono-eye...", fill=COL_TEXT, font=font)
-            context.log("Backlight fade-in step", percent=duty)
+                if show_text_only:
+                    draw_text_screen(draw, text_lines or ["Showing message..."], device.width, device.height)
+                else:
+                    draw_mono_eye(draw, 0.0, device.width, device.height)
+            context.log("Backlight fade-in step", percent=duty, text_mode=show_text_only)
             if not context.sleep(0.05):
                 break
 
@@ -1474,7 +1482,10 @@ def _run_oled_robot_demo(parameters: Any) -> Dict[str, Any]:
 
             t = time.time() - t0
             with canvas(device) as draw:
-                draw_mono_eye(draw, t, device.width, device.height)
+                if show_text_only:
+                    draw_text_screen(draw, text_lines, device.width, device.height)
+                else:
+                    draw_mono_eye(draw, t, device.width, device.height)
             frames += 1
 
             if not context.sleep(frame_delay):
@@ -2191,23 +2202,64 @@ def _execute_action(action: str, parameters: Dict[str, Any]) -> Tuple[bool, Any,
 
 def _plan_from_instruction(llm: Llama, instruction: str) -> Dict[str, Any]:
     # LLM へ命令文を渡し、JSON 形式のプランを推定
-    messages = [
-        {"role": "system", "content": LLM_SYSTEM_PROMPT},
-        {"role": "user", "content": instruction},
-    ]
+    def _validate_plan(payload: Any) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+        if not isinstance(payload, dict):
+            return None, "response was not a JSON object."
+        action = payload.get("action")
+        if not isinstance(action, str) or not action.strip():
+            return None, "action must be a non-empty string."
+        action = action.strip()
+        if action not in SUPPORTED_ACTIONS:
+            return None, f"action '{action}' is not supported."
+        parameters = payload.get("parameters")
+        if parameters is None:
+            parameters = {}
+        if not isinstance(parameters, dict):
+            return None, "parameters must be a JSON object."
+        message = payload.get("message")
+        if message is not None and not isinstance(message, str):
+            return None, "message must be a string when provided."
 
-    logging.debug("LLM request: %s", instruction)
-    response = llm.create_chat_completion(
-        messages=messages,
-        temperature=LLAMA_TEMPERATURE,
-    )
+        normalised: Dict[str, Any] = {"action": action, "parameters": parameters}
+        if isinstance(message, str) and message.strip():
+            normalised["message"] = message.strip()
+        return normalised, None
 
-    text = response["choices"][0]["message"]["content"].strip()
-    logging.debug("LLM raw response: %s", text)
+    retry_instruction: Optional[str] = None
+    plan: Dict[str, Any] = {}
+    max_attempts = 3
 
-    plan = _extract_json(text)
-    if not isinstance(plan, dict):
-        plan = {}
+    for attempt in range(1, max_attempts + 1):
+        messages: List[Dict[str, str]] = [
+            {"role": "system", "content": LLM_SYSTEM_PROMPT},
+        ]
+        if retry_instruction:
+            messages.append({"role": "system", "content": retry_instruction})
+        messages.append({"role": "user", "content": instruction})
+
+        logging.debug("LLM request (attempt %s): %s", attempt, instruction)
+        response = llm.create_chat_completion(
+            messages=messages,
+            temperature=LLAMA_TEMPERATURE,
+        )
+
+        text = response["choices"][0]["message"]["content"].strip()
+        logging.debug("LLM raw response: %s", text)
+
+        candidate = _extract_json(text)
+        validated, error = _validate_plan(candidate)
+        if validated:
+            plan = validated
+            break
+
+        if attempt == max_attempts:
+            break
+
+        retry_instruction = (
+            "The previous reply was invalid JSON. Respond ONLY with a JSON object shaped as "
+            '{"action": "<supported action>", "parameters": { ... }, "message": "<optional string>"}. '
+            f"Error: {error or 'Unable to parse response.'}"
+        )
 
     if not plan:
         fallback = _keyword_plan(instruction)
@@ -2637,6 +2689,23 @@ def _heuristic_multi_plan(instruction: str) -> List[Dict[str, Any]]:
 # ==== Main loop ============================================================
 
 
+def _safe_job_id(job: Any) -> Optional[str]:
+    raw_job_id: Any = None
+    try:
+        raw_job_id = job.get("job_id") or job.get("id")
+    except Exception:
+        return None
+
+    if isinstance(raw_job_id, str):
+        job_id = raw_job_id.strip()
+    elif raw_job_id is not None:
+        job_id = str(raw_job_id)
+    else:
+        job_id = None
+
+    return job_id or None
+
+
 def _process_job(
     session: requests.Session,
     llm: Llama,
@@ -2976,7 +3045,39 @@ def main() -> None:
         while True:
             job = _poll_next_job(session, device_id)
             if job:
-                _process_job(session, llm, device_id, job)
+                try:
+                    _process_job(session, llm, device_id, job)
+                except Exception as exc:
+                    logging.exception("Unexpected error while processing job")
+                    job_id = _safe_job_id(job)
+                    command = job.get("command") if isinstance(job, dict) else {}
+                    action_name = None
+                    if isinstance(command, dict):
+                        action_name = command.get("name")
+                        if isinstance(action_name, str):
+                            action_name = action_name.strip() or None
+                    error_text = str(exc)
+                    if job_id:
+                        try:
+                            payload = _build_result_payload(
+                                device_id=device_id,
+                                job_id=job_id,
+                                ok=False,
+                                action=action_name,
+                                parameters=None,
+                                message=error_text,
+                                result=None,
+                                error=error_text,
+                            )
+                            _post_result(session, payload)
+                        except Exception:
+                            logging.exception("Failed to report unexpected error for job %s", job_id)
+                    _console(
+                        "Job {} processing failed unexpectedly: {}".format(
+                            job_id or "<unknown>",
+                            error_text,
+                        )
+                    )
             else:
                 time.sleep(POLL_INTERVAL)
     except KeyboardInterrupt:

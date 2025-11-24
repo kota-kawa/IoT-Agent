@@ -129,6 +129,24 @@ def _agent_device() -> Optional[DeviceState]:
     return None
 
 
+def _device_supports_capability(device: DeviceState, capability_name: str) -> bool:
+    # デバイスが特定の capability 名をサポートするか簡易判定する
+
+    if not isinstance(capability_name, str) or not capability_name.strip():
+        return False
+
+    target = capability_name.strip().lower()
+    for capability in device.capabilities:
+        if not isinstance(capability, dict):
+            continue
+        raw_name = capability.get("name")
+        if not isinstance(raw_name, str):
+            continue
+        if raw_name.strip().lower() == target:
+            return True
+    return False
+
+
 def _action_catalog_for_device(device: DeviceState) -> List[Dict[str, Any]]:
     # デバイスが提供するアクション一覧を取得し、LLM 用に整形
     meta = device.meta if isinstance(device.meta, dict) else {}
@@ -315,7 +333,7 @@ def _enqueue_device_command(
     return job_id
 
 
-def _await_device_result(device_id: str, job_id: str, timeout: float = 120.0) -> Optional[Dict[str, Any]]:
+def _await_device_result(device_id: str, job_id: str, timeout: float = 60.0) -> Optional[Dict[str, Any]]:
     # デバイスから結果が返るまでポーリングし、タイムアウトしたら None
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -363,5 +381,18 @@ def _device_label_for_prompt(device_id: str) -> str:
 
 def _format_result_for_prompt(result: Dict[str, Any]) -> str:
     # ジョブ結果を JSON 文字列化し、日本語応答の下準備を行う
-    return json.dumps(result, ensure_ascii=False, default=str)
+    def _strip_media(value: Any) -> Any:
+        if isinstance(value, dict):
+            cleaned: Dict[str, Any] = {}
+            for key, val in value.items():
+                if key in {"image_base64", "image_data", "image_base64_jpeg"} and isinstance(val, str):
+                    cleaned[key] = f"[base64 data omitted ({len(val)} chars)]"
+                else:
+                    cleaned[key] = _strip_media(val)
+            return cleaned
+        if isinstance(value, list):
+            return [_strip_media(item) for item in value]
+        return value
 
+    safe_result = _strip_media(result)
+    return json.dumps(safe_result, ensure_ascii=False, default=str)
