@@ -265,9 +265,18 @@ def _execute_device_command_sequence(
 
         try:
             if device and _device_is_agent(device):
-                summary = _execute_agent_device_command(
-                    client, device, messages, initial_reply, command
-                )
+                # For agent devices, allow direct capability execution (e.g., camera capture)
+                # without rephrasing the request into English instructions.
+                command_name_raw = command.get("name")
+                command_name = command_name_raw.strip() if isinstance(command_name_raw, str) else None
+                if command_name and command_name != AGENT_COMMAND_NAME:
+                    summary = _execute_standard_device_command(
+                        client, messages, initial_reply, command
+                    )
+                else:
+                    summary = _execute_agent_device_command(
+                        client, device, messages, initial_reply, command
+                    )
             else:
                 summary = _execute_standard_device_command(
                     client, messages, initial_reply, command
