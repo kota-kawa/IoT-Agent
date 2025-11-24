@@ -94,7 +94,7 @@ def _structured_llm_prompt(
 
     return {
         "model": model_name,
-        "input": prompt_messages,
+        "messages": prompt_messages,
     }
 
 
@@ -104,6 +104,15 @@ def _extract_json_object(text: str) -> Tuple[Optional[Any], Optional[str]]:
         return None, ""
 
     stripped = text.strip()
+    # コードフェンスの削除
+    if stripped.startswith("```json"):
+        stripped = stripped[7:]
+    if stripped.startswith("```"):
+        stripped = stripped[3:]
+    if stripped.endswith("```"):
+        stripped = stripped[:-3]
+    stripped = stripped.strip()
+
     decoder = json.JSONDecoder()
 
     try:
@@ -185,10 +194,27 @@ def _call_llm_and_parse(client: OpenAI, messages: List[Dict[str, str]]) -> Dict[
         }, []
 
     retry_instruction: Optional[str] = None
+    provider, _, _ = apply_model_selection("iot")
 
     for attempt in range(1, max_attempts + 1):
-        response = client.responses.create(**_structured_llm_prompt(messages, retry_instruction))
-        reply_text = getattr(response, "output_text", None) or ""
+        prompt_kwargs = _structured_llm_prompt(messages, retry_instruction)
+        
+        # JSONモードの使用可否
+        # OpenAI, Gemini, Groq (Llama 3.1) は response_format={"type": "json_object"} をサポート
+        extra_args = {}
+        if provider in ["openai", "groq", "gemini"]:
+            extra_args["response_format"] = {"type": "json_object"}
+
+        try:
+            response = client.chat.completions.create(**prompt_kwargs, **extra_args)
+            reply_text = response.choices[0].message.content or ""
+        except Exception as e:
+            # 呼び出しエラーの場合は即座に失敗扱いせず、ログに残してリトライするか例外を投げる
+            # ここではエラーとして処理を継続
+            reply_text = ""
+            last_raw = str(e)
+            # ネットワークエラーなどはリトライしても無駄な場合があるため、attemptを進める
+
         parsed_obj, cleaned_text = _extract_json_object(reply_text)
 
         last_raw = reply_text
@@ -286,11 +312,11 @@ def _structured_conversation_review_prompt(messages: List[Dict[str, str]]) -> Di
 
     conversation_dump = "\n".join(conversation_dump_lines) or "Conversation log was empty."
 
-    review_model = apply_model_selection("iot")[1] or "gpt-4.1"
+    review_model = apply_model_selection("iot")[1] or "gpt-4o"
 
     return {
         "model": review_model,
-        "input": [
+        "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "system", "content": context_message},
             {
@@ -311,8 +337,16 @@ def _call_llm_for_conversation_review(
 ) -> Dict[str, Any]:
     # 監査用 LLM を呼び出し、action_required と device_commands を抽出
 
-    response = client.responses.create(**_structured_conversation_review_prompt(messages))
-    reply_text = getattr(response, "output_text", None) or ""
+    kwargs = _structured_conversation_review_prompt(messages)
+    
+    # 標準的なチャット完了呼び出しを使用
+    provider, _, _ = apply_model_selection("iot")
+    extra_args = {}
+    if provider in ["openai", "groq", "gemini"]:
+        extra_args["response_format"] = {"type": "json_object"}
+
+    response = client.chat.completions.create(**kwargs, **extra_args)
+    reply_text = response.choices[0].message.content or ""
 
     parsed_obj, cleaned_text = _extract_json_object(reply_text)
 
@@ -371,9 +405,18 @@ def _call_llm_for_conversation_review(
 
 def _call_llm_text(client: OpenAI, payload: Dict[str, Any]) -> str:
     # 指定ペイロードで LLM を呼び出し、クリーンなテキストを返す
+    # payloadには "model" と "input" (これは古い形式) または "messages" が含まれる可能性がある
+    
+    model = payload.get("model")
+    messages = payload.get("messages")
+    if not messages and "input" in payload:
+        messages = payload["input"]
+    
+    if not model or not messages:
+        raise ValueError("Invalid payload for _call_llm_text")
 
-    response = client.responses.create(**payload)
-    text = getattr(response, "output_text", "")
+    response = client.chat.completions.create(model=model, messages=messages)
+    text = response.choices[0].message.content or ""
     return text.strip()
 
 
@@ -416,7 +459,7 @@ def _structured_agent_instruction_prompt(messages: List[Dict[str, str]]) -> Dict
 
     return {
         "model": model_name,
-        "input": [
+        "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "system", "content": context_message},
             *messages,
@@ -455,4 +498,4 @@ def _structured_agent_followup_prompt(
     messages.append({"role": "system", "content": summary_instruction})
 
     model_name = apply_model_selection("iot")[1]
-    return {"model": model_name, "input": messages}
+    return {"model": model_name, "messages": messages}
