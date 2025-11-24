@@ -63,8 +63,7 @@ def _current_datetime_line() -> str:
 def _client() -> OpenAI:
     # OpenAI API クライアントを生成し、API キーが無い場合は例外を送出
 
-    provider, model_name, base_url = apply_model_selection("iot")
-    api_key = os.getenv("OPENAI_API_KEY")
+    provider, model_name, base_url, api_key = apply_model_selection("iot")
     if not api_key:
         # Look up the expected key for the selected provider for a better error message
         provider_meta = PROVIDER_DEFAULTS.get(provider, {})
@@ -118,7 +117,7 @@ def _structured_llm_prompt(
         "without including JSON syntax, code formatting, or explicit mentions of "
         "'JSON'. Summarise any structured information conversationally."
     )
-    provider, model_name, _ = apply_model_selection("iot")
+    provider, model_name, _, _ = apply_model_selection("iot")
     if provider_supports_vision(provider):
         system_prompt += (
             " When the user asks to see the surroundings or wants to know what the camera sees, "
@@ -254,7 +253,7 @@ def _call_llm_and_parse(client: OpenAI, messages: List[Dict[str, str]]) -> Dict[
         }, []
 
     retry_instruction: Optional[str] = None
-    provider, _, _ = apply_model_selection("iot")
+    provider, _, _, _ = apply_model_selection("iot")
 
     for attempt in range(1, max_attempts + 1):
         prompt_kwargs = _structured_llm_prompt(messages, retry_instruction)
@@ -410,7 +409,7 @@ def _call_llm_for_conversation_review(
     kwargs = _structured_conversation_review_prompt(messages)
     
     # 標準的なチャット完了呼び出しを使用
-    provider, _, _ = apply_model_selection("iot")
+    provider, _, _, _ = apply_model_selection("iot")
     extra_args = {}
     if provider in ["openai", "groq", "gemini"]:
         extra_args["response_format"] = {"type": "json_object"}
