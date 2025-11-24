@@ -15,6 +15,7 @@ PROVIDER_DEFAULTS: Dict[str, Dict[str, str | None]] = {
     "gemini": {"api_key_env": "GEMINI_API_KEY", "base_url_env": "GEMINI_API_BASE", "default_base_url": "https://generativelanguage.googleapis.com/openai/v1"},
     "groq": {"api_key_env": "GROQ_API_KEY", "base_url_env": "GROQ_API_BASE", "default_base_url": "https://api.groq.com/openai/v1"},
 }
+VISION_SUPPORTED_PROVIDERS = {"openai", "claude", "gemini"}
 
 _OVERRIDE_SELECTION: Dict[str, str] | None = None
 
@@ -64,3 +65,11 @@ def update_override(selection: Dict[str, str] | None) -> Tuple[str, str, str]:
     global _OVERRIDE_SELECTION
     _OVERRIDE_SELECTION = selection or None
     return apply_model_selection(override=_OVERRIDE_SELECTION or None)
+
+
+def provider_supports_vision(provider: str) -> bool:
+    """Return True when the selected provider allows multimodal/vision prompts."""
+
+    if not isinstance(provider, str):
+        return False
+    return provider.strip().lower() in VISION_SUPPORTED_PROVIDERS

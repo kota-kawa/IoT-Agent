@@ -12,6 +12,7 @@ from iot_agent.device_utils import (
     _normalise_capabilities,
     _serialize_device,
     _store_completed_job,
+    _device_supports_capability,
 )
 from iot_agent.execution import _chat_via_legacy, _execute_device_command_sequence
 from iot_agent.llm import (
@@ -20,13 +21,63 @@ from iot_agent.llm import (
     _client,
     _normalise_conversation_messages,
 )
-from model_selection import update_override
+from model_selection import apply_model_selection, provider_supports_vision, update_override
 from iot_agent.models import DeviceState
 from iot_agent.state import _COMPLETED_JOBS, _DEVICES, _JOB_METADATA, _PENDING_JOBS
 from iot_agent.validation import _validate_device_command, _validate_device_command_sequence
 
 app = Flask(__name__, static_folder=".", static_url_path="")
 app.secret_key = SECRET_KEY
+
+_ENV_JA_KEYWORDS = [
+    "周りの状況",
+    "周りの様子",
+    "周囲の状況",
+    "周囲の様子",
+    "周辺の状況",
+    "周辺の様子",
+    "周りを見",
+    "周囲を見",
+    "周辺を見",
+    "何が見える",
+    "カメラ",
+    "写真",
+    "映像",
+]
+_ENV_EN_KEYWORDS = [
+    "surrounding",
+    "around you",
+    "see around",
+    "look around",
+    "what do you see",
+    "photo",
+    "picture",
+    "snapshot",
+    "camera",
+]
+
+
+def _user_requests_environment_photo(messages: List[Dict[str, str]]) -> bool:
+    """Return True when the latest user message asks for a camera view or surroundings."""
+
+    if not isinstance(messages, list):
+        return False
+
+    for entry in reversed(messages):
+        if entry.get("role") != "user":
+            continue
+        content = entry.get("content")
+        if not isinstance(content, str):
+            return False
+
+        lowered = content.lower()
+        if any(keyword in content for keyword in _ENV_JA_KEYWORDS):
+            return True
+        if any(keyword in lowered for keyword in _ENV_EN_KEYWORDS):
+            return True
+        return False
+
+    return False
 
 
 @app.get("/")
@@ -136,6 +187,13 @@ def chat():
         return jsonify({"error": "last message must be from user"}), 400
 
     agent_device = _agent_device()
+    provider, _, _ = apply_model_selection("iot")
+    vision_supported = provider_supports_vision(provider)
+    wants_environment_view = _user_requests_environment_photo(formatted_messages)
+    capture_supported = bool(
+        agent_device and _device_supports_capability(agent_device, "capture_camera_photo")
+    )
+
     if agent_device:
         try:
             client = _client()
@@ -152,6 +210,32 @@ def chat():
         validated_commands, validation_errors = _validate_device_command_sequence(
             parsed_response.get("device_commands")
         )
+
+        limitation_notice: Optional[str] = None
+        if wants_environment_view:
+            if not vision_supported:
+                validated_commands = [
+                    cmd
+                    for cmd in validated_commands
+                    if str(cmd.get("name")) != "capture_camera_photo"
+                ]
+                limitation_notice = (
+                    "現在選択しているモデルではカメラ画像を使った回答に対応していません。"
+                )
+            elif capture_supported and not any(
+                str(cmd.get("name")) == "capture_camera_photo" for cmd in validated_commands
+            ):
+                validated_commands = [
+                    {
+                        "device_id": agent_device.device_id,
+                        "name": "capture_camera_photo",
+                        "args": {},
+                    },
+                    *validated_commands,
+                ]
+
+        if limitation_notice:
+            reply_message = (reply_message + "\n" if reply_message else "") + limitation_notice
 
         payload: Dict[str, Any] = {"reply": reply_message}
         status: int = 200

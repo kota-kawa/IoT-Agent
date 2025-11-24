@@ -22,6 +22,7 @@ from .llm import (
 from .models import DeviceState, _CommandExecutionSummary
 from .state import _DEVICES, _JOB_METADATA, _PENDING_JOBS
 from .validation import _validate_device_command_sequence
+from model_selection import apply_model_selection, provider_supports_vision
 
 
 def _format_return_value_for_user(value: Any) -> str:
@@ -32,6 +33,15 @@ def _format_return_value_for_user(value: Any) -> str:
     if isinstance(value, (str, int, float, bool)):
         return str(value)
     if isinstance(value, dict):
+        sanitized: Dict[str, Any] = dict(value)
+        for media_key in ("image_base64", "image_data", "image_base64_jpeg"):
+            if media_key in sanitized:
+                encoded = sanitized.get(media_key)
+                length = len(encoded) if isinstance(encoded, str) else None
+                detail = f" ({length} chars)" if length else ""
+                sanitized[media_key] = f"[base64 image data omitted{detail}]"
+        value = sanitized
+
         if not value:
             return "詳細データは空でした。"
 
@@ -204,6 +214,7 @@ def _execute_standard_device_command(
             job_id=job_id,
             args=args_dict,
             manual_reply=combined,
+            error_text=notice,
         )
 
     result = _await_device_result(device_id, job_id, timeout=DEVICE_RESULT_TIMEOUT)
@@ -230,6 +241,7 @@ def _execute_standard_device_command(
         job_id=job_id,
         args=args_dict,
         manual_reply=timeout_reply,
+        error_text=timeout_reply,
     )
 
 
@@ -380,6 +392,7 @@ def _execute_agent_device_command(
             manual_reply=combined,
             instruction=english_instruction,
             is_agent=True,
+            error_text=failure_message,
         )
 
     result = _await_device_result(agent.device_id, job_id, timeout=DEVICE_RESULT_TIMEOUT)
@@ -417,6 +430,7 @@ def _execute_agent_device_command(
         manual_reply=timeout_reply,
         instruction=english_instruction,
         is_agent=True,
+        error_text=timeout_reply,
     )
 
 
@@ -438,9 +452,30 @@ def _summarize_device_command_sequence(
     if client is None:
         return fallback_reply
 
+    provider, model_name, _ = apply_model_selection("iot")
+    vision_supported = provider_supports_vision(provider)
+    if vision_supported:
+        image_inputs = _extract_image_inputs(summaries)
+        if image_inputs:
+            try:
+                prompt_payload = _structured_multi_command_followup_prompt_with_images(
+                    base_messages,
+                    initial_reply,
+                    summaries,
+                    image_inputs,
+                    model_name,
+                )
+                llm_reply = _call_llm_text(client, prompt_payload)
+                cleaned = llm_reply.strip() if isinstance(llm_reply, str) else ""
+                if cleaned:
+                    return cleaned
+            except Exception:
+                # Fall back to text-only summarisation below
+                pass
+
     try:
         prompt_payload = _structured_multi_command_followup_prompt(
-            base_messages, initial_reply, summaries
+            base_messages, initial_reply, summaries, model_name
         )
         llm_reply = _call_llm_text(client, prompt_payload)
     except Exception:
@@ -450,10 +485,168 @@ def _summarize_device_command_sequence(
     return cleaned_reply or fallback_reply
 
 
+def _extract_image_inputs(summaries: List[_CommandExecutionSummary]) -> List[Dict[str, Any]]:
+    # capture_camera_photo の結果から LLM へ渡す画像データ URL とメタ情報を抽出
+
+    images: List[Dict[str, Any]] = []
+    for summary in summaries:
+        result_payload = summary.result or {}
+        return_value = result_payload.get("return_value") if isinstance(result_payload, dict) else None
+        action_result = return_value.get("result") if isinstance(return_value, dict) else None
+        if not isinstance(action_result, dict):
+            continue
+
+        base64_value = action_result.get("image_base64") or action_result.get("image_data")
+        if not isinstance(base64_value, str) or not base64_value.strip():
+            continue
+
+        mime_raw = action_result.get("image_mime_type")
+        mime_type = (
+            mime_raw.strip() if isinstance(mime_raw, str) and mime_raw.strip() else "image/jpeg"
+        )
+
+        label: Optional[str] = None
+        for candidate in (action_result.get("filename"), action_result.get("saved_path")):
+            if isinstance(candidate, str) and candidate.strip():
+                label = candidate.strip()
+                break
+
+        images.append(
+            {
+                "data_url": f"data:{mime_type};base64,{base64_value.strip()}",
+                "device_id": summary.device_id,
+                "label": label,
+                "details": _format_return_value_for_user(action_result),
+            }
+        )
+
+    return images
+
+
+def _structured_multi_command_followup_prompt_with_images(
+    base_messages: List[Dict[str, str]],
+    initial_reply: str,
+    summaries: List[_CommandExecutionSummary],
+    images: List[Dict[str, Any]],
+    model_name: Optional[str] = None,
+) -> Dict[str, Any]:
+    # 画像付きの最終回答生成プロンプトを構築（視覚モデル向け）
+
+    device_context = _build_device_context()
+
+    conversation_lines: List[str] = []
+    for entry in base_messages:
+        role = entry.get("role", "")
+        content = entry.get("content")
+        if isinstance(content, str):
+            conversation_lines.append(f"{role}: {content.strip()}")
+    conversation_dump = "\n".join(conversation_lines) or "Conversation log was empty."
+
+    step_descriptions: List[str] = []
+    for index, summary in enumerate(summaries, start=1):
+        device_label = (
+            _device_label_for_prompt(summary.device_id)
+            if summary.device_id
+            else "対象デバイス"
+        )
+        args_text = json.dumps(summary.args, ensure_ascii=False, default=str)
+        if summary.result is not None:
+            result_text = _format_return_value_for_user(summary.result)
+        else:
+            result_text = "No structured result was reported."
+
+        manual = summary.manual_reply.strip() if isinstance(summary.manual_reply, str) else ""
+        error_context = summary.error_text.strip() if isinstance(summary.error_text, str) else ""
+
+        lines = [
+            f"Step {index}:",
+            f"  Device: {device_label}",
+            f"  Command or instruction: {summary.instruction or summary.command_name}",
+            f"  Arguments: {args_text}",
+            f"  Result details (internal): {result_text}",
+        ]
+        if manual:
+            lines.append(f"  Suggested phrasing: {manual}")
+        if error_context:
+            lines.append(f"  Error context: {error_context}")
+
+        step_descriptions.append("\n".join(lines))
+
+    step_block = "\n\n".join(step_descriptions)
+
+    user_contents: List[Dict[str, Any]] = [
+        {
+            "type": "input_text",
+            "text": (
+                "Use the attached camera photos to describe what the device currently sees. "
+                "Reply in Japanese, stay concise, and base statements on the visible evidence. "
+                "If the photos are unclear, say so instead of guessing."
+            ),
+        },
+        {"type": "input_text", "text": "Conversation context:\n" + conversation_dump},
+        {"type": "input_text", "text": "Execution summary:\n" + step_block},
+    ]
+
+    if initial_reply:
+        user_contents.append({"type": "input_text", "text": f"Earlier tentative reply: {initial_reply}"})
+
+    for image in images:
+        note_lines: List[str] = []
+        label = image.get("label")
+        if isinstance(label, str) and label.strip():
+            note_lines.append(f"Image label: {label.strip()}")
+        device_label = image.get("device_id")
+        if isinstance(device_label, str) and device_label.strip():
+            note_lines.append(f"Captured by device: {device_label.strip()}")
+        details = image.get("details")
+        if isinstance(details, str) and details.strip():
+            note_lines.append(f"Metadata: {details.strip()}")
+        if note_lines:
+            user_contents.append({"type": "input_text", "text": "\n".join(note_lines)})
+
+        data_url = image.get("data_url")
+        if isinstance(data_url, str) and data_url.strip():
+            user_contents.append(
+                {
+                    "type": "input_image",
+                    "image_url": {"url": data_url.strip(), "detail": "high"},
+                }
+            )
+
+    messages: List[Dict[str, Any]] = [
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": (
+                        "You are an assistant supporting IoT devices and cameras. "
+                        "Provide a concise Japanese reply grounded in the attached photos. "
+                        "Describe only what is visible without speculation."
+                    ),
+                }
+            ],
+        },
+    ]
+    if device_context:
+        messages.append(
+            {
+                "role": "system",
+                "content": [{"type": "text", "text": "Available device information:\n" + device_context}],
+            }
+        )
+
+    messages.append({"role": "user", "content": user_contents})
+
+    resolved_model = model_name or apply_model_selection("iot")[1]
+    return {"model": resolved_model, "input": messages}
+
+
 def _structured_multi_command_followup_prompt(
     base_messages: List[Dict[str, str]],
     initial_reply: str,
     summaries: List[_CommandExecutionSummary],
+    model_name: Optional[str] = None,
 ) -> Dict[str, Any]:
     # マルチステップの実行結果を踏まえた最終回答生成プロンプトを構築
 
@@ -468,11 +661,12 @@ def _structured_multi_command_followup_prompt(
         )
         args_text = json.dumps(summary.args, ensure_ascii=False, default=str)
         if summary.result is not None:
-            result_text = _format_result_for_prompt(summary.result)
+            result_text = _format_return_value_for_user(summary.result)
         else:
             result_text = "No structured result was reported."
 
         manual = summary.manual_reply.strip() if isinstance(summary.manual_reply, str) else ""
+        error_context = summary.error_text.strip() if isinstance(summary.error_text, str) else ""
 
         lines = [
             f"Step {index}:",
@@ -483,6 +677,8 @@ def _structured_multi_command_followup_prompt(
         ]
         if manual:
             lines.append(f"  Suggested phrasing: {manual}")
+        if error_context:
+            lines.append(f"  Error context: {error_context}")
 
         step_descriptions.append("\n".join(lines))
 
@@ -516,7 +712,8 @@ def _structured_multi_command_followup_prompt(
     messages.append({"role": "system", "content": "Step summaries:\n" + step_block})
     messages.append({"role": "system", "content": "Respond now with the final Japanese reply."})
 
-    return {"model": "gpt-4.1-2025-04-14", "input": messages}
+    resolved_model = model_name or apply_model_selection("iot")[1]
+    return {"model": resolved_model, "input": messages}
 
 
 def _chat_via_legacy(messages: List[Dict[str, str]]) -> Tuple[Dict[str, Any], int]:

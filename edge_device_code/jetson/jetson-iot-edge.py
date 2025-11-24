@@ -61,7 +61,7 @@ LLAMA_SEED = int(os.getenv("LLAMA_SEED", "42"))
 SERVER_BASE_URL = os.getenv(
     "IOT_SERVER_URL", "https://iot-agent.project-kk.com"
 ).rstrip("/")
-REQUEST_TIMEOUT = float(os.getenv("IOT_AGENT_HTTP_TIMEOUT", "180"))
+REQUEST_TIMEOUT = float(os.getenv("IOT_AGENT_HTTP_TIMEOUT", "60"))
 POLL_INTERVAL = float(os.getenv("IOT_AGENT_POLL_INTERVAL", "2.0"))
 
 DEVICE_ID_ENV = os.getenv("IOT_AGENT_DEVICE_ID")
@@ -177,12 +177,13 @@ CAPABILITIES = [
 
 LLM_SYSTEM_PROMPT = (
     "You convert short English instructions into JSON commands for a Jetson hardware agent.\n"
-    "Respond ONLY with a JSON object containing keys 'action' and 'parameters'.\n"
+    "Respond ONLY with a single JSON object that exactly matches the schema:\n"
+    '{"action": "<one of the supported actions>", "parameters": { ... }, "message": "<optional string>"}\n'
+    "Do not include code fences, explanations, or additional text.\n"
     "Valid actions are: "
     + ", ".join(sorted(SUPPORTED_ACTIONS.keys()))
     + ".\n"
-    "Choose the closest matching action and include required parameters.\n"
-    "Use 'no_action' only when nothing should be executed.\n"
+    "Choose the closest matching action and include required parameters; if none apply, use 'no_action'.\n"
     "Examples:\n"
     "Instruction: Show the OLED demo for 10 seconds.\n"
     "{\"action\": \"run_oled_demo\", \"parameters\": {\"duration\": 10}}\n"
@@ -191,7 +192,8 @@ LLM_SYSTEM_PROMPT = (
     "Instruction: Run the motor forwards and backwards.\n"
     "{\"action\": \"run_motor_test\", \"parameters\": {}}\n"
     "Instruction: Thanks!\n"
-    "{\"action\": \"no_action\", \"parameters\": {\"message\": \"No task requested.\"}}"
+    "{\"action\": \"no_action\", \"parameters\": {}, \"message\": \"No task requested.\"}\n"
+    "Any response that is not valid JSON will be rejected and retried automatically."
 )
 
 # ==== Helpers ==============================================================
@@ -851,21 +853,65 @@ def _keyword_plan(instruction: str) -> Dict[str, Any]:
 
 
 def _plan_from_instruction(llm: Llama, instruction: str) -> Dict[str, Any]:
-    messages = [
-        {"role": "system", "content": LLM_SYSTEM_PROMPT},
-        {"role": "user", "content": instruction},
-    ]
+    def _validate_plan(payload: Any) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+        if not isinstance(payload, dict):
+            return None, "response was not a JSON object."
+        action = payload.get("action")
+        if not isinstance(action, str) or not action.strip():
+            return None, "action must be a non-empty string."
+        action = action.strip()
+        if action not in SUPPORTED_ACTIONS:
+            return None, f"action '{action}' is not supported."
+        parameters = payload.get("parameters")
+        if parameters is None:
+            parameters = {}
+        if not isinstance(parameters, dict):
+            return None, "parameters must be a JSON object."
+        message = payload.get("message")
+        if message is not None and not isinstance(message, str):
+            return None, "message must be a string when provided."
 
-    logging.debug("LLM request: %s", instruction)
-    response = llm.create_chat_completion(
-        messages=messages,
-        temperature=LLAMA_TEMPERATURE,
-    )
+        normalised: Dict[str, Any] = {"action": action, "parameters": parameters}
+        if isinstance(message, str) and message.strip():
+            normalised["message"] = message.strip()
+        return normalised, None
 
-    text = response["choices"][0]["message"]["content"].strip()
-    logging.debug("LLM raw response: %s", text)
+    retry_instruction: Optional[str] = None
+    plan: Dict[str, Any] = {}
+    max_attempts = 3
 
-    plan = _extract_json(text) or {}
+    for attempt in range(1, max_attempts + 1):
+        messages: List[Dict[str, str]] = [
+            {"role": "system", "content": LLM_SYSTEM_PROMPT},
+        ]
+        if retry_instruction:
+            messages.append({"role": "system", "content": retry_instruction})
+        messages.append({"role": "user", "content": instruction})
+
+        logging.debug("LLM request (attempt %s): %s", attempt, instruction)
+        response = llm.create_chat_completion(
+            messages=messages,
+            temperature=LLAMA_TEMPERATURE,
+        )
+
+        text = response["choices"][0]["message"]["content"].strip()
+        logging.debug("LLM raw response: %s", text)
+
+        candidate = _extract_json(text)
+        validated, error = _validate_plan(candidate)
+        if validated:
+            plan = validated
+            break
+
+        if attempt == max_attempts:
+            break
+
+        retry_instruction = (
+            "The previous reply was invalid JSON. Respond ONLY with a JSON object shaped as "
+            '{"action": "<supported action>", "parameters": { ... }, "message": "<optional string>"}. '
+            f"Error: {error or 'Unable to parse response.'}"
+        )
+
     if not plan:
         plan = _keyword_plan(instruction)
 
@@ -1070,6 +1116,22 @@ def _process_job(session: requests.Session, llm: Llama, device_id: str, job: Dic
 # ==== Entrypoint ==========================================================
 
 
+def _safe_job_id(job: Any) -> Optional[str]:
+    try:
+        raw_job_id = job.get("job_id") or job.get("id")
+    except Exception:
+        return None
+
+    if isinstance(raw_job_id, str):
+        job_id = raw_job_id.strip()
+    elif raw_job_id is not None:
+        job_id = str(raw_job_id)
+    else:
+        job_id = None
+
+    return job_id or None
+
+
 def main() -> None:
     logging.basicConfig(
         level=logging.INFO,
@@ -1134,7 +1196,39 @@ def main() -> None:
         while True:
             job = _poll_next_job(session, device_id)
             if job:
-                _process_job(session, llm, device_id, job)
+                try:
+                    _process_job(session, llm, device_id, job)
+                except Exception as exc:
+                    logging.exception("Unexpected error while processing job")
+                    job_id = _safe_job_id(job)
+                    command = job.get("command") if isinstance(job, dict) else {}
+                    action_name = None
+                    if isinstance(command, dict):
+                        action_name = command.get("name")
+                        if isinstance(action_name, str):
+                            action_name = action_name.strip() or None
+                    error_text = str(exc)
+                    if job_id:
+                        try:
+                            payload = _build_result_payload(
+                                device_id=device_id,
+                                job_id=job_id,
+                                ok=False,
+                                action=action_name,
+                                parameters=None,
+                                message=error_text,
+                                result=None,
+                                error=error_text,
+                            )
+                            _post_result(session, payload)
+                        except Exception:
+                            logging.exception("Failed to report unexpected error for job %s", job_id)
+                    _console(
+                        "Job {} processing failed unexpectedly: {}".format(
+                            job_id or "<unknown>",
+                            error_text,
+                        )
+                    )
             else:
                 time.sleep(POLL_INTERVAL)
     except KeyboardInterrupt:
