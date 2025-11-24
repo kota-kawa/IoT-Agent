@@ -3,10 +3,9 @@ from pathlib import Path
 
 from dotenv import load_dotenv as loadenv
 
-# Load environment variables from secrets.env (with legacy .env fallback)
+# Load environment variables from secrets.env
 _SECRETS_PATH = Path(__file__).resolve().parents[1] / "secrets.env"
-if not loadenv(_SECRETS_PATH):
-    loadenv()
+loadenv(_SECRETS_PATH)
 
 APP_PASSWORD = "kkawagoe"
 
