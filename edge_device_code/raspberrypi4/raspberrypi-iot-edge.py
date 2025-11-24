@@ -160,9 +160,28 @@ SUPPORTED_ACTIONS: Dict[str, Dict[str, Any]] = {
             },
         ],
     },
-    "tell_joke": {
-        "description": "Tell one joke chosen from a predefined list.",
-        "params": [],
+    "play_buzzer": {
+        "description": "Play tones on the passive buzzer wired to GPIO4.",
+        "params": [
+            {
+                "name": "sequence",
+                "type": "array",
+                "required": False,
+                "description": "List of tone entries, each with 'note' (e.g. 'A4') and optional 'duration' in seconds.",
+            },
+            {
+                "name": "note",
+                "type": "string",
+                "required": False,
+                "description": "Single tone name to play when no sequence is supplied.",
+            },
+            {
+                "name": "duration",
+                "type": "number",
+                "required": False,
+                "description": "Duration in seconds for the single note provided by 'note'. Defaults to 1.0 second.",
+            },
+        ],
     },
     "run_motor_test": {
         "description": "Execute the built-in dual DC motor diagnostic routine using the configured L293D wiring.",
@@ -189,6 +208,18 @@ SUPPORTED_ACTIONS: Dict[str, Dict[str, Any]] = {
                 "type": "string",
                 "required": False,
                 "description": "Optional English text to draw under the mono-eye.",
+            },
+            {
+                "name": "duration",
+                "type": "number",
+                "required": False,
+                "description": "Seconds to show the requested text/motion (defaults to a short burst).",
+            },
+            {
+                "name": "motion",
+                "type": "string",
+                "required": False,
+                "description": "Mono-eye motion preset to apply temporarily (default, calm, alert, scout).",
             }
         ],
     },
@@ -428,8 +459,8 @@ LLM_SYSTEM_PROMPT = (
     "{\"action\": \"get_weather\", \"parameters\": {\"location\": \"Tokyo\", \"units\": \"metric\"}}\n"
     "Instruction: What time is it right now?\n"
     "{\"action\": \"get_current_time\", \"parameters\": {}}\n"
-    "Instruction: Tell me a joke.\n"
-    "{\"action\": \"tell_joke\", \"parameters\": {}}\n"
+    "Instruction: Make the buzzer play a short melody.\n"
+    "{\"action\": \"play_buzzer\", \"parameters\": {}}\n"
     "Instruction: Just saying thank you!\n"
     "{\"action\": \"no_action\", \"parameters\": {}, \"message\": \"No task requested.\"}"
 )
@@ -741,14 +772,6 @@ def _format_for_log(value: Any, *, max_length: int = 500) -> str:
     return text
 
 
-JOKES = [
-    "Why don't scientists trust atoms? Because they make up everything!",
-    "I told my computer I needed a break, and it said 'No problem, I'll go to sleep.'",
-    "What's a robot's favorite snack? Computer chips!",
-    "Why do programmers confuse Halloween with Christmas? Because October 31st is December 25th.",
-    "My Raspberry Pi was down so I asked it about it and it said, 'The battery is low.'",
-]
-
 _MOVE_ALIASES = {
     "rock": "rock",
     "stone": "rock",
@@ -811,12 +834,6 @@ def _play_rock_paper_scissors(params: Dict[str, Any]) -> Dict[str, Any]:
         "message": result_message,
         "player_move_was_random": not provided,
     }
-
-
-def _tell_joke() -> Dict[str, Any]:
-    # 事前定義されたジョークをランダムに選択
-    joke = random.choice(JOKES)
-    return {"joke": joke}
 
 
 def _get_weather(params: Dict[str, Any]) -> Dict[str, Any]:
@@ -930,6 +947,40 @@ _OLED_TEXT_DURATION_LIMIT = 60.0
 _OLED_TEXT_MIN_DURATION = 1.5
 _RETURN_TEXT_LIMIT = 3000
 _RETURN_TEXT_KEEP = 1500
+_OLED_MOTION_PRESETS: Dict[str, Dict[str, float]] = {
+    "default": {
+        "speed": 1.0,
+        "sweep": _OLED_EYE_SWEEP,
+        "beam_speed": 60.0,
+        "bob_speed": 0.7,
+        "bob_amplitude": 3.0,
+        "eye_scale": 3.0,
+    },
+    "calm": {
+        "speed": 0.55,
+        "sweep": 0.26,
+        "beam_speed": 36.0,
+        "bob_speed": 0.45,
+        "bob_amplitude": 2.0,
+        "eye_scale": 3.0,
+    },
+    "alert": {
+        "speed": 1.8,
+        "sweep": 0.62,
+        "beam_speed": 120.0,
+        "bob_speed": 1.2,
+        "bob_amplitude": 5.0,
+        "eye_scale": 3.2,
+    },
+    "scout": {
+        "speed": 1.1,
+        "sweep": 0.78,
+        "beam_speed": 80.0,
+        "bob_speed": 0.9,
+        "bob_amplitude": 4.0,
+        "eye_scale": 3.0,
+    },
+}
 
 
 def _parse_timeout_parameter(parameters: Any, default: float) -> float:
@@ -969,10 +1020,19 @@ def _oled_ensure_spidev_exists() -> None:
         )
 
 
+_oled_backlight_singleton: Optional[Any] = None
+_oled_backlight_lock = threading.Lock()
+
+
 def _oled_setup_backlight() -> Any:
     from gpiozero import PWMLED
 
-    return PWMLED(_OLED_PIN_BL, frequency=1000, active_high=True, initial_value=1.0)
+    global _oled_backlight_singleton
+    with _oled_backlight_lock:
+        if _oled_backlight_singleton is not None:
+            return _oled_backlight_singleton
+        _oled_backlight_singleton = PWMLED(_OLED_PIN_BL, frequency=1000, active_high=True, initial_value=1.0)
+        return _oled_backlight_singleton
 
 
 def _oled_set_backlight_percent(backlight: Any, percent: float) -> None:
@@ -1060,7 +1120,14 @@ def _oled_draw_text_screen(draw: Any, font: Any, lines: List[str], width: int, h
         y += line_height
 
 
-def _oled_draw_mono_eye(draw: Any, t: float, width: int, height: int, panel_height: int) -> None:
+def _oled_draw_mono_eye(
+    draw: Any,
+    t: float,
+    width: int,
+    height: int,
+    panel_height: int,
+    motion_profile: Optional[Dict[str, float]] = None,
+) -> None:
     head_bottom = height - panel_height
     draw.rectangle((0, 0, width, height), fill=_OLED_COL_BG)
     draw.rectangle((0, 0, width, head_bottom), fill=_OLED_COL_HEAD)
@@ -1078,13 +1145,17 @@ def _oled_draw_mono_eye(draw: Any, t: float, width: int, height: int, panel_heig
     track_left = visor_left + _OLED_TRACK_PADDING
     track_right = visor_right - _OLED_TRACK_PADDING
     track_mid_y = (visor_top + visor_bottom) // 2
-    eye_scale = 3.0  # triple the mono-eye diameter
+    motion = motion_profile or _OLED_MOTION_PRESETS["default"]
+    speed = motion.get("speed", 1.0)
+    t_scaled = t * speed
+    eye_scale = motion.get("eye_scale", 3.0)  # triple the mono-eye diameter
     track_height = int(20 * eye_scale)
     track_top = track_mid_y - track_height // 2
     track_bottom = track_mid_y + track_height // 2
     draw.rectangle((track_left, track_top, track_right, track_bottom), fill=_OLED_COL_TRACK, outline=_OLED_COL_FRAME, width=1)
 
-    beam_phase = (t * 60) % (track_right - track_left)
+    beam_speed = motion.get("beam_speed", 60.0)
+    beam_phase = (t_scaled * beam_speed) % (track_right - track_left)
     beam_x = track_left + beam_phase
     if beam_x < track_right:
         draw.line((beam_x, visor_top + 4, beam_x, visor_bottom - 4), fill=_OLED_COL_BEAM, width=2)
@@ -1092,14 +1163,17 @@ def _oled_draw_mono_eye(draw: Any, t: float, width: int, height: int, panel_heig
     glow_r = int(16 * eye_scale)
     eye_r = int(10 * eye_scale)
     core_r = int(6 * eye_scale)
-    eye_band = ((math.sin(t * 1.2) * _OLED_EYE_SWEEP) + (math.sin(t * 0.37) * 0.22)) * 0.5 + 0.5
+    eye_sweep = motion.get("sweep", _OLED_EYE_SWEEP)
+    eye_band = ((math.sin(t_scaled * 1.2) * eye_sweep) + (math.sin(t_scaled * 0.37) * 0.22)) * 0.5 + 0.5
     eye_min_x = visor_left + glow_r + 2
     eye_max_x = visor_right - glow_r - 2
     if eye_min_x >= eye_max_x:
         eye_x = (visor_left + visor_right) // 2
     else:
         eye_x = int(eye_min_x + eye_band * (eye_max_x - eye_min_x))
-    eye_y = track_mid_y + int(math.sin(t * 0.7) * 3)
+    bob_speed = motion.get("bob_speed", 0.7)
+    bob_amplitude = motion.get("bob_amplitude", 3.0)
+    eye_y = track_mid_y + int(math.sin(t_scaled * bob_speed) * bob_amplitude)
     eye_y = max(visor_top + glow_r, min(visor_bottom - glow_r, eye_y))
 
     draw.ellipse((eye_x - glow_r, eye_y - glow_r, eye_x + glow_r, eye_y + glow_r), fill=_OLED_COL_GLOW_SOFT)
@@ -1180,6 +1254,8 @@ class _MonoEyeDisplayManager:
         self.lock = threading.Lock()
         self.text_lines: List[str] = []
         self.text_until = 0.0
+        self.motion_mode = "default"
+        self.motion_until = 0.0
         self.started_at = 0.0
         self.last_error: Optional[str] = None
 
@@ -1237,6 +1313,26 @@ class _MonoEyeDisplayManager:
             "until": self.text_until,
         }
 
+    def set_motion_mode(self, mode: str, duration_seconds: float) -> Dict[str, Any]:
+        mode_key = (mode or "").strip().lower() or "default"
+        if mode_key not in _OLED_MOTION_PRESETS:
+            return {
+                "ok": False,
+                "error": f"Unsupported mono-eye mode '{mode_key}'. Available: {', '.join(sorted(_OLED_MOTION_PRESETS))}",
+            }
+
+        clamped_duration = max(_OLED_TEXT_MIN_DURATION, min(_OLED_TEXT_DURATION_LIMIT, duration_seconds))
+        with self.lock:
+            self.motion_mode = mode_key
+            self.motion_until = time.monotonic() + clamped_duration if mode_key != "default" else 0.0
+
+        return {
+            "ok": True,
+            "mode": mode_key,
+            "duration_seconds": clamped_duration,
+            "until": self.motion_until,
+        }
+
     def _run_loop(self) -> None:  # pragma: no cover - hardware dependent
         try:
             from luma.core.render import canvas
@@ -1257,7 +1353,7 @@ class _MonoEyeDisplayManager:
                 if self.backlight is not None:
                     _oled_set_backlight_percent(self.backlight, duty)
                 with canvas(self.device) as draw:
-                    _oled_draw_mono_eye(draw, 0.0, self.device.width, self.device.height, 0)
+                    _oled_draw_mono_eye(draw, 0.0, self.device.width, self.device.height, 0, _OLED_MOTION_PRESETS["default"])
                 time.sleep(0.05)
             except Exception as exc:
                 self.last_error = str(exc)
@@ -1272,13 +1368,20 @@ class _MonoEyeDisplayManager:
                     if not active_text and self.text_lines:
                         self.text_lines = []
                         self.text_until = 0.0
+                    motion_mode = self.motion_mode
+                    motion_until = self.motion_until
+                    if motion_mode != "default" and motion_until and now >= motion_until:
+                        self.motion_mode = "default"
+                        self.motion_until = 0.0
+                        motion_mode = "default"
                     text_lines = list(self.text_lines) if active_text else []
 
                 with canvas(self.device) as draw:
                     if active_text:
                         _oled_draw_text_screen(draw, self.font, text_lines, self.device.width, self.device.height)
                     else:
-                        _oled_draw_mono_eye(draw, now - self.started_at, self.device.width, self.device.height, 0)
+                        motion_profile = _OLED_MOTION_PRESETS.get(motion_mode, _OLED_MOTION_PRESETS["default"])
+                        _oled_draw_mono_eye(draw, now - self.started_at, self.device.width, self.device.height, 0, motion_profile)
 
                 time.sleep(frame_delay)
             except Exception as exc:
@@ -1317,6 +1420,108 @@ def _start_mono_eye_daemon_if_possible() -> None:
 
 
 _LED_PINS = {"led1": 2, "led2": 3, "led3": 16}
+
+# Passive buzzer wired to GPIO4 (matches device_test/buzzer_test.py).
+_BUZZER_PIN = 4
+_DEFAULT_BUZZER_SEQUENCE = [
+    {"note": "A4", "duration": 1.0},
+    {"note": "C5", "duration": 1.0},
+]
+
+
+def _parse_buzzer_duration(value: Any, default: float) -> float:
+    if value is None:
+        return default
+    if isinstance(value, (int, float)):
+        duration_value = float(value)
+    elif isinstance(value, str) and value.strip():
+        try:
+            duration_value = float(value.strip())
+        except ValueError as exc:  # pragma: no cover - defensive
+            raise ValueError("Buzzer duration must be a number of seconds.") from exc
+    else:
+        raise ValueError("Buzzer duration must be a number of seconds.")
+
+    if duration_value <= 0:
+        raise ValueError("Buzzer duration must be greater than zero.")
+    return duration_value
+
+
+def _extract_buzzer_note(value: Any) -> Optional[str]:
+    if isinstance(value, str):
+        candidate = value.strip()
+        if candidate:
+            return candidate
+    return None
+
+
+def _normalize_buzzer_sequence(parameters: Any) -> List[Dict[str, Any]]:
+    normalized: List[Dict[str, Any]] = []
+
+    def _copy_default() -> List[Dict[str, Any]]:
+        return [{"note": entry["note"], "duration": entry["duration"]} for entry in _DEFAULT_BUZZER_SEQUENCE]
+
+    if not isinstance(parameters, dict):
+        return _copy_default()
+
+    seq_value = parameters.get("sequence")
+    if isinstance(seq_value, list):
+        for index, item in enumerate(seq_value, start=1):
+            if isinstance(item, dict):
+                note_value = _extract_buzzer_note(item.get("note"))
+                if not note_value:
+                    raise ValueError(f"Buzzer sequence entry {index} must include a note string.")
+                duration_value = _parse_buzzer_duration(item.get("duration"), 1.0)
+            else:
+                note_value = _extract_buzzer_note(item)
+                if not note_value:
+                    raise ValueError(f"Buzzer sequence entry {index} is not a valid note string.")
+                duration_value = 1.0
+            normalized.append({"note": note_value, "duration": duration_value})
+
+    if not normalized:
+        note_value = _extract_buzzer_note(parameters.get("note"))
+        if note_value:
+            duration_value = _parse_buzzer_duration(parameters.get("duration"), 1.0)
+            normalized.append({"note": note_value, "duration": duration_value})
+
+    if not normalized:
+        normalized = _copy_default()
+
+    return normalized
+
+
+def _play_buzzer(parameters: Any) -> Dict[str, Any]:
+    sequence = _normalize_buzzer_sequence(parameters)
+    try:
+        from gpiozero import TonalBuzzer
+    except ImportError as exc:
+        raise RuntimeError(
+            "gpiozero (TonalBuzzer) is required to play tones on the buzzer. Install it on the Raspberry Pi."
+        ) from exc
+
+    buzzer = TonalBuzzer(_BUZZER_PIN)
+    played_sequence: List[Dict[str, Any]] = []
+    total_duration = 0.0
+    try:
+        for entry in sequence:
+            note = entry["note"]
+            duration = entry["duration"]
+            buzzer.play(note)
+            time.sleep(duration)
+            buzzer.stop()
+            played_sequence.append({"note": note, "duration": round(duration, 3)})
+            total_duration += duration
+    finally:
+        buzzer.stop()
+        buzzer.close()
+
+    return {
+        "sequence": played_sequence,
+        "pins": {"buzzer": _BUZZER_PIN},
+        "duration_seconds": round(total_duration, 3),
+    }
+
 
 
 def _capture_camera_photo(parameters: Any) -> Dict[str, Any]:
@@ -1380,6 +1585,7 @@ def _capture_camera_photo(parameters: Any) -> Dict[str, Any]:
         "image_base64": image_base64,
         "image_mime_type": "image/jpeg",
         "file_size_bytes": len(image_bytes),
+        "summary": "周囲の様子を確認するために写真を1枚撮影しました。",
     }
 
 
@@ -1599,6 +1805,9 @@ def _run_oled_robot_demo(parameters: Any) -> Dict[str, Any]:
     timeout = _parse_timeout_parameter(parameters, _DEFAULT_OLED_DEMO_TIMEOUT)
     context = _ActionExecutionContext(timeout)
     text_override: Optional[str] = None
+    motion_mode: Optional[str] = None
+    requested_duration: Optional[float] = None
+    burst_default = 5.0
 
     if isinstance(parameters, dict):
         candidate_text = parameters.get("text") or parameters.get("message")
@@ -1606,10 +1815,32 @@ def _run_oled_robot_demo(parameters: Any) -> Dict[str, Any]:
             candidate_text = " ".join(str(item) for item in candidate_text if item is not None)
         if isinstance(candidate_text, str) and candidate_text.strip():
             text_override = " ".join(candidate_text.split())
+        candidate_motion = parameters.get("motion") or parameters.get("mode")
+        if isinstance(candidate_motion, str) and candidate_motion.strip():
+            motion_mode = candidate_motion.strip()
+        candidate_duration = parameters.get("duration") or parameters.get("seconds") or parameters.get("display_seconds")
+        if isinstance(candidate_duration, (int, float)) and float(candidate_duration) > 0:
+            requested_duration = float(candidate_duration)
+        elif isinstance(candidate_duration, str) and candidate_duration.strip():
+            try:
+                requested_duration = float(candidate_duration.strip())
+            except ValueError:
+                context.log("Ignoring non-numeric duration parameter", raw_value=candidate_duration)
 
     manager = _get_or_start_oled_manager()
     if manager and manager.is_running:
         display_seconds = min(timeout, _OLED_TEXT_DURATION_LIMIT)
+        display_seconds = min(display_seconds, max(_OLED_TEXT_MIN_DURATION, requested_duration or burst_default))
+        motion_info: Optional[Dict[str, Any]] = None
+        if motion_mode:
+            motion_info = manager.set_motion_mode(motion_mode, display_seconds)
+            context.log(
+                "OLED mono-eye motion updated",
+                ok=motion_info.get("ok"),
+                mode=motion_info.get("mode") or motion_mode,
+                duration_seconds=motion_info.get("duration_seconds", display_seconds),
+                error=motion_info.get("error"),
+            )
         if text_override:
             scheduled = manager.show_text(text_override, display_seconds)
             if scheduled.get("ok"):
@@ -1630,6 +1861,7 @@ def _run_oled_robot_demo(parameters: Any) -> Dict[str, Any]:
                     "duration_seconds": context.elapsed(),
                     "display_seconds": scheduled.get("duration_seconds", display_seconds),
                     "text_lines": scheduled.get("lines"),
+                    "motion_mode": (motion_info or {}).get("mode", motion_mode or "default"),
                     "mono_eye_background": True,
                 }
 
@@ -1646,6 +1878,7 @@ def _run_oled_robot_demo(parameters: Any) -> Dict[str, Any]:
                 "duration_seconds": context.elapsed(),
                 "display_seconds": min(timeout, _OLED_RESULT_RETURN_SECONDS),
                 "text_lines": [],
+                "motion_mode": (motion_info or {}).get("mode", motion_mode or "default"),
                 "mono_eye_background": True,
             }
 
@@ -1656,11 +1889,17 @@ def _run_oled_robot_demo(parameters: Any) -> Dict[str, Any]:
             "The OLED demo requires gpiozero, Pillow, and luma.lcd to be installed on the Raspberry Pi."
         ) from exc
 
+    motion_key = (motion_mode or "default").lower()
+    motion_profile = _OLED_MOTION_PRESETS.get(motion_key, _OLED_MOTION_PRESETS["default"])
+    if motion_key not in _OLED_MOTION_PRESETS:
+        context.log("Unsupported mono-eye motion requested; using default", requested=motion_mode)
+        motion_key = "default"
+
     _oled_ensure_spidev_exists()
     context.log("SPI device is available", device=f"/dev/spidev{_OLED_SPI_PORT}.{_OLED_SPI_DEVICE}")
 
     font = _oled_load_font()
-    text_lines = _oled_wrap_text_lines(text_override or "", _OLED_WIDTH - _OLED_TEXT_PADDING, font)
+    text_lines = _oled_wrap_text_lines(text_override or "", font, _OLED_WIDTH - _OLED_TEXT_PADDING)
     show_text_only = bool(text_lines)
     panel_height = _OLED_TEXT_PANEL_HEIGHT if show_text_only else 0
     if text_lines:
@@ -1686,7 +1925,7 @@ def _run_oled_robot_demo(parameters: Any) -> Dict[str, Any]:
                 if show_text_only:
                     _oled_draw_text_screen(draw, font, text_lines or ["Showing message..."], device.width, device.height)
                 else:
-                    _oled_draw_mono_eye(draw, 0.0, device.width, device.height, panel_height)
+                    _oled_draw_mono_eye(draw, 0.0, device.width, device.height, panel_height, motion_profile)
             context.log("Backlight fade-in step", percent=duty, text_mode=show_text_only)
             if not context.sleep(0.05):
                 break
@@ -1702,7 +1941,7 @@ def _run_oled_robot_demo(parameters: Any) -> Dict[str, Any]:
                 if show_text_only:
                     _oled_draw_text_screen(draw, font, text_lines, device.width, device.height)
                 else:
-                    _oled_draw_mono_eye(draw, t, device.width, device.height, panel_height)
+                    _oled_draw_mono_eye(draw, t, device.width, device.height, panel_height, motion_profile)
             frames += 1
 
             if not context.sleep(frame_delay):
@@ -1730,6 +1969,7 @@ def _run_oled_robot_demo(parameters: Any) -> Dict[str, Any]:
             "display_left_on": True,
             "max_run_seconds": max_run_seconds,
             "text_lines": text_lines,
+            "motion_mode": motion_key,
         }
     finally:
         if backlight is not None:
@@ -2390,8 +2630,8 @@ def _execute_action(action: str, parameters: Dict[str, Any]) -> Tuple[bool, Any,
             return True, {"current_time": now.isoformat()}, None
         if action == "get_weather":
             return True, _get_weather(parameters or {}), None
-        if action == "tell_joke":
-            return True, _tell_joke(), None
+        if action == "play_buzzer":
+            return True, _play_buzzer(parameters or {}), None
         if action == "run_motor_test":
             return True, _run_motor_test(parameters or {}), None
         if action == "run_oled_robot_demo":
@@ -2908,12 +3148,6 @@ def _heuristic_multi_plan(instruction: str) -> List[Dict[str, Any]]:
 
     if any(
         keyword in lowered
-        for keyword in ["tell me a joke", "joke", "ジョーク", "冗談", "笑い"]
-    ):
-        _add("tell_joke", {})
-
-    if any(
-        keyword in lowered
         for keyword in ["what time", "current time", "time is it", "clock", "時刻", "今何時"]
     ):
         _add("get_current_time", {})
@@ -2945,6 +3179,14 @@ def _heuristic_multi_plan(instruction: str) -> List[Dict[str, Any]]:
     led_keywords = ["led", "blink", "blinking", "light show"]
     if any(keyword in lowered for keyword in led_keywords) or "ライト" in text or "点滅" in text:
         _add("run_led_demo", {})
+
+    buzzer_keywords = ["buzzer", "beep", "tone", "melody"]
+    if (
+        any(keyword in lowered for keyword in buzzer_keywords)
+        or "ブザー" in text
+        or "ビープ" in text
+    ):
+        _add("play_buzzer", {})
 
     oled_keywords = ["oled", "st7735", "robot face", "lcd animation", "mono eye", "zaku", "mono-eye"]
     if (

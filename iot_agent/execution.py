@@ -52,6 +52,36 @@ def _format_return_value_for_user(value: Any) -> str:
             message = value.get("message") if isinstance(value.get("message"), str) else None
             result_payload = value.get("result")
 
+            def _format_capture_result(result_data: Any) -> str:
+                description_candidates = []
+                if isinstance(result_data, dict):
+                    for key in ("description", "analysis", "summary"):
+                        candidate = result_data.get(key)
+                        if isinstance(candidate, str) and candidate.strip():
+                            description_candidates.append(candidate.strip())
+                    filename = result_data.get("filename")
+                    size_bytes = result_data.get("file_size_bytes")
+                else:
+                    filename = None
+                    size_bytes = None
+
+                description_candidates.append(message)
+                description = next(
+                    (text for text in description_candidates if isinstance(text, str) and text.strip()),
+                    "カメラで周囲の様子を撮影しました。"
+                )
+
+                details: List[str] = []
+                if isinstance(filename, str) and filename.strip():
+                    details.append(filename.strip())
+                if isinstance(size_bytes, (int, float)) and size_bytes > 0:
+                    mb = size_bytes / (1024 * 1024)
+                    details.append(f"約{mb:.2f} MB")
+
+                if details:
+                    return f"{description}（{', '.join(details)}）"
+                return description
+
             if (
                 action_name == "multi_action_sequence"
                 and isinstance(result_payload, dict)
@@ -103,6 +133,9 @@ def _format_return_value_for_user(value: Any) -> str:
 
                 combined = " / ".join(filter(None, [" / ".join(formatted_steps), *extras]))
                 return combined or "マルチステップ結果が空でした。"
+
+            if action_name == "capture_camera_photo":
+                return _format_capture_result(result_payload)
 
             parts: List[str] = [f"アクション: {action_name}"]
             if parameters:
