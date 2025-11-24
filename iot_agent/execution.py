@@ -1,4 +1,5 @@
 import json
+import os
 import threading
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -495,6 +496,7 @@ def _summarize_device_command_sequence(
         return fallback_reply
 
     provider, model_name, _ = apply_model_selection("iot")
+    vision_model = os.getenv("IOT_VISION_MODEL") or model_name
     vision_supported = provider_supports_vision(provider)
     if vision_supported:
         image_inputs = _extract_image_inputs(summaries)
@@ -505,7 +507,7 @@ def _summarize_device_command_sequence(
                     initial_reply,
                     summaries,
                     image_inputs,
-                    model_name,
+                    vision_model,
                 )
                 llm_reply = _call_llm_text(client, prompt_payload)
                 cleaned = llm_reply.strip() if isinstance(llm_reply, str) else ""
