@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 
 # 2025年11月時点の推奨デフォルト
-DEFAULT_SELECTION = {"provider": "gemini", "model": "gemini-2.0-flash"}
+DEFAULT_SELECTION = {"provider": "gemini", "model": "gemini-2.5-flash"}
 
 AVAILABLE_MODELS: List[Dict[str, str]] = [
     # OpenAI
@@ -16,12 +16,12 @@ AVAILABLE_MODELS: List[Dict[str, str]] = [
     {"provider": "openai", "model": "o3-mini", "label": "o3 Mini (Reasoning)"},
     
     # Gemini (Google)
-    {"provider": "gemini", "model": "gemini-2.0-flash", "label": "Gemini 2.0 Flash"},
-    {"provider": "gemini", "model": "gemini-1.5-pro", "label": "Gemini 1.5 Pro"},
+    {"provider": "gemini", "model": "gemini-2.5-flash", "label": "Gemini 2.5 Flash"},
+    {"provider": "gemini", "model": "gemini-2.5-pro", "label": "Gemini 2.5 Pro"},
 
     # Claude (Anthropic)
-    {"provider": "claude", "model": "claude-3-5-sonnet-20241022", "label": "Claude 3.5 Sonnet"},
-    {"provider": "claude", "model": "claude-3-5-haiku-20241022", "label": "Claude 3.5 Haiku"},
+    {"provider": "claude", "model": "claude-sonnet-4-5-20250929", "label": "Claude Sonnet 4.5"},
+    {"provider": "claude", "model": "claude-haiku-4-5-20251001", "label": "Claude Haiku 4.5"},
 
     # Groq (Llama)
     {"provider": "groq", "model": "llama-3.3-70b-versatile", "label": "Llama 3.3 70B (Groq)"},
