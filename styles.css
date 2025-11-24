@@ -81,6 +81,37 @@ body{
   color:#082114; border-radius: 10px; font-weight:700;
   box-shadow: 0 6px 20px rgba(53,208,134,.35);
 }
+.model-selection{
+  margin-left: auto;
+}
+.model-selection__select{
+  appearance: none;
+  background: rgba(12,36,25,.6);
+  border: 1px solid rgba(255,255,255,.1);
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: 12px;
+  padding: 6px 28px 6px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23b2d3c0' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  transition: border-color .2s ease, box-shadow .2s ease, color .2s ease;
+  max-width: 180px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  overflow: hidden;
+}
+.model-selection__select:hover{
+  border-color: rgba(53,208,134,.35);
+  color: var(--text);
+}
+.model-selection__select:focus{
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(53,208,134,.25);
+}
 .chat{
   display: flex;
   flex-direction: column;
