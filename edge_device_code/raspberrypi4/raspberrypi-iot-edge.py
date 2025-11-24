@@ -183,25 +183,25 @@ SUPPORTED_ACTIONS: Dict[str, Dict[str, Any]] = {
             },
         ],
     },
-    "run_motor_test": {
-        "description": "Execute the built-in dual DC motor diagnostic routine using the configured L293D wiring.",
+    "operate_dc_motors": {
+        "description": "Activates the dual DC motors connected via the L293D driver to perform a predefined movement sequence (forward, then backward). This is used to verify motor functionality.",
         "params": [
             {
                 "name": "timeout",
                 "type": "number",
                 "required": False,
-                "description": "Optional timeout in seconds before the motor test is stopped.",
+                "description": "Optional timeout in seconds before the motor operation is stopped.",
             }
         ],
     },
-    "run_oled_robot_demo": {
-        "description": "Show the ST7735 mono-eye animation (Zaku-style) on the connected display and optionally render text.",
+    "display_robot_animation": {
+        "description": "Show a robot-style 'mono-eye' animation on the connected ST7735 OLED display. Can also display a custom text message over the animation.",
         "params": [
             {
                 "name": "timeout",
                 "type": "number",
                 "required": False,
-                "description": "Optional timeout in seconds before stopping the animation demo.",
+                "description": "Optional timeout in seconds before stopping the animation.",
             },
             {
                 "name": "text",
@@ -223,8 +223,8 @@ SUPPORTED_ACTIONS: Dict[str, Dict[str, Any]] = {
             }
         ],
     },
-    "run_servo_demo": {
-        "description": "Execute the integrated servo control utilities (demo, set, center, off, sweep, info).",
+    "control_single_servo": {
+        "description": "Control a single servo motor. Supports various subcommands like setting a specific angle, centering, sweeping between angles, or turning it off.",
         "params": [
             {
                 "name": "command",
@@ -300,8 +300,8 @@ SUPPORTED_ACTIONS: Dict[str, Dict[str, Any]] = {
             },
         ],
     },
-    "capture_camera_photo": {
-        "description": "Capture a still photo using the Picamera2 module and save it to the default test directory.",
+    "capture_image": {
+        "description": "Capture a still image using the attached Picamera2 module and return it as a base64 encoded string. The image is also saved to a local directory.",
         "params": [
             {
                 "name": "filename",
@@ -323,8 +323,8 @@ SUPPORTED_ACTIONS: Dict[str, Dict[str, Any]] = {
             },
         ],
     },
-    "run_led_demo": {
-        "description": "Run the three-LED chase and blink demo using GPIO2, GPIO3, and GPIO16.",
+    "operate_led_pattern": {
+        "description": "Run a predefined light pattern (chase and blink sequence) on the three LEDs connected to GPIO pins. Useful for verifying LED circuits.",
         "params": [
             {
                 "name": "cycles",
@@ -340,8 +340,8 @@ SUPPORTED_ACTIONS: Dict[str, Dict[str, Any]] = {
             },
         ],
     },
-    "run_dual_servo_demo": {
-        "description": "Run the dual-servo inverse sweep demo on GPIO12 and GPIO19.",
+    "control_dual_servos": {
+        "description": "Control two servo motors simultaneously in a coordinated inverse sweep pattern. Use this for requests involving two or both servos.",
         "params": [
             {
                 "name": "command",
@@ -2632,17 +2632,17 @@ def _execute_action(action: str, parameters: Dict[str, Any]) -> Tuple[bool, Any,
             return True, _get_weather(parameters or {}), None
         if action == "play_buzzer":
             return True, _play_buzzer(parameters or {}), None
-        if action == "run_motor_test":
+        if action == "operate_dc_motors":
             return True, _run_motor_test(parameters or {}), None
-        if action == "run_oled_robot_demo":
+        if action == "display_robot_animation":
             return True, _run_oled_robot_demo(parameters or {}), None
-        if action == "run_servo_demo":
+        if action == "control_single_servo":
             return True, _run_servo_demo(parameters or {}), None
-        if action == "capture_camera_photo":
+        if action == "capture_image":
             return True, _capture_camera_photo(parameters or {}), None
-        if action == "run_led_demo":
+        if action == "operate_led_pattern":
             return True, _run_led_demo(parameters or {}), None
-        if action == "run_dual_servo_demo":
+        if action == "control_dual_servos":
             return True, _run_dual_servo_demo(parameters or {}), None
         if action == "no_action":
             message = parameters.get("message") if isinstance(parameters, dict) else None
