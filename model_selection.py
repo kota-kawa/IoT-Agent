@@ -19,9 +19,9 @@ AVAILABLE_MODELS: List[Dict[str, str]] = [
     {"provider": "gemini", "model": "gemini-2.0-flash", "label": "Gemini 2.0 Flash"},
     {"provider": "gemini", "model": "gemini-1.5-pro", "label": "Gemini 1.5 Pro"},
 
-    # Claude (via OpenRouter) - Prefix required
-    {"provider": "claude", "model": "anthropic/claude-3.7-sonnet", "label": "Claude 3.7 Sonnet"},
-    {"provider": "claude", "model": "anthropic/claude-3.5-haiku", "label": "Claude 3.5 Haiku"},
+    # Claude (Anthropic)
+    {"provider": "claude", "model": "claude-3-5-sonnet-latest", "label": "Claude 3.5 Sonnet"},
+    {"provider": "claude", "model": "claude-3-5-haiku-latest", "label": "Claude 3.5 Haiku"},
 
     # Groq (Llama)
     {"provider": "groq", "model": "llama-3.3-70b-versatile", "label": "Llama 3.3 70B (Groq)"},
@@ -41,8 +41,8 @@ PROVIDER_DEFAULTS: Dict[str, Dict[str, str | List[str] | None]] = {
         "api_key_aliases": ["ANTHROPIC_API_KEY"],
         "base_url_env": "CLAUDE_API_BASE",
         "base_url_env_aliases": [],
-        # OpenAI SDK経由でClaudeを使う場合はOpenRouter等を想定
-        "default_base_url": "https://openrouter.ai/api/v1",
+        # Native Anthropic API
+        "default_base_url": None,
     },
     "gemini": {
         "api_key_env": "GEMINI_API_KEY",

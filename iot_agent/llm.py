@@ -1,9 +1,14 @@
 import json
 import os
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
+from types import SimpleNamespace
 
 from openai import OpenAI
+try:
+    from anthropic import Anthropic
+except ImportError:
+    Anthropic = None
 
 from .config import AGENT_ROLE_VALUE
 from .device_utils import _build_device_context, _format_result_for_prompt
@@ -60,23 +65,77 @@ def _current_datetime_line() -> str:
     return datetime.now().strftime("現在の日時ー%Y年%m月%d日%H時%M分")
 
 
-def _client() -> OpenAI:
-    # OpenAI API クライアントを生成し、API キーが無い場合は例外を送出
+class UnifiedClient:
+    def __init__(self):
+        self.provider, self.model_name, self.base_url, self.api_key = apply_model_selection("iot")
 
-    provider, model_name, base_url, api_key = apply_model_selection("iot")
-    if not api_key:
-        # Look up the expected key for the selected provider for a better error message
-        provider_meta = PROVIDER_DEFAULTS.get(provider, {})
-        expected_key = provider_meta.get("api_key_env", "OPENAI_API_KEY")
-        raise RuntimeError(
-            f"API key for provider '{provider}' is not set. Please set '{expected_key}' in your secrets.env file."
+        if not self.api_key:
+            # Look up the expected key for the selected provider for a better error message
+            provider_meta = PROVIDER_DEFAULTS.get(self.provider, {})
+            expected_key = provider_meta.get("api_key_env", "OPENAI_API_KEY")
+            raise RuntimeError(
+                f"API key for provider '{self.provider}' is not set. Please set '{expected_key}' in your secrets.env file."
+            )
+
+        if self.provider == "claude":
+            if Anthropic is None:
+                raise ImportError("Anthropic SDK is not installed. Please run `pip install anthropic`.")
+            self.client = Anthropic(api_key=self.api_key)
+        else:
+            client_kwargs: Dict[str, Any] = {"api_key": self.api_key}
+            if self.base_url:
+                client_kwargs["base_url"] = self.base_url
+            self.client = OpenAI(**client_kwargs)
+
+        self.chat = self
+
+    @property
+    def completions(self):
+        return self
+
+    def create(self, **kwargs):
+        if self.provider == "claude":
+            return self._create_anthropic(**kwargs)
+        else:
+            return self.client.chat.completions.create(**kwargs)
+
+    def _create_anthropic(self, **kwargs):
+        model = kwargs.get("model", self.model_name)
+        messages = kwargs.get("messages", [])
+
+        system_prompt = ""
+        filtered_messages = []
+
+        for msg in messages:
+            if msg.get("role") == "system":
+                system_prompt += msg.get("content", "") + "\n"
+            else:
+                filtered_messages.append(msg)
+
+        # Anthropic requires max_tokens
+        max_tokens = kwargs.get("max_tokens", 4096)
+
+        temperature = kwargs.get("temperature", 0.7)
+
+        response = self.client.messages.create(
+            model=model,
+            system=system_prompt.strip(),
+            messages=filtered_messages,
+            max_tokens=max_tokens,
+            temperature=temperature
         )
 
-    client_kwargs: Dict[str, Any] = {"api_key": api_key}
-    if base_url:
-        client_kwargs["base_url"] = base_url
+        # Wrap response to match OpenAI structure
+        # OpenAI: response.choices[0].message.content
+        content = response.content[0].text if response.content else ""
 
-    return OpenAI(**client_kwargs)
+        message = SimpleNamespace(content=content, parsed=None)
+        choice = SimpleNamespace(message=message)
+        return SimpleNamespace(choices=[choice])
+
+
+def _client() -> UnifiedClient:
+    return UnifiedClient()
 
 
 def _structured_llm_prompt(
@@ -194,7 +253,7 @@ def _extract_json_object(text: Any) -> Tuple[Optional[Any], Optional[str]]:
     return None, text.strip()
 
 
-def _call_llm_and_parse(client: OpenAI, messages: List[Dict[str, str]]) -> Dict[str, Any]:
+def _call_llm_and_parse(client: UnifiedClient, messages: List[Dict[str, str]]) -> Dict[str, Any]:
     # LLM 応答から reply と device_commands を抽出して辞書化
 
     max_attempts = 3
@@ -259,7 +318,6 @@ def _call_llm_and_parse(client: OpenAI, messages: List[Dict[str, str]]) -> Dict[
         prompt_kwargs = _structured_llm_prompt(messages, retry_instruction)
         
         # JSONモードの使用可否
-        # OpenAI, Gemini, Groq (Llama 3.1) は response_format={"type": "json_object"} をサポート
         extra_args = {}
         if provider in ["openai", "groq", "gemini"]:
             extra_args["response_format"] = {"type": "json_object"}
@@ -402,7 +460,7 @@ def _structured_conversation_review_prompt(messages: List[Dict[str, str]]) -> Di
 
 
 def _call_llm_for_conversation_review(
-    client: OpenAI, messages: List[Dict[str, str]]
+    client: UnifiedClient, messages: List[Dict[str, str]]
 ) -> Dict[str, Any]:
     # 監査用 LLM を呼び出し、action_required と device_commands を抽出
 
@@ -481,7 +539,7 @@ def _call_llm_for_conversation_review(
     return result
 
 
-def _call_llm_text(client: OpenAI, payload: Dict[str, Any]) -> str:
+def _call_llm_text(client: UnifiedClient, payload: Dict[str, Any]) -> str:
     # 指定ペイロードで LLM を呼び出し、クリーンなテキストを返す
     # payloadには "model" と "input" (これは古い形式) または "messages" が含まれる可能性がある
     
