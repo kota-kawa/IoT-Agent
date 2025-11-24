@@ -67,11 +67,6 @@ def _client() -> OpenAI:
     if base_url:
         client_kwargs["base_url"] = base_url
 
-    # Gemini (Google AI) OpenAI 互換エンドポイントは API キーをクエリ/ヘッダーで受け付ける
-    if provider == "gemini" and base_url and "generativelanguage.googleapis.com" in base_url:
-        client_kwargs["default_headers"] = {"X-Goog-Api-Key": api_key}
-        client_kwargs["default_query"] = {"key": api_key}
-
     return OpenAI(**client_kwargs)
 
 
