@@ -1,6 +1,7 @@
 import json
 import time
-from typing import Any, Dict, List, Optional
+from collections import deque
+from typing import Any, Dict, List, Optional, Tuple
 
 from flask import Flask, jsonify, redirect, request, session, url_for
 
@@ -78,6 +79,17 @@ def _user_requests_environment_photo(messages: List[Dict[str, str]]) -> bool:
         return False
 
     return False
+
+
+def _llm_unavailable_response(exc: Exception) -> Tuple[Dict[str, Any], int]:
+    """Build a friendly fallback when the LLM/Responses API cannot be reached."""
+
+    app.logger.exception("LLM chat flow failed", exc_info=exc)
+    message = (
+        "LLM への接続に失敗しました。API キーとネットワークを確認したうえで、"
+        "しばらくしてから再度お試しください。"
+    )
+    return {"reply": message, "error": str(exc)}, 200
 
 
 @app.get("/")
@@ -195,62 +207,63 @@ def chat():
         agent_device and _device_supports_capability(agent_device, "capture_camera_photo")
     )
 
-    if agent_device:
-        try:
+    payload: Dict[str, Any]
+    status: int
+
+    try:
+        if agent_device:
             client = _client()
             parsed_response = _call_llm_and_parse(client, formatted_messages)
-        except RuntimeError as exc:
-            return jsonify({"error": str(exc)}), 500
-        except Exception as exc:  # pragma: no cover - network/SDK errors
-            return jsonify({"error": str(exc)}), 500
 
-        reply_message = parsed_response.get("reply")
-        if not isinstance(reply_message, str):
-            reply_message = parsed_response.get("raw", "").strip()
+            reply_message = parsed_response.get("reply")
+            if not isinstance(reply_message, str):
+                reply_message = parsed_response.get("raw", "").strip()
 
-        validated_commands, validation_errors = _validate_device_command_sequence(
-            parsed_response.get("device_commands")
-        )
-
-        limitation_notice: Optional[str] = None
-        if wants_environment_view:
-            if not vision_supported:
-                validated_commands = [
-                    cmd
-                    for cmd in validated_commands
-                    if str(cmd.get("name")) != "capture_camera_photo"
-                ]
-                limitation_notice = (
-                    "現在選択しているモデルではカメラ画像を使った回答に対応していません。"
-                )
-            elif capture_supported and not any(
-                str(cmd.get("name")) == "capture_camera_photo" for cmd in validated_commands
-            ):
-                validated_commands = [
-                    {
-                        "device_id": agent_device.device_id,
-                        "name": "capture_camera_photo",
-                        "args": {},
-                    },
-                    *validated_commands,
-                ]
-
-        if limitation_notice:
-            reply_message = (reply_message + "\n" if reply_message else "") + limitation_notice
-
-        payload: Dict[str, Any] = {"reply": reply_message}
-        status: int = 200
-
-        if validation_errors:
-            notice = "\n".join(f"(システム通知: {error})" for error in validation_errors)
-            payload["reply"] = (reply_message + "\n" if reply_message else "") + notice
-        elif validated_commands:
-            final_reply, status = _execute_device_command_sequence(
-                client, formatted_messages, reply_message, validated_commands
+            validated_commands, validation_errors = _validate_device_command_sequence(
+                parsed_response.get("device_commands")
             )
-            payload = {"reply": final_reply}
-    else:
-        payload, status = _chat_via_legacy(formatted_messages)
+
+            limitation_notice: Optional[str] = None
+            if wants_environment_view:
+                if not vision_supported:
+                    validated_commands = [
+                        cmd
+                        for cmd in validated_commands
+                        if str(cmd.get("name")) != "capture_camera_photo"
+                    ]
+                    limitation_notice = (
+                        "現在選択しているモデルではカメラ画像を使った回答に対応していません。"
+                    )
+                elif capture_supported and not any(
+                    str(cmd.get("name")) == "capture_camera_photo" for cmd in validated_commands
+                ):
+                    validated_commands = [
+                        {
+                            "device_id": agent_device.device_id,
+                            "name": "capture_camera_photo",
+                            "args": {},
+                        },
+                        *validated_commands,
+                    ]
+
+            if limitation_notice:
+                reply_message = (reply_message + "\n" if reply_message else "") + limitation_notice
+
+            payload = {"reply": reply_message}
+            status = 200
+
+            if validation_errors:
+                notice = "\n".join(f"(システム通知: {error})" for error in validation_errors)
+                payload["reply"] = (reply_message + "\n" if reply_message else "") + notice
+            elif validated_commands:
+                final_reply, status = _execute_device_command_sequence(
+                    client, formatted_messages, reply_message, validated_commands
+                )
+                payload = {"reply": final_reply}
+        else:
+            payload, status = _chat_via_legacy(formatted_messages)
+    except Exception as exc:
+        payload, status = _llm_unavailable_response(exc)
 
     return jsonify(payload), status
 
