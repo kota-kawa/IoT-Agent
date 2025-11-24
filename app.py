@@ -146,6 +146,7 @@ def session_logout():
 @app.post("/model_settings")
 def update_model_settings():
     """Update LLM model selection without restarting the service."""
+    # This endpoint allows the frontend to switch models dynamically.
 
     payload = request.get_json(silent=True) or {}
     selection = payload if isinstance(payload, dict) else {}
