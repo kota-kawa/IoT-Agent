@@ -1,6 +1,7 @@
 version: "3.9"
 services:
   web:
+    container_name: iot-agent
     build: .
     ports:
       - "5006:5006"
@@ -10,3 +11,11 @@ services:
       - ./:/app
     command: ["python", "-m", "flask", "--app", "app", "run", "--host=0.0.0.0", "--port=5006", "--reload"]
     restart: unless-stopped
+    networks:
+      - default
+      - multi_agent_network
+
+networks:
+  multi_agent_network:
+    external: true
+    name: ${MULTI_AGENT_NETWORK:-multi_agent_platform_net}
