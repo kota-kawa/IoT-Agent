@@ -25,7 +25,7 @@ const escapeHtml = (s) =>
   ));
 
 /** ---------- モデル選択 ---------- */
-const DEFAULT_MODEL = { provider: "openai", model: "gpt-4.1" };
+const DEFAULT_MODEL = { provider: "openai", model: "gpt-4.1", base_url: "" };
 let availableModels = [];
 let currentModel = { ...DEFAULT_MODEL };
 
@@ -68,7 +68,11 @@ async function loadModelOptions(){
     }
     const current = data.current;
     if(current && typeof current === "object" && current.provider && current.model){
-      currentModel = { provider: current.provider, model: current.model };
+      currentModel = {
+        provider: current.provider,
+        model: current.model,
+        base_url: typeof current.base_url === "string" ? current.base_url : "",
+      };
     }
   }catch(err){
     console.error("Failed to load model options", err);
@@ -86,7 +90,8 @@ async function handleModelChange(){
   const [providerRaw, modelRaw] = (modelSelectEl.value || fallbackValue).split(":");
   const provider = providerRaw || DEFAULT_MODEL.provider;
   const model = modelRaw || DEFAULT_MODEL.model;
-  currentModel = { provider, model };
+  const baseUrl = typeof currentModel.base_url === "string" ? currentModel.base_url : "";
+  currentModel = { provider, model, base_url: baseUrl };
 
   try{
     const res = await fetch("/model_settings", {
