@@ -209,9 +209,11 @@ def _notify_platform(selection: dict) -> None:
         headers = {"X-Agent-Origin": "iot"}
         res = requests.post(url, json=payload, headers=headers, timeout=2.0)
         if not res.ok:
-            logger.info("Platform model sync skipped (%s %s)", res.status_code, res.text)
+            app.logger.info("Platform model sync skipped (%s %s)", res.status_code, res.text)
     except requests.exceptions.RequestException as exc:
-        logger.info("Platform model sync skipped (%s)", exc)
+        app.logger.info("Platform model sync skipped (%s)", exc)
+    except Exception as exc:  # noqa: BLE001
+        app.logger.info("Platform model sync failed: %s", exc)
 
 
 @app.post("/model_settings")
