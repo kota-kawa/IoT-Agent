@@ -68,6 +68,32 @@ _ENV_EN_KEYWORDS = [
     "camera",
 ]
 
+def _iter_platform_bases() -> list[str]:
+    """Return potential Multi-Agent Platform bases for sync in priority order."""
+
+    candidates: list[str] = []
+    configured = os.getenv("MULTI_AGENT_PLATFORM_BASE", "")
+    if configured:
+        candidates.extend(part.strip().rstrip("/") for part in configured.split(",") if part.strip())
+
+    if _PLATFORM_BASE:
+        candidates.append(_PLATFORM_BASE)
+
+    for fallback in ("http://localhost:5050", "http://web:5050"):
+        if fallback not in candidates:
+            candidates.append(fallback)
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for base in candidates:
+        if not base:
+            continue
+        if base in seen:
+            continue
+        seen.add(base)
+        deduped.append(base)
+    return deduped
+
 
 def _user_requests_environment_photo(messages: List[Dict[str, str]]) -> bool:
     """Return True when the latest user message asks for a camera view or surroundings."""
@@ -200,20 +226,30 @@ def session_logout():
 def _notify_platform(selection: dict) -> None:
     """Best-effort push of the IoT model selection back to the platform."""
 
-    if not _PLATFORM_BASE or not isinstance(selection, dict):
+    if not isinstance(selection, dict):
         return
 
-    try:
-        url = f"{_PLATFORM_BASE}/api/model_settings"
-        payload = {"selection": {"iot": selection}}
-        headers = {"X-Agent-Origin": "iot"}
-        res = requests.post(url, json=payload, headers=headers, timeout=2.0)
-        if not res.ok:
-            app.logger.info("Platform model sync skipped (%s %s)", res.status_code, res.text)
-    except requests.exceptions.RequestException as exc:
-        app.logger.info("Platform model sync skipped (%s)", exc)
-    except Exception as exc:  # noqa: BLE001
-        app.logger.info("Platform model sync failed: %s", exc)
+    payload = {"selection": {"iot": selection}}
+    headers = {"X-Agent-Origin": "iot"}
+    errors: list[str] = []
+
+    for base in _iter_platform_bases():
+        url = f"{base}/api/model_settings"
+        try:
+            res = requests.post(url, json=payload, headers=headers, timeout=2.0)
+        except requests.exceptions.RequestException as exc:  # pragma: no cover - network failure
+            errors.append(f"{url}: {exc}")
+            continue
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"{url}: {exc}")
+            continue
+
+        if res.ok:
+            return
+        errors.append(f"{url}: {res.status_code} {res.text}")
+
+    if errors:
+        app.logger.info("Platform model sync skipped (%s)", "; ".join(errors))
 
 
 @app.post("/model_settings")
@@ -222,7 +258,9 @@ def update_model_settings():
     # This endpoint allows the frontend to switch models dynamically.
 
     payload = request.get_json(silent=True) or {}
-    selection = payload if isinstance(payload, dict) else {}
+    raw_selection = payload.get("selection") if isinstance(payload, dict) and "selection" in payload else payload
+    selection = raw_selection.get("iot") if isinstance(raw_selection, dict) and "iot" in raw_selection else raw_selection
+    selection = selection if isinstance(selection, dict) else {}
     try:
         update_override(selection if selection else None)
         if request.headers.get("X-Platform-Propagation") != "1" and selection:
