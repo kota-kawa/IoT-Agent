@@ -1,10 +1,11 @@
 import json
 import os
+import traceback
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple, Union
 from types import SimpleNamespace
 
-from openai import OpenAI
+from openai import OpenAI, APIError
 try:
     from anthropic import Anthropic
 except ImportError:
@@ -324,6 +325,7 @@ def _call_llm_and_parse(client: UnifiedClient, messages: List[Dict[str, str]]) -
 
         parsed_payload = None
         try:
+            print(f"[{datetime.now()}] calling {provider} with model {client.model_name}")
             response = client.chat.completions.create(**prompt_kwargs, **extra_args)
             choice = response.choices[0] if response and response.choices else None
             message = choice.message if choice else None
@@ -335,6 +337,16 @@ def _call_llm_and_parse(client: UnifiedClient, messages: List[Dict[str, str]]) -
         except Exception as e:
             # 呼び出しエラーの場合は即座に失敗扱いせず、ログに残してリトライするか例外を投げる
             # ここではエラーとして処理を継続
+            print(f"[{datetime.now()}] LLM Error (Attempt {attempt}): {str(e)}")
+            if hasattr(e, 'response') and e.response:
+                print(f"HTTP Status: {e.response.status_code}")
+                try:
+                     print(f"Response Body: {e.response.text}")
+                except:
+                     pass
+
+            traceback.print_exc()
+
             reply_text = ""
             last_raw = str(e)
             # ネットワークエラーなどはリトライしても無駄な場合があるため、attemptを進める
@@ -474,14 +486,26 @@ def _call_llm_for_conversation_review(
     if provider in ["openai", "groq", "gemini"]:
         extra_args["response_format"] = {"type": "json_object"}
 
-    response = client.chat.completions.create(**kwargs, **extra_args)
-    choice = response.choices[0] if response and response.choices else None
-    message = choice.message if choice else None
-    parsed_payload = getattr(message, "parsed", None) if message else None
-    if parsed_payload is None and isinstance(message, dict):
-        parsed_payload = message.get("parsed")
-    content = getattr(message, "content", None) if message else None
-    reply_text = _content_to_text(content)
+    try:
+        response = client.chat.completions.create(**kwargs, **extra_args)
+        choice = response.choices[0] if response and response.choices else None
+        message = choice.message if choice else None
+        parsed_payload = getattr(message, "parsed", None) if message else None
+        if parsed_payload is None and isinstance(message, dict):
+            parsed_payload = message.get("parsed")
+        content = getattr(message, "content", None) if message else None
+        reply_text = _content_to_text(content)
+    except Exception as e:
+        print(f"[{datetime.now()}] LLM Conversation Review Error: {str(e)}")
+        if hasattr(e, 'response') and e.response:
+                print(f"HTTP Status: {e.response.status_code}")
+                try:
+                     print(f"Response Body: {e.response.text}")
+                except:
+                     pass
+        traceback.print_exc()
+        reply_text = ""
+
 
     parsed_obj = parsed_payload
     cleaned_text = ""
@@ -553,12 +577,19 @@ def _call_llm_text(client: UnifiedClient, payload: Dict[str, Any]) -> str:
     if not model or not messages:
         raise ValueError("Invalid payload for _call_llm_text")
 
-    response = client.chat.completions.create(model=model, messages=messages)
-    choice = response.choices[0] if response and response.choices else None
-    message = choice.message if choice else None
-    content = getattr(message, "content", None) if message else None
-    text = _content_to_text(content)
-    return text.strip()
+    try:
+        response = client.chat.completions.create(model=model, messages=messages)
+        choice = response.choices[0] if response and response.choices else None
+        message = choice.message if choice else None
+        content = getattr(message, "content", None) if message else None
+        text = _content_to_text(content)
+        return text.strip()
+    except Exception as e:
+        print(f"[{datetime.now()}] LLM Text Error: {str(e)}")
+        if hasattr(e, 'response') and e.response:
+             print(f"HTTP Status: {e.response.status_code}")
+        traceback.print_exc()
+        return ""
 
 
 def _structured_agent_instruction_prompt(messages: List[Dict[str, str]]) -> Dict[str, Any]:
