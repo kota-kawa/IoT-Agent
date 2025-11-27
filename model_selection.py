@@ -94,7 +94,12 @@ def _coerce_selection(raw: Dict[str, str] | None) -> Dict[str, str]:
 
 
 def _load_selection(agent_key: str) -> Dict[str, str]:
-    platform_path = Path(__file__).resolve().parent.parent / "Multi-Agent-Platform" / "model_settings.json"
+    env_path = os.getenv("MULTI_AGENT_SETTINGS_PATH")
+    if env_path:
+        platform_path = Path(env_path)
+    else:
+        platform_path = Path(__file__).resolve().parent.parent / "Multi-Agent-Platform" / "model_settings.json"
+
     try:
         data = json.loads(platform_path.read_text(encoding="utf-8"))
     except (FileNotFoundError, json.JSONDecodeError):
