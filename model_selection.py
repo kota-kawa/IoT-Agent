@@ -57,7 +57,8 @@ PROVIDER_DEFAULTS: Dict[str, Dict[str, str | List[str] | None]] = {
         "base_url_env": "GEMINI_API_BASE",
         "base_url_env_aliases": [],
         # Google の OpenAI 互換エンドポイント（Multi-Agent-Platform と共通）
-        "default_base_url": "https://generativelanguage.googleapis.com/openai/v1",
+        # 公式ドキュメント: https://generativelanguage.googleapis.com/v1beta/openai/
+        "default_base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
     },
     "groq": {
         "api_key_env": "GROQ_API_KEY",
