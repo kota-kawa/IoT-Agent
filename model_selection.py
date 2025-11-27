@@ -7,8 +7,8 @@ import os
 from pathlib import Path
 from typing import Dict, List, Tuple
 
-# 2025年11月時点の推奨デフォルト
-DEFAULT_SELECTION = {"provider": "gemini", "model": "gemini-2.5-flash"}
+# Multi-Agent-Platform の設定モーダルと揃えるデフォルト
+DEFAULT_SELECTION = {"provider": "openai", "model": "gpt-4.1", "base_url": ""}
 
 AVAILABLE_MODELS: List[Dict[str, str]] = [
     # OpenAI
@@ -56,8 +56,8 @@ PROVIDER_DEFAULTS: Dict[str, Dict[str, str | List[str] | None]] = {
         "api_key_aliases": ["GOOGLE_API_KEY", "PALM_API_KEY"],
         "base_url_env": "GEMINI_API_BASE",
         "base_url_env_aliases": [],
-        # GoogleのOpenAI互換エンドポイント
-        "default_base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+        # Google の OpenAI 互換エンドポイント（Multi-Agent-Platform と共通）
+        "default_base_url": "https://generativelanguage.googleapis.com/openai/v1",
     },
     "groq": {
         "api_key_env": "GROQ_API_KEY",
@@ -73,20 +73,24 @@ _OVERRIDE_SELECTION: Dict[str, str] | None = None
 
 
 def _coerce_selection(raw: Dict[str, str] | None) -> Dict[str, str]:
-    """Normalise provider/model fields and fall back to defaults."""
+    """Normalise provider/model/base_url fields and fall back to defaults."""
 
     provider = DEFAULT_SELECTION["provider"]
     model = DEFAULT_SELECTION["model"]
+    base_url: str | None = None
 
     if isinstance(raw, dict):
         raw_provider = raw.get("provider")
         raw_model = raw.get("model")
+        raw_base_url = raw.get("base_url")
         if isinstance(raw_provider, str) and raw_provider.strip():
             provider = raw_provider.strip()
         if isinstance(raw_model, str) and raw_model.strip():
             model = raw_model.strip()
+        if isinstance(raw_base_url, str) and raw_base_url.strip():
+            base_url = raw_base_url.strip()
 
-    return {"provider": provider, "model": model}
+    return {"provider": provider, "model": model, "base_url": base_url or ""}
 
 
 def _load_selection(agent_key: str) -> Dict[str, str]:
@@ -162,7 +166,7 @@ def apply_model_selection(agent_key: str = "iot", override: Dict[str, str] | Non
 
     meta = PROVIDER_DEFAULTS.get(provider, PROVIDER_DEFAULTS["openai"])
     api_key = _resolve_api_key(meta)
-    base_url = _resolve_base_url(meta)
+    base_url = selection.get("base_url") or _resolve_base_url(meta)
 
     # Note: We do NOT modify os.environ here to avoid polluting the global state
     # or overwriting the user's original OPENAI_API_KEY.

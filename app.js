@@ -25,7 +25,7 @@ const escapeHtml = (s) =>
   ));
 
 /** ---------- モデル選択 ---------- */
-const DEFAULT_MODEL = { provider: "openai", model: "gpt-4.1-mini" };
+const DEFAULT_MODEL = { provider: "openai", model: "gpt-4.1" };
 let availableModels = [];
 let currentModel = { ...DEFAULT_MODEL };
 
@@ -38,7 +38,7 @@ function populateModelSelect(){
 
   const options = availableModels.length
     ? availableModels
-    : [{ ...DEFAULT_MODEL, label: "Default (OpenAI gpt-4.1-mini)" }];
+    : [{ ...DEFAULT_MODEL, label: "Default (OpenAI gpt-4.1)" }];
 
   options.forEach((m) => {
     const option = document.createElement("option");
