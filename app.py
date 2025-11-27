@@ -1,5 +1,6 @@
 import json
 import os
+import requests
 import time
 from collections import deque
 from importlib import metadata
@@ -36,6 +37,9 @@ from iot_agent.validation import _validate_device_command, _validate_device_comm
 
 app = Flask(__name__, static_folder=".", static_url_path="")
 app.secret_key = SECRET_KEY
+
+# Default platform base for pushing model changes back to Multi-Agent-Platform
+_PLATFORM_BASE = os.getenv("MULTI_AGENT_PLATFORM_BASE", "http://web:5050").rstrip("/")
 
 _ENV_JA_KEYWORDS = [
     "周りの状況",
@@ -193,6 +197,23 @@ def session_logout():
     return jsonify({"authenticated": False})
 
 
+def _notify_platform(selection: dict) -> None:
+    """Best-effort push of the IoT model selection back to the platform."""
+
+    if not _PLATFORM_BASE or not isinstance(selection, dict):
+        return
+
+    try:
+        url = f"{_PLATFORM_BASE}/api/model_settings"
+        payload = {"selection": {"iot": selection}}
+        headers = {"X-Agent-Origin": "iot"}
+        res = requests.post(url, json=payload, headers=headers, timeout=2.0)
+        if not res.ok:
+            logger.info("Platform model sync skipped (%s %s)", res.status_code, res.text)
+    except requests.exceptions.RequestException as exc:
+        logger.info("Platform model sync skipped (%s)", exc)
+
+
 @app.post("/model_settings")
 def update_model_settings():
     """Update LLM model selection without restarting the service."""
@@ -202,6 +223,8 @@ def update_model_settings():
     selection = payload if isinstance(payload, dict) else {}
     try:
         update_override(selection if selection else None)
+        if request.headers.get("X-Platform-Propagation") != "1" and selection:
+            _notify_platform(selection)
     except Exception as exc:  # noqa: BLE001
         return jsonify({"error": f"モデル設定の更新に失敗しました: {exc}"}), 500
     return jsonify({"status": "ok", "applied": selection or "from_file"})
