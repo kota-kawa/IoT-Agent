@@ -120,14 +120,20 @@ SUPPORTED_ACTIONS: Dict[str, Dict[str, Any]] = {
             },
         ],
     },
-    "run_oled_demo": {
-        "description": "Render a simple SH1107 animation over I2C bus 7 (addr 0x3C).",
+    "show_text_on_oled": {
+        "description": "Display text on the SH1107 OLED screen.",
         "params": [
+            {
+                "name": "text",
+                "type": "string",
+                "required": True,
+                "description": "The text string to display.",
+            },
             {
                 "name": "duration",
                 "type": "number",
                 "required": False,
-                "description": "How many seconds to run the animation (default: 20).",
+                "description": "How long to keep the text displayed (default: 10).",
             }
         ],
     },
@@ -144,23 +150,6 @@ SUPPORTED_ACTIONS: Dict[str, Dict[str, Any]] = {
                 "required": False,
                 "description": "Number of seconds to watch for motion (default: 20).",
             }
-        ],
-    },
-    "play_passive_buzzer": {
-        "description": "Play a tone on the passive buzzer wired to BCM20 (physical pin 38) via PWM.",
-        "params": [
-            {
-                "name": "frequency",
-                "type": "number",
-                "required": False,
-                "description": "Tone frequency in Hz (default: 1000).",
-            },
-            {
-                "name": "duration",
-                "type": "number",
-                "required": False,
-                "description": "Duration in seconds (default: 2).",
-            },
         ],
     },
     "no_action": {
@@ -202,8 +191,8 @@ LLM_SYSTEM_PROMPT = (
     + ".\n"
     "Choose the closest matching action and include required parameters; if none apply, use 'no_action'.\n"
     "Examples:\n"
-    "Instruction: Show the OLED demo for 10 seconds.\n"
-    "{\"action\": \"run_oled_demo\", \"parameters\": {\"duration\": 10}}\n"
+    "Instruction: Show 'Hello World' on the display.\n"
+    "{\"action\": \"show_text_on_oled\", \"parameters\": {\"text\": \"Hello World\"}}\n"
     "Instruction: Measure distance with the ultrasonic sensor.\n"
     "{\"action\": \"measure_distance_cm\", \"parameters\": {}}\n"
     "Instruction: Run the motor forwards and backwards.\n"
@@ -505,7 +494,6 @@ IN4 = 22
 TRIG_PIN = 5
 ECHO_PIN = 6
 PIR_PIN = 26
-BUZZER_PIN = 20
 
 
 class _ActionContext:
@@ -610,12 +598,8 @@ I2C_BUS = 7
 I2C_ADDR = 0x3C
 OLED_WIDTH = 128
 OLED_HEIGHT = 128
-FPS = 2.0
-FRAME_INTERVAL = 1.0 / FPS
 MAX_INIT_RETRY = 3
-MAX_ERROR_STREAK_BEFORE_RESET = 5
 MAX_RECOVER_RETRY = 3
-_OLED_RESULT_RETURN_SECONDS = 3.0
 _RETURN_TEXT_LIMIT = 3000
 _RETURN_TEXT_KEEP = 1500
 
@@ -671,7 +655,7 @@ def _init_device_with_retry() -> sh1107:
     raise RuntimeError("OLED init failed")
 
 
-def _try_recover_device(device: Optional[sh1107], frame_no: int) -> Optional[sh1107]:
+def _try_recover_device(device: Optional[sh1107]) -> Optional[sh1107]:
     last_exc: Optional[BaseException] = None
     for attempt in range(1, MAX_RECOVER_RETRY + 1):
         try:
@@ -693,57 +677,41 @@ def _try_recover_device(device: Optional[sh1107], frame_no: int) -> Optional[sh1
     return None
 
 
-def _draw_frame(device: sh1107, frame_no: int) -> None:
-    bar_len = 20
-    step = 4
-    max_x = OLED_WIDTH - bar_len - 1
-    raw_pos = (frame_no * step) % (2 * max_x)
-    if raw_pos <= max_x:
-        x = raw_pos
-    else:
-        x = 2 * max_x - raw_pos
-
+def _draw_text(device: sh1107, text: str) -> None:
     with canvas(device) as draw:  # type: ignore[operator]
         draw.rectangle((0, 0, OLED_WIDTH - 1, OLED_HEIGHT - 1), outline=255, fill=0)
-        draw.rectangle((x, OLED_HEIGHT // 2 - 5, x + bar_len, OLED_HEIGHT // 2 + 5), fill=255)
-        draw.text((5, 5), f"Frame {frame_no}", fill=255)
+        draw.text((5, 5), text, fill=255)
 
 
-def _run_oled_demo(parameters: Dict[str, Any]) -> Dict[str, Any]:
+def _show_text_on_oled(parameters: Dict[str, Any]) -> Dict[str, Any]:
     _require_oled_lib()
-    duration = _coerce_positive_float(parameters, "duration", 20.0)
-    effective_duration = min(duration, _OLED_RESULT_RETURN_SECONDS)
+    text = str(parameters.get("text", "Hello World"))
+    duration = _coerce_positive_float(parameters, "duration", 10.0)
     context = _ActionContext(timeout=duration)
+
+    # Try to init device
     device = _init_device_with_retry()
-    frame = 0
-    error_streak = 0
 
     try:
-        while True:
-            remaining = context.remaining()
-            if remaining is not None and remaining <= 0:
-                context.log("Reached duration timeout")
-                break
-            try:
-                _draw_frame(device, frame)
-                context.log("Frame drawn", frame=frame)
-                error_streak = 0
-            except (OSError, DeviceNotFoundError) as exc:  # type: ignore[arg-type]
-                error_streak += 1
-                context.log("Frame failed", frame=frame, error=str(exc))
-                if error_streak >= MAX_ERROR_STREAK_BEFORE_RESET:
-                    recovered = _try_recover_device(device, frame)
-                    device = recovered if recovered is not None else device
-                    error_streak = 0
-            frame += 1
-            time.sleep(FRAME_INTERVAL)
-            if time.monotonic() - context.started >= effective_duration:
-                context.log(
-                    "Returning early after brief OLED run; leaving display on",
-                    elapsed_seconds=round(time.monotonic() - context.started, 3),
-                    max_run_seconds=effective_duration,
-                )
-                break
+        # Draw once
+        try:
+            _draw_text(device, text)
+            context.log("Text drawn", text=text)
+        except (OSError, DeviceNotFoundError) as exc:
+            context.log("First draw failed, retrying", error=str(exc))
+            recovered = _try_recover_device(device)
+            if recovered:
+                device = recovered
+                _draw_text(device, text)
+                context.log("Text drawn after recovery", text=text)
+            else:
+                raise
+
+        # Wait for duration (keeping text on screen)
+        time.sleep(duration)
+
+    except (OSError, DeviceNotFoundError) as exc:
+        context.log("OLED error", error=str(exc))
     finally:
         try:
             device.cleanup()  # type: ignore[call-arg]
@@ -751,12 +719,9 @@ def _run_oled_demo(parameters: Dict[str, Any]) -> Dict[str, Any]:
             pass
 
     return {
-        "frames": frame,
-        "duration_seconds": round(time.monotonic() - context.started, 3),
+        "text": text,
+        "duration_seconds": duration,
         "events": context.events,
-        "timed_out": context.timed_out,
-        "display_left_on": True,
-        "max_run_seconds": effective_duration,
     }
 
 
@@ -835,36 +800,6 @@ def _monitor_motion(parameters: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _play_passive_buzzer(parameters: Dict[str, Any]) -> Dict[str, Any]:
-    _require_gpio()
-    frequency = _coerce_positive_float(parameters, "frequency", 1000.0)
-    duration = _coerce_positive_float(parameters, "duration", 2.0)
-    context = _ActionContext(timeout=duration + 0.5)
-
-    GPIO.setmode(GPIO.BCM)
-    GPIO.setwarnings(False)
-    GPIO.setup(BUZZER_PIN, GPIO.OUT, initial=GPIO.LOW)
-
-    pwm = GPIO.PWM(BUZZER_PIN, frequency)
-    try:
-        pwm.start(50.0)
-        context.log("Buzzer start", frequency_hz=frequency, duty_cycle=50.0)
-        time.sleep(duration)
-        pwm.ChangeDutyCycle(0.0)
-        context.log("Buzzer stop", duration_seconds=duration)
-    finally:
-        try:
-            pwm.stop()
-        except Exception:
-            pass
-        GPIO.cleanup([BUZZER_PIN])
-
-    return {
-        "frequency_hz": frequency,
-        "duration_seconds": duration,
-        "events": context.events,
-        "timed_out": context.timed_out,
-    }
 
 
 # ==== LLM interaction =====================================================
@@ -894,13 +829,11 @@ def _keyword_plan(instruction: str) -> Dict[str, Any]:
     if "motor" in lowered or "l293" in lowered:
         return {"action": "run_motor_test", "parameters": {}}
     if "oled" in lowered or "display" in lowered:
-        return {"action": "run_oled_demo", "parameters": {}}
+        return {"action": "show_text_on_oled", "parameters": {"text": "Hello (Keyword)"}}
     if "distance" in lowered or "ultrasonic" in lowered or "sr04" in lowered:
         return {"action": "measure_distance_cm", "parameters": {}}
     if "motion" in lowered or "pir" in lowered or "sr501" in lowered:
         return {"action": "monitor_motion", "parameters": {}}
-    if "buzzer" in lowered or "beep" in lowered or "alarm" in lowered:
-        return {"action": "play_passive_buzzer", "parameters": {}}
     return {"action": "no_action", "parameters": {}, "message": "No relevant action found."}
 
 
@@ -985,14 +918,12 @@ def _execute_action(action: str, parameters: Dict[str, Any]) -> Tuple[bool, Any,
             return True, {"current_time": now.isoformat()}, None
         if action == "run_motor_test":
             return True, _run_motor_test(parameters or {}), None
-        if action == "run_oled_demo":
-            return True, _run_oled_demo(parameters or {}), None
+        if action == "show_text_on_oled":
+            return True, _show_text_on_oled(parameters or {}), None
         if action == "measure_distance_cm":
             return True, _measure_distance(parameters or {}), None
         if action == "monitor_motion":
             return True, _monitor_motion(parameters or {}), None
-        if action == "play_passive_buzzer":
-            return True, _play_passive_buzzer(parameters or {}), None
         if action == "no_action":
             message = parameters.get("message") if isinstance(parameters, dict) else None
             return True, {"message": message or "No action executed."}, None
