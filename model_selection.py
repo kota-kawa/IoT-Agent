@@ -133,8 +133,7 @@ def _resolve_api_key(meta: Dict[str, str | List[str] | None]) -> str:
         if value:
             return value
 
-    fallback = os.getenv("OPENAI_API_KEY")
-    return fallback or ""
+    return ""
 
 
 def _resolve_base_url(meta: Dict[str, str | List[str] | None]) -> str | None:
