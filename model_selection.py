@@ -58,7 +58,7 @@ PROVIDER_DEFAULTS: Dict[str, Dict[str, str | List[str] | None]] = {
         "base_url_env_aliases": [],
         # Google の OpenAI 互換エンドポイント（Multi-Agent-Platform と共通）
         # 公式ドキュメント: https://generativelanguage.googleapis.com/v1beta/openai/
-        "default_base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+        "default_base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
     },
     "groq": {
         "api_key_env": "GROQ_API_KEY",
@@ -70,10 +70,10 @@ PROVIDER_DEFAULTS: Dict[str, Dict[str, str | List[str] | None]] = {
 }
 VISION_SUPPORTED_PROVIDERS = {"openai", "claude", "gemini"}
 
-_OVERRIDE_SELECTION: Dict[str, str] | None = None
+_OVERRIDE_SELECTION: Dict[str, str | None] | None = None
 
 
-def _coerce_selection(raw: Dict[str, str] | None) -> Dict[str, str]:
+def _coerce_selection(raw: Dict[str, str] | None) -> Dict[str, str | None]:
     """Normalise provider/model/base_url fields and fall back to defaults."""
 
     provider = DEFAULT_SELECTION["provider"]
@@ -91,10 +91,10 @@ def _coerce_selection(raw: Dict[str, str] | None) -> Dict[str, str]:
         if isinstance(raw_base_url, str) and raw_base_url.strip():
             base_url = raw_base_url.strip()
 
-    return {"provider": provider, "model": model, "base_url": base_url or ""}
+    return {"provider": provider, "model": model, "base_url": base_url}
 
 
-def _load_selection(agent_key: str) -> Dict[str, str]:
+def _load_selection(agent_key: str) -> Dict[str, str | None]:
     env_path = os.getenv("MULTI_AGENT_SETTINGS_PATH")
     if env_path:
         platform_path = Path(env_path)
@@ -137,6 +137,48 @@ def _resolve_api_key(meta: Dict[str, str | List[str] | None]) -> str:
     return ""
 
 
+def _normalise_base_url(provider: str, base_url: str | None, meta: Dict[str, str | List[str] | None]) -> str | None:
+    """Clamp base_url to the expected host/path for each provider to avoid stale values."""
+
+    default_base = meta.get("default_base_url")
+    if not isinstance(default_base, str):
+        default_base = None
+
+    cleaned = (base_url or "").strip()
+    if provider == "gemini":
+        target = cleaned or default_base or ""
+        if not target:
+            return None
+        lower = target.lower()
+        if "generativelanguage.googleapis.com" in lower and "/openai" not in lower:
+            target = target.rstrip("/") + "/openai"
+        elif "groq" in lower and default_base:
+            # Selection leaked from another provider; snap back to Gemini default
+            target = default_base
+        return target.rstrip("/")
+
+    if provider == "groq":
+        target = cleaned or default_base or ""
+        if target and "groq" not in target.lower():
+            target = default_base or target
+        return target.rstrip("/") if target else None
+
+    if provider == "openai":
+        if not cleaned:
+            return default_base
+        lowered = cleaned.lower()
+        if any(key in lowered for key in ("openai", ".azure.com", "localhost", "127.0.0.1")):
+            return cleaned.rstrip("/")
+        if any(key in lowered for key in ("groq", "generativelanguage.googleapis.com")):
+            # Drop stale base URLs pointing to other providers to avoid auth mismatch
+            return default_base
+        return cleaned.rstrip("/")
+
+    # Claude and other providers keep the explicit override or default as-is
+    target = cleaned or default_base or ""
+    return target.rstrip("/") if target else None
+
+
 def _resolve_base_url(meta: Dict[str, str | List[str] | None]) -> str | None:
     """Resolve base URL override for non-OpenAI providers. Returns None if using default."""
 
@@ -170,8 +212,9 @@ def apply_model_selection(agent_key: str = "iot", override: Dict[str, str] | Non
     model = selection["model"]
 
     meta = PROVIDER_DEFAULTS.get(provider, PROVIDER_DEFAULTS["openai"])
+    base_candidate = selection.get("base_url") or _resolve_base_url(meta)
+    base_url = _normalise_base_url(provider, base_candidate, meta)
     api_key = _resolve_api_key(meta)
-    base_url = selection.get("base_url") or _resolve_base_url(meta)
 
     # Note: We do NOT modify os.environ here to avoid polluting the global state
     # or overwriting the user's original OPENAI_API_KEY.
