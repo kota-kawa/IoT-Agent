@@ -86,6 +86,9 @@ class UnifiedClient:
             client_kwargs: Dict[str, Any] = {"api_key": self.api_key}
             if self.base_url:
                 client_kwargs["base_url"] = self.base_url
+            if self.provider == "gemini":
+                # Google の OpenAI 互換APIは API key をヘッダーでも受け付ける
+                client_kwargs["default_headers"] = {"x-goog-api-key": self.api_key}
             self.client = OpenAI(**client_kwargs)
 
         self.chat = self

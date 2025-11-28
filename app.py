@@ -262,12 +262,13 @@ def update_model_settings():
     selection = raw_selection.get("iot") if isinstance(raw_selection, dict) and "iot" in raw_selection else raw_selection
     selection = selection if isinstance(selection, dict) else {}
     try:
-        update_override(selection if selection else None)
+        provider, model, base_url, _ = update_override(selection if selection else None)
+        applied_selection = {"provider": provider, "model": model, "base_url": base_url or ""}
         if request.headers.get("X-Platform-Propagation") != "1" and selection:
-            _notify_platform(selection)
+            _notify_platform(applied_selection)
     except Exception as exc:  # noqa: BLE001
         return jsonify({"error": f"モデル設定の更新に失敗しました: {exc}"}), 500
-    return jsonify({"status": "ok", "applied": selection or "from_file"})
+    return jsonify({"status": "ok", "applied": applied_selection if selection else "from_file"})
 
 
 @app.get("/api/models")
