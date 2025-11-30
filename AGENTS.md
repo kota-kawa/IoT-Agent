@@ -34,3 +34,6 @@
 - Update `APP_PASSWORD` and other secrets before deploying; store overrides in `secrets.env` or platform secret managers.
 - Rotate OpenAI credentials regularly and document fallbacks in `app.py` when adding new providers.
 - Validate device capability schemas via `_normalise_capabilities` before exposing new agent actions.
+
+## Critical Instruction / 重要指示
+どれだけ時間とコストをかけてもよいので、確実に目標が達成されるようにしてほしい。
