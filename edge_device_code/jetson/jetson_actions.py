@@ -14,12 +14,12 @@ try:
     from luma.core.error import DeviceNotFoundError
     from luma.core.interface.serial import i2c
     from luma.core.render import canvas
-    from luma.oled.device import sh1107
+    from luma.oled.device import ssd1306
 except ImportError:  # pragma: no cover - Jetson-only dependency
     DeviceNotFoundError = None  # type: ignore
     i2c = None  # type: ignore
     canvas = None  # type: ignore
-    sh1107 = None  # type: ignore
+    ssd1306 = None  # type: ignore
 
 IN1 = 24
 IN2 = 23
@@ -32,7 +32,7 @@ PIR_PIN = 26
 I2C_BUS = 7
 I2C_ADDR = 0x3C
 OLED_WIDTH = 128
-OLED_HEIGHT = 128
+OLED_HEIGHT = 64
 MAX_INIT_RETRY = 3
 MAX_RECOVER_RETRY = 3
 
@@ -138,7 +138,7 @@ def _run_motor_test(parameters: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _require_oled_lib() -> None:
-    if any(value is None for value in (i2c, canvas, sh1107)):
+    if any(value is None for value in (i2c, canvas, ssd1306)):
         raise RuntimeError("luma.oled is not available on this system.")
 
 
@@ -153,10 +153,10 @@ def _create_serial() -> i2c:
     return i2c(**kwargs)  # type: ignore[operator]
 
 
-def _init_device_once() -> sh1107:
+def _init_device_once() -> ssd1306:
     serial = _create_serial()
-    # Use rotate=1 for horizontal orientation
-    dev = sh1107(serial, width=OLED_WIDTH, height=OLED_HEIGHT, rotate=1)  # type: ignore[operator]
+    # Default rotation for SSD1306 is usually correct (landscape)
+    dev = ssd1306(serial, width=OLED_WIDTH, height=OLED_HEIGHT)  # type: ignore[operator]
 
     def _noop_cleanup(self) -> None:  # type: ignore[override]
         return
@@ -165,7 +165,7 @@ def _init_device_once() -> sh1107:
     return dev
 
 
-def _init_device_with_retry() -> sh1107:
+def _init_device_with_retry() -> ssd1306:
     last_exc: Optional[BaseException] = None
     for attempt in range(1, MAX_INIT_RETRY + 1):
         try:
@@ -189,7 +189,7 @@ def _init_device_with_retry() -> sh1107:
     raise RuntimeError("OLED init failed")
 
 
-def _get_oled_device() -> sh1107:
+def _get_oled_device() -> ssd1306:
     global _oled_device
     if _oled_device is None:
         _oled_device = _init_device_with_retry()
@@ -201,7 +201,7 @@ def _invalidate_oled_device() -> None:
     _oled_device = None
 
 
-def _try_recover_device(device: Optional[sh1107]) -> Optional[sh1107]:
+def _try_recover_device(device: Optional[ssd1306]) -> Optional[ssd1306]:
     _invalidate_oled_device()
     last_exc: Optional[BaseException] = None
     for attempt in range(1, MAX_RECOVER_RETRY + 1):
@@ -226,7 +226,7 @@ def _try_recover_device(device: Optional[sh1107]) -> Optional[sh1107]:
     return None
 
 
-def _draw_text(device: sh1107, text: str) -> None:
+def _draw_text(device: ssd1306, text: str) -> None:
     with canvas(device) as draw:  # type: ignore[operator]
         # Clear with black
         draw.rectangle(device.bounding_box, outline="white", fill="black")
