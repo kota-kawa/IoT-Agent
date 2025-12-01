@@ -1,0 +1,160 @@
+1:
+=== Jetson LLM GPU vs CPU Benchmark ===
+
+--- Running CPU Test ---
+2025-12-01 16:43:45,721 - INFO - Initializing model for CPU (gpu_layers=0)...
+llama_context: n_batch is less than GGML_KQ_MASK_PAD - increasing to 64
+llama_context: n_ctx_per_seq (1024) < n_ctx_train (32768) -- the full capacity of the model will not be utilized
+2025-12-01 16:43:46,734 - INFO - Model loaded in 1.01 seconds.
+2025-12-01 16:43:46,734 - INFO - Generating response for prompt: 'User: Hello, tell me a short joke.
+Assistant:'
+2025-12-01 16:43:49,258 - INFO - [CPU] Response: Why don't we eat apples with the letters 'e' and 'e' on them?
+2025-12-01 16:43:49,258 - INFO - [CPU] Time: 2.5230s, Tokens: 19, Speed: 7.53 t/s
+
+--- Running GPU Test ---
+2025-12-01 16:43:49,432 - INFO - Initializing model for GPU (gpu_layers=-1)...
+llama_context: n_batch is less than GGML_KQ_MASK_PAD - increasing to 64
+llama_context: n_ctx_per_seq (1024) < n_ctx_train (32768) -- the full capacity of the model will not be utilized
+2025-12-01 16:43:50,693 - INFO - Model loaded in 1.26 seconds.
+2025-12-01 16:43:50,693 - INFO - Generating response for prompt: 'User: Hello, tell me a short joke.
+Assistant:'
+2025-12-01 16:43:51,724 - INFO - [GPU] Response: Of course! Why don't skeletons go to school? Because they always have too many books.
+2025-12-01 16:43:51,725 - INFO - [GPU] Time: 1.0313s, Tokens: 19, Speed: 18.42 t/s
+
+=== Results Summary ===
+CPU Speed: 7.53 tokens/sec
+GPU Speed: 18.42 tokens/sec
+
+Speedup: 2.45x
+
+
+
+2:
+=== Jetson LLM GPU vs CPU Benchmark ===
+
+--- Running CPU Test ---
+2025-12-01 16:45:04,168 - INFO - Initializing model for CPU (gpu_layers=0)...
+llama_context: n_batch is less than GGML_KQ_MASK_PAD - increasing to 64
+llama_context: n_ctx_per_seq (1024) < n_ctx_train (32768) -- the full capacity of the model will not be utilized
+2025-12-01 16:45:05,219 - INFO - Model loaded in 1.05 seconds.
+2025-12-01 16:45:05,219 - INFO - Generating response for prompt: 'User: Hello, tell me a short joke.
+Assistant:'
+2025-12-01 16:45:08,124 - INFO - [CPU] Response: Why don't we eat apples with the letters 'e' and 'e' on them?
+2025-12-01 16:45:08,124 - INFO - [CPU] Time: 2.9046s, Tokens: 19, Speed: 6.54 t/s
+
+--- Running GPU Test ---
+2025-12-01 16:45:08,301 - INFO - Initializing model for GPU (gpu_layers=-1)...
+llama_context: n_batch is less than GGML_KQ_MASK_PAD - increasing to 64
+llama_context: n_ctx_per_seq (1024) < n_ctx_train (32768) -- the full capacity of the model will not be utilized
+2025-12-01 16:45:09,750 - INFO - Model loaded in 1.45 seconds.
+2025-12-01 16:45:09,750 - INFO - Generating response for prompt: 'User: Hello, tell me a short joke.
+Assistant:'
+2025-12-01 16:45:10,850 - INFO - [GPU] Response: Of course! Why don't skeletons go to school? Because they always have too many books.
+2025-12-01 16:45:10,850 - INFO - [GPU] Time: 1.0991s, Tokens: 19, Speed: 17.29 t/s
+
+=== Results Summary ===
+CPU Speed: 6.54 tokens/sec
+GPU Speed: 17.29 tokens/sec
+
+Speedup: 2.64x
+
+
+
+
+
+3:
+=== Jetson LLM GPU vs CPU Benchmark ===
+
+--- Running CPU Test ---
+2025-12-01 16:45:22,837 - INFO - Initializing model for CPU (gpu_layers=0)...
+llama_context: n_batch is less than GGML_KQ_MASK_PAD - increasing to 64
+llama_context: n_ctx_per_seq (1024) < n_ctx_train (32768) -- the full capacity of the model will not be utilized
+2025-12-01 16:45:23,872 - INFO - Model loaded in 1.03 seconds.
+2025-12-01 16:45:23,872 - INFO - Generating response for prompt: 'User: Hello, tell me a short joke.
+Assistant:'
+2025-12-01 16:45:26,804 - INFO - [CPU] Response: Why don't we eat apples with the letters 'e' and 'e' on them?
+2025-12-01 16:45:26,804 - INFO - [CPU] Time: 2.9319s, Tokens: 19, Speed: 6.48 t/s
+
+--- Running GPU Test ---
+2025-12-01 16:45:26,979 - INFO - Initializing model for GPU (gpu_layers=-1)...
+llama_context: n_batch is less than GGML_KQ_MASK_PAD - increasing to 64
+llama_context: n_ctx_per_seq (1024) < n_ctx_train (32768) -- the full capacity of the model will not be utilized
+2025-12-01 16:45:28,255 - INFO - Model loaded in 1.28 seconds.
+2025-12-01 16:45:28,256 - INFO - Generating response for prompt: 'User: Hello, tell me a short joke.
+Assistant:'
+2025-12-01 16:45:29,338 - INFO - [GPU] Response: Of course! Why don't skeletons go to school? Because they always have too many books.
+2025-12-01 16:45:29,338 - INFO - [GPU] Time: 1.0819s, Tokens: 19, Speed: 17.56 t/s
+
+=== Results Summary ===
+CPU Speed: 6.48 tokens/sec
+GPU Speed: 17.56 tokens/sec
+
+Speedup: 2.71x
+
+
+
+
+
+
+
+4:
+=== Jetson LLM GPU vs CPU Benchmark ===
+
+--- Running CPU Test ---
+2025-12-01 16:45:41,361 - INFO - Initializing model for CPU (gpu_layers=0)...
+llama_context: n_batch is less than GGML_KQ_MASK_PAD - increasing to 64
+llama_context: n_ctx_per_seq (1024) < n_ctx_train (32768) -- the full capacity of the model will not be utilized
+2025-12-01 16:45:42,426 - INFO - Model loaded in 1.06 seconds.
+2025-12-01 16:45:42,426 - INFO - Generating response for prompt: 'User: Hello, tell me a short joke.
+Assistant:'
+2025-12-01 16:45:45,391 - INFO - [CPU] Response: Why don't we eat apples with the letters 'e' and 'e' on them?
+2025-12-01 16:45:45,392 - INFO - [CPU] Time: 2.9646s, Tokens: 19, Speed: 6.41 t/s
+
+--- Running GPU Test ---
+2025-12-01 16:45:45,565 - INFO - Initializing model for GPU (gpu_layers=-1)...
+llama_context: n_batch is less than GGML_KQ_MASK_PAD - increasing to 64
+llama_context: n_ctx_per_seq (1024) < n_ctx_train (32768) -- the full capacity of the model will not be utilized
+2025-12-01 16:45:46,788 - INFO - Model loaded in 1.22 seconds.
+2025-12-01 16:45:46,789 - INFO - Generating response for prompt: 'User: Hello, tell me a short joke.
+Assistant:'
+2025-12-01 16:45:48,000 - INFO - [GPU] Response: Of course! Why don't skeletons go to school? Because they always have too many books.
+2025-12-01 16:45:48,001 - INFO - [GPU] Time: 1.2116s, Tokens: 19, Speed: 15.68 t/s
+
+=== Results Summary ===
+CPU Speed: 6.41 tokens/sec
+GPU Speed: 15.68 tokens/sec
+
+Speedup: 2.45x
+
+
+
+
+
+5:
+=== Jetson LLM GPU vs CPU Benchmark ===
+
+--- Running CPU Test ---
+2025-12-01 16:45:56,408 - INFO - Initializing model for CPU (gpu_layers=0)...
+llama_context: n_batch is less than GGML_KQ_MASK_PAD - increasing to 64
+llama_context: n_ctx_per_seq (1024) < n_ctx_train (32768) -- the full capacity of the model will not be utilized
+2025-12-01 16:45:57,486 - INFO - Model loaded in 1.08 seconds.
+2025-12-01 16:45:57,487 - INFO - Generating response for prompt: 'User: Hello, tell me a short joke.
+Assistant:'
+2025-12-01 16:46:00,065 - INFO - [CPU] Response: Why don't we eat apples with the letters 'e' and 'e' on them?
+2025-12-01 16:46:00,065 - INFO - [CPU] Time: 2.5776s, Tokens: 19, Speed: 7.37 t/s
+
+--- Running GPU Test ---
+2025-12-01 16:46:00,250 - INFO - Initializing model for GPU (gpu_layers=-1)...
+llama_context: n_batch is less than GGML_KQ_MASK_PAD - increasing to 64
+llama_context: n_ctx_per_seq (1024) < n_ctx_train (32768) -- the full capacity of the model will not be utilized
+2025-12-01 16:46:01,512 - INFO - Model loaded in 1.26 seconds.
+2025-12-01 16:46:01,512 - INFO - Generating response for prompt: 'User: Hello, tell me a short joke.
+Assistant:'
+2025-12-01 16:46:02,545 - INFO - [GPU] Response: Of course! Why don't skeletons go to school? Because they always have too many books.
+2025-12-01 16:46:02,545 - INFO - [GPU] Time: 1.0325s, Tokens: 19, Speed: 18.40 t/s
+
+=== Results Summary ===
+CPU Speed: 7.37 tokens/sec
+GPU Speed: 18.40 tokens/sec
+
+Speedup: 2.50x

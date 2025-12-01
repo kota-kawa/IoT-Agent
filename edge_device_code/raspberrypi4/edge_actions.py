@@ -870,8 +870,10 @@ class _MonoEyeDisplayManager:
                 time.sleep(0.05)
             except Exception as exc:
                 self.last_error = str(exc)
-                logging.warning("OLED backlight warm-up failed: %s", exc)
-                return
+                logging.warning("OLED backlight warm-up error (continuing): %s", exc)
+                # Continue despite error during warmup
+
+        logging.info("OLED mono-eye loop started.")
 
         while not self.stop_event.is_set():
             try:
@@ -899,8 +901,9 @@ class _MonoEyeDisplayManager:
                 time.sleep(frame_delay)
             except Exception as exc:
                 self.last_error = str(exc)
-                logging.warning("OLED mono-eye loop stopped: %s", exc)
-                return
+                # Log error but do not stop the loop
+                logging.error("OLED mono-eye loop error (retrying in 1s): %s", exc)
+                time.sleep(1.0)
 
 
 _mono_eye_display_manager: Optional[_MonoEyeDisplayManager] = None

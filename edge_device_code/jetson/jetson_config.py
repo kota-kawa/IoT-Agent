@@ -78,6 +78,23 @@ SUPPORTED_ACTIONS: Dict[str, Dict[str, Any]] = {
             },
         ],
     },
+    "control_motor": {
+        "description": "Control the robot motors to move in a specific direction for a set duration.",
+        "params": [
+            {
+                "name": "direction",
+                "type": "string",
+                "required": True,
+                "description": "Movement direction: 'forward', 'backward', 'left', 'right'.",
+            },
+            {
+                "name": "duration",
+                "type": "number",
+                "required": False,
+                "description": "Duration in seconds (default: 1.0).",
+            },
+        ],
+    },
     "show_text_on_oled": {
         "description": "Display text on the SH1107 OLED screen.",
         "params": [
@@ -155,6 +172,8 @@ LLM_SYSTEM_PROMPT = (
     "{\"action\": \"measure_distance_cm\", \"parameters\": {}}\n"
     "Instruction: Run the motor forwards and backwards.\n"
     "{\"action\": \"run_motor_test\", \"parameters\": {}}\n"
+    "Instruction: Turn right for 1 second.\n"
+    "{\"action\": \"control_motor\", \"parameters\": {\"direction\": \"right\", \"duration\": 1.0}}\n"
     "Instruction: Thanks!\n"
     "{\"action\": \"no_action\", \"parameters\": {}, \"message\": \"No task requested.\"}\n"
     "Any response that is not valid JSON will be rejected and retried automatically."

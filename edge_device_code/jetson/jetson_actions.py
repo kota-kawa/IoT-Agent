@@ -137,6 +137,64 @@ def _run_motor_test(parameters: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _control_motor(parameters: Dict[str, Any]) -> Dict[str, Any]:
+    _require_gpio()
+    direction = str(parameters.get("direction", "forward")).lower()
+    duration = _coerce_positive_float(parameters, "duration", 1.0)
+    context = _ActionContext(timeout=duration)
+
+    GPIO.setmode(GPIO.BCM)
+    GPIO.setwarnings(False)
+    for pin in (IN1, IN2, IN3, IN4):
+        GPIO.setup(pin, GPIO.OUT, initial=GPIO.LOW)
+
+    try:
+        context.log("Motor action start", direction=direction, duration=duration)
+        
+        if direction == "forward":
+            # Left Fwd, Right Fwd
+            GPIO.output(IN1, GPIO.HIGH)
+            GPIO.output(IN2, GPIO.LOW)
+            GPIO.output(IN3, GPIO.HIGH)
+            GPIO.output(IN4, GPIO.LOW)
+        elif direction == "backward":
+            # Left Rev, Right Rev
+            GPIO.output(IN1, GPIO.LOW)
+            GPIO.output(IN2, GPIO.HIGH)
+            GPIO.output(IN3, GPIO.LOW)
+            GPIO.output(IN4, GPIO.HIGH)
+        elif direction == "left":
+            # Spin Left: Left Rev, Right Fwd
+            GPIO.output(IN1, GPIO.LOW)
+            GPIO.output(IN2, GPIO.HIGH)
+            GPIO.output(IN3, GPIO.HIGH)
+            GPIO.output(IN4, GPIO.LOW)
+        elif direction == "right":
+            # Spin Right: Left Fwd, Right Rev
+            GPIO.output(IN1, GPIO.HIGH)
+            GPIO.output(IN2, GPIO.LOW)
+            GPIO.output(IN3, GPIO.LOW)
+            GPIO.output(IN4, GPIO.HIGH)
+        else:
+            context.log("Unknown direction, defaulting to stop", direction=direction)
+
+        time.sleep(duration)
+
+        context.log("Motor stop")
+        GPIO.output(IN1, GPIO.LOW)
+        GPIO.output(IN2, GPIO.LOW)
+        GPIO.output(IN3, GPIO.LOW)
+        GPIO.output(IN4, GPIO.LOW)
+    finally:
+        GPIO.cleanup()
+
+    return {
+        "direction": direction,
+        "duration_seconds": duration,
+        "events": context.events,
+    }
+
+
 def _require_oled_lib() -> None:
     if any(value is None for value in (i2c, canvas, sh1107)):
         raise RuntimeError("luma.oled is not available on this system.")
@@ -382,6 +440,8 @@ def _execute_action(action: str, parameters: Dict[str, Any]) -> Tuple[bool, Any,
             return True, {"current_time": now.isoformat()}, None
         if action == "run_motor_test":
             return True, _run_motor_test(parameters or {}), None
+        if action == "control_motor":
+            return True, _control_motor(parameters or {}), None
         if action == "show_text_on_oled":
             return True, _show_text_on_oled(parameters or {}), None
         if action == "measure_distance_cm":
