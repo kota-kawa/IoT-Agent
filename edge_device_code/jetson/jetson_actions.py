@@ -36,6 +36,8 @@ OLED_HEIGHT = 128
 MAX_INIT_RETRY = 3
 MAX_RECOVER_RETRY = 3
 
+_oled_device: Optional[Any] = None
+
 
 class _ActionContext:
     def __init__(self, timeout: Optional[float] = None):
@@ -153,7 +155,8 @@ def _create_serial() -> i2c:
 
 def _init_device_once() -> sh1107:
     serial = _create_serial()
-    dev = sh1107(serial, width=OLED_WIDTH, height=OLED_HEIGHT)  # type: ignore[operator]
+    # Use rotate=1 for horizontal orientation
+    dev = sh1107(serial, width=OLED_WIDTH, height=OLED_HEIGHT, rotate=1)  # type: ignore[operator]
 
     def _noop_cleanup(self) -> None:  # type: ignore[override]
         return
@@ -186,16 +189,31 @@ def _init_device_with_retry() -> sh1107:
     raise RuntimeError("OLED init failed")
 
 
+def _get_oled_device() -> sh1107:
+    global _oled_device
+    if _oled_device is None:
+        _oled_device = _init_device_with_retry()
+    return _oled_device  # type: ignore
+
+
+def _invalidate_oled_device() -> None:
+    global _oled_device
+    _oled_device = None
+
+
 def _try_recover_device(device: Optional[sh1107]) -> Optional[sh1107]:
+    _invalidate_oled_device()
     last_exc: Optional[BaseException] = None
     for attempt in range(1, MAX_RECOVER_RETRY + 1):
         try:
             if device is not None:
                 try:
-                    device.cleanup()  # type: ignore[call-arg]
+                    # Even though we have noop_cleanup, we might want to try to release resources if possible,
+                    # but since we are re-initializing, we just rely on the new init.
+                    pass
                 except Exception:
                     pass
-            dev = _init_device_once()
+            dev = _get_oled_device()
             return dev
         except (OSError, DeviceNotFoundError) as exc:  # type: ignore[arg-type]
             last_exc = exc
@@ -210,8 +228,9 @@ def _try_recover_device(device: Optional[sh1107]) -> Optional[sh1107]:
 
 def _draw_text(device: sh1107, text: str) -> None:
     with canvas(device) as draw:  # type: ignore[operator]
-        draw.rectangle((0, 0, OLED_WIDTH - 1, OLED_HEIGHT - 1), outline=255, fill=0)
-        draw.text((5, 5), text, fill=255)
+        # Clear with black
+        draw.rectangle(device.bounding_box, outline="white", fill="black")
+        draw.text((5, 5), text, fill="white")
 
 
 def _show_text_on_oled(parameters: Dict[str, Any]) -> Dict[str, Any]:
@@ -220,7 +239,16 @@ def _show_text_on_oled(parameters: Dict[str, Any]) -> Dict[str, Any]:
     duration = _coerce_positive_float(parameters, "duration", 10.0)
     context = _ActionContext(timeout=duration)
 
-    device = _init_device_with_retry()
+    try:
+        device = _get_oled_device()
+    except Exception as exc:
+        context.log("OLED init failed", error=str(exc))
+        return {
+            "text": text,
+            "duration_seconds": duration,
+            "events": context.events,
+            "error": str(exc),
+        }
 
     try:
         try:
@@ -237,15 +265,16 @@ def _show_text_on_oled(parameters: Dict[str, Any]) -> Dict[str, Any]:
                 raise
 
         time.sleep(duration)
-
-    except (OSError, DeviceNotFoundError) as exc:
-        context.log("OLED error", error=str(exc))
-    finally:
+        # Clear the screen after duration instead of cleaning up
         try:
-            device.cleanup()  # type: ignore[call-arg]
+            device.clear()
         except Exception:
             pass
 
+    except (OSError, DeviceNotFoundError) as exc:
+        context.log("OLED error", error=str(exc))
+        _invalidate_oled_device()
+    
     return {
         "text": text,
         "duration_seconds": duration,
