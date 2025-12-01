@@ -9,7 +9,7 @@ LLAMA_THREADS = int(os.getenv("LLAMA_THREADS", "4"))
 LLAMA_CONTEXT = int(os.getenv("LLAMA_CONTEXT", "1024"))
 LLAMA_BATCH = int(os.getenv("LLAMA_BATCH", "32"))
 # GPU推論を使用する場合 (CPUを使用する場合はコメントアウトしてください)
-LLAMA_GPU_LAYERS = int(os.getenv("LLAMA_GPU_LAYERS", "16"))
+LLAMA_GPU_LAYERS = int(os.getenv("LLAMA_GPU_LAYERS", "-1"))
 
 # CPU推論を使用する場合 (有効にするにはコメントアウトを外してください)
 # LLAMA_GPU_LAYERS = 0
