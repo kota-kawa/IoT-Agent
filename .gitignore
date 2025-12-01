@@ -1,20 +1,78 @@
-# バイナリファイルを無視
-*.env
-*.ini
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
 
+# --- Virtual Environments ---
+venv/
+.venv/
+env/
+.env/
+ENV/
+env.bak/
+venv.bak/
+
+# --- Flask ---
+instance/
+.webassets-cache
+
+# --- Environment Variables & Secrets ---
+.env
+*.env
+env.txt
+secrets.env
+secrets.py
+
+# --- OS Files ---
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# --- IDEs & Editors ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# --- Docker ---
+.docker/
+
+# --- Logs ---
+*.log
+
+# --- Project Specific / Legacy ---
+# From previous gitignore
 *.sock
 *.exe
 *.dll
-*.json
-!pico_capabilities.json
-*.Identifier
-# ログファイルを無視
-
 *.zip
 *.pptx
 
-
-# 仮想環境ディレクトリを無視
-venv/
-.venv/__pycache__/
-*.pyc
+# JSON files (Excluding specific config files)
+*.json
+!pico_capabilities.json
+*.Identifier
