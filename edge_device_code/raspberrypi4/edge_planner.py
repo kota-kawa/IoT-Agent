@@ -25,8 +25,6 @@ LLM_SYSTEM_PROMPT = (
     "Examples:\n"
     "Instruction: Let's play rock paper scissors, I choose rock.\n"
     "{\"action\": \"play_rock_paper_scissors\", \"parameters\": {\"player_move\": \"rock\"}}\n"
-    "Instruction: What's the weather in Tokyo in metric units?\n"
-    "{\"action\": \"get_weather\", \"parameters\": {\"location\": \"Tokyo\", \"units\": \"metric\"}}\n"
     "Instruction: What time is it right now?\n"
     "{\"action\": \"get_current_time\", \"parameters\": {}}\n"
     "Instruction: Make the buzzer play a short melody.\n"
@@ -61,29 +59,6 @@ def _infer_units_from_instruction(instruction: str) -> Optional[str]:
         return "metric"
     if "kelvin" in text or "standard" in text:
         return "standard"
-    return None
-
-
-def _extract_weather_location(instruction: str) -> Optional[str]:
-    patterns = [
-        r"\bweather\s+(?:in|for)\s+([A-Za-z0-9 ,'-]+)",
-        r"\btemperature\s+(?:in|for)\s+([A-Za-z0-9 ,'-]+)",
-        r"([A-Za-z0-9 ,'-]+)\s+weather",
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, instruction, re.IGNORECASE)
-        if match:
-            candidate = match.group(1).strip()
-            candidate = re.split(r"[\.?!,]", candidate)[0].strip()
-            if candidate:
-                return candidate
-
-    jp_match = re.search(r"([\w\u3040-\u30ff\u4e00-\u9faf\s]+?)の天気", instruction)
-    if jp_match:
-        candidate = jp_match.group(1).strip()
-        if candidate:
-            return candidate
-
     return None
 
 
@@ -315,17 +290,6 @@ def _heuristic_multi_plan(instruction: str) -> List[Dict[str, Any]]:
         for keyword in ["what time", "current time", "time is it", "clock", "時刻", "今何時"]
     ):
         _add("get_current_time", {})
-
-    if "weather" in lowered or "temperature" in lowered or "forecast" in lowered or "天気" in text:
-        location = _extract_weather_location(instruction)
-        if not location and config.LOCATION and config.LOCATION.lower() != "lab":
-            location = config.LOCATION
-        if location:
-            params: Dict[str, Any] = {"location": location}
-            units = _infer_units_from_instruction(instruction)
-            if units:
-                params["units"] = units
-            _add("get_weather", params)
 
     if any(
         keyword in lowered
