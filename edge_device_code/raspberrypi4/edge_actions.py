@@ -1,15 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Raspberry Pi 4 edge agent for the IoT server.
-
-This script connects to the Flask server, receives natural-language
-instructions that were simplified by GPT-4.1, converts them into
-structured JSON with a local TinyLlama model, executes supported tasks on
-the Pi, and reports the results back to the server.
-
-The implementation avoids hardware-specific features so that it runs on a
-plain Raspberry Pi 4 without additional peripherals.
-"""
+"""Action definitions and implementations for the Raspberry Pi edge agent."""
 
 import argparse
 import base64
@@ -20,111 +11,15 @@ import os
 import random
 import re
 import shlex
-import sys
 import threading
 import time
-import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-# HTTP 通信とローカル推論エンジンを扱う外部ライブラリを読み込む
 import requests
-from dotenv import load_dotenv
-from llama_cpp import Llama
 
-# Load environment variables from potential secrets.env locations before reading them.
-# secrets.env ファイルを探索する候補パス（レガシー .env もフォールバック）
-_ENV_CANDIDATES = [
-    Path(__file__).resolve().parent / "secrets.env",
-    Path(__file__).resolve().parent.parent / "secrets.env",
-    Path.cwd() / "secrets.env",
-    Path(__file__).resolve().parent / ".env",
-    Path(__file__).resolve().parent.parent / ".env",
-    Path.cwd() / ".env",
-]
-for _env_file in _ENV_CANDIDATES:
-    # 各パスに secrets.env/.env があれば読み込んで環境変数を補完
-    if _env_file.exists():
-        load_dotenv(_env_file, override=False)
-# Also respect any other default .env resolution from python-dotenv.
-load_dotenv(override=False)
-
-# ==== Configuration ========================================================
-
-# TinyLlama などローカル LLM の推論設定
-MODEL_PATH = os.getenv("LLAMA_MODEL_PATH", "Llama-3.2-3B-Instruct-Q3_K_M.gguf")
-LLAMA_THREADS = int(os.getenv("LLAMA_THREADS", "4"))
-LLAMA_CONTEXT = int(os.getenv("LLAMA_CONTEXT", "1024"))
-LLAMA_TEMPERATURE = float(os.getenv("LLAMA_TEMPERATURE", "0.2"))
-
-# NOTE: The IoT server is deployed remotely, so we default to the public
-# endpoint. Set IOT_SERVER_URL to override when testing against a different
-# environment.
-# Flask サーバーのベース URL（デフォルトは公開エンドポイント）
-SERVER_BASE_URL = os.getenv(
-    "IOT_SERVER_URL", "https://iot-agent.project-kk.com"
-).rstrip("/")
-# Default to a 3 minute HTTP timeout to accommodate longer-running server
-# operations, while still allowing customization through the environment
-# variable.
-# HTTP タイムアウトやポーリング間隔など通信関連の設定
-REQUEST_TIMEOUT = float(os.getenv("IOT_AGENT_HTTP_TIMEOUT", "60"))
-POLL_INTERVAL = float(os.getenv("IOT_AGENT_POLL_INTERVAL", "2.0"))
-
-# 自動登録フラグ（ブール文字列を解釈）
-_AUTO_REGISTER_RAW = os.getenv("IOT_AGENT_AUTO_REGISTER")
-AUTO_REGISTRATION_REQUESTED = (
-    (_AUTO_REGISTER_RAW or "").strip().lower()
-    in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-)
-# Self-approval toggle so the agent can register capabilities without a dashboard
-_AUTO_APPROVE_RAW = os.getenv("IOT_AGENT_AUTO_APPROVE", "1")
-AUTO_APPROVE = (
-    (_AUTO_APPROVE_RAW or "").strip().lower()
-    in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-)
-
-# 天気情報取得に使う OpenWeather の資格情報
-OPEN_WEATHER_API_KEY = os.getenv("OPEN_WEATHER_API_KEY")
-OPEN_WEATHER_BASE_URL = os.getenv(
-    "OPEN_WEATHER_BASE_URL", "https://api.openweathermap.org/data/2.5/weather"
-)
-
-# デバイス ID は環境変数かファイルから解決
-DEVICE_ID_ENV = os.getenv("IOT_AGENT_DEVICE_ID")
-DEVICE_ID_PATH = Path(
-    os.getenv(
-        "IOT_AGENT_DEVICE_ID_PATH",
-        str(Path(__file__).resolve().parent / "device_id.txt"),
-    )
-)
-
-DEVICE_TEST_DIR = Path(__file__).resolve().parent / "device_test"
-CAMERA_SAVE_DIR = Path(
-    os.getenv("IOT_AGENT_CAMERA_DIR", "/home/kota/iot-agent/test")
-).expanduser()
-CAMERA_WARMUP_SECONDS = float(os.getenv("IOT_AGENT_CAMERA_WARMUP", "1.2"))
-
-DISPLAY_NAME = os.getenv("IOT_AGENT_DISPLAY_NAME", "Raspberry Pi 4 Agent")
-LOCATION = os.getenv("IOT_AGENT_LOCATION", "Lab")
-
-REGISTER_PATH = "/api/devices/register"
-NEXT_PATH = "/api/devices/{device_id}/jobs/next"
-RESULT_PATH = "/api/devices/{device_id}/jobs/result"
-
-AGENT_ROLE_VALUE = "raspberrypi-agent"
-AGENT_COMMAND_NAME = "agent_instruction"
+import edge_config as config
 
 # Pi がネイティブにサポートするアクション定義
 SUPPORTED_ACTIONS: Dict[str, Dict[str, Any]] = {
@@ -407,7 +302,6 @@ SUPPORTED_ACTIONS: Dict[str, Dict[str, Any]] = {
     },
 }
 
-# サーバーへ公開するアクションカタログ（no_action を除外）
 ACTION_CATALOG = [
     {
         "name": action,
@@ -418,10 +312,9 @@ ACTION_CATALOG = [
     if action != "no_action"
 ]
 
-# サーバー登録時に伝える capability 情報
 CAPABILITIES = [
     {
-        "name": AGENT_COMMAND_NAME,
+        "name": config.AGENT_COMMAND_NAME,
         "description": "Execute Raspberry Pi automation tasks derived from simple English instructions.",
         "params": [
             {"name": "instruction", "type": "string", "required": True},
@@ -431,345 +324,11 @@ CAPABILITIES = [
 ]
 
 
-def _console(message: str) -> None:
-    """Emit a human-readable status line to the terminal."""
-
-    # 実行中の状態をターミナルへ表示する共通処理
-    try:
-        print(f"[agent] {message}", flush=True)
-    except Exception:  # pragma: no cover - printing should never fail, but stay safe
-        pass
-
-LLM_SYSTEM_PROMPT = (
-    "You convert simple English instructions into JSON commands for a Raspberry Pi automation agent.\n"
-    "Return ONLY a single JSON object that exactly matches the schema:\n"
-    '{"action": "<one of the supported actions>", "parameters": { ... }, "message": "<optional string>"}\n'
-    "Do not include code fences, explanations, or any trailing text.\n"
-    "Valid actions are: "
-    + ", ".join(sorted(SUPPORTED_ACTIONS.keys()))
-    + ".\n"
-    "Always choose the action that best fulfills the instruction.\n"
-    "Only respond with 'no_action' when the request is impossible or unrelated to the available actions.\n"
-    "When a request mentions moving two servos (two/dual/both servos), always choose 'run_dual_servo_demo' instead of 'run_servo_demo' so both servos move together.\n"
-    "Include all required parameters.\n"
-    "Examples:\n"
-    "Instruction: Let's play rock paper scissors, I choose rock.\n"
-    "{\"action\": \"play_rock_paper_scissors\", \"parameters\": {\"player_move\": \"rock\"}}\n"
-    "Instruction: What's the weather in Tokyo in metric units?\n"
-    "{\"action\": \"get_weather\", \"parameters\": {\"location\": \"Tokyo\", \"units\": \"metric\"}}\n"
-    "Instruction: What time is it right now?\n"
-    "{\"action\": \"get_current_time\", \"parameters\": {}}\n"
-    "Instruction: Make the buzzer play a short melody.\n"
-    "{\"action\": \"play_buzzer\", \"parameters\": {}}\n"
-    "Instruction: Just saying thank you!\n"
-    "{\"action\": \"no_action\", \"parameters\": {}, \"message\": \"No task requested.\"}"
-)
-
-# ==== Helpers ==============================================================
-
-
-def _build_url(path: str) -> str:
-    # API パスをベース URL と結合してアクセス先を得る
-    return f"{SERVER_BASE_URL}{path}"
-
-
 _DIGIT_NORMALIZATION = str.maketrans("０１２３４５６７８９", "0123456789")
 
 
 def _normalize_digits(text: str) -> str:
-    """Convert full-width digits to ASCII so heuristics catch Japanese numerals."""
-
     return text.translate(_DIGIT_NORMALIZATION)
-
-
-def _load_device_id() -> str:
-    # ファイルキャッシュと環境変数を考慮してデバイス ID を解決
-    if DEVICE_ID_ENV:
-        return DEVICE_ID_ENV.strip()
-
-    try:
-        if DEVICE_ID_PATH.exists():
-            stored = DEVICE_ID_PATH.read_text(encoding="utf-8").strip()
-            if stored:
-                return stored
-    except Exception as exc:  # pragma: no cover - filesystem edge cases
-        logging.warning("Failed to read device id file: %s", exc)
-
-    new_id = f"raspi-agent-{uuid.uuid4().hex[:12]}"
-    try:
-        DEVICE_ID_PATH.parent.mkdir(parents=True, exist_ok=True)
-        DEVICE_ID_PATH.write_text(new_id, encoding="utf-8")
-    except Exception as exc:  # pragma: no cover - filesystem edge cases
-        logging.warning("Unable to persist device id: %s", exc)
-    return new_id
-
-
-def _create_llm() -> Llama:
-    # 指定パスの GGUF モデルを読み込んで推論器インスタンスを生成
-    if not Path(MODEL_PATH).exists():
-        logging.error("Model file not found: %s", MODEL_PATH)
-        sys.exit(1)
-
-    logging.info("Loading model from %s", MODEL_PATH)
-    return Llama(
-        model_path=MODEL_PATH,
-        n_threads=LLAMA_THREADS,
-        n_ctx=LLAMA_CONTEXT,
-        verbose=False,
-    )
-
-
-def _log_dict(label: str, value: Dict[str, Any], *, level: int = logging.INFO) -> None:
-    # 辞書データを JSON 文字列化してログに記録
-    try:
-        message = json.dumps(value, ensure_ascii=False, sort_keys=True)
-    except TypeError:
-        message = repr(value)
-    logging.log(level, "%s: %s", label, message)
-
-
-def _register_device(session: requests.Session, device_id: str) -> Tuple[bool, bool]:
-    # サーバーへ登録リクエストを送り、成功と手動承認の要否を返す
-    payload = {
-        "device_id": device_id,
-        "capabilities": CAPABILITIES,
-        "meta": {
-            "display_name": DISPLAY_NAME,
-            "role": AGENT_ROLE_VALUE,
-            "location": LOCATION,
-            "action_catalog": ACTION_CATALOG,
-            "note": "TinyLlama-powered Raspberry Pi agent",
-            "registered_via": "edge-device",
-        },
-        "approved": AUTO_APPROVE,
-    }
-
-    _console(
-        "Attempting to register device '{}' (display='{}', location='{}').".format(
-            device_id,
-            DISPLAY_NAME,
-            LOCATION,
-        )
-    )
-    try:
-        resp = session.post(
-            _build_url(REGISTER_PATH),
-            json=payload,
-            timeout=REQUEST_TIMEOUT,
-        )
-        if resp.status_code == 403:
-            logging.warning(
-                "Device not yet approved on server. Register the device ID '%s' manually via the dashboard.",
-                device_id,
-            )
-            _console(
-                "Registration pending approval for device '{}'. Approve it from the dashboard.".format(
-                    device_id
-                )
-            )
-            return False, True
-
-        resp.raise_for_status()
-        try:
-            data = resp.json()
-        except ValueError:
-            data = {}
-        logging.info("Device registration acknowledged: status=%s", data.get("status", "ok"))
-        _log_dict("Server device snapshot", data.get("device") or {})
-        status_text = data.get("status") or "ok"
-        _console(
-            "Device '{}' registration succeeded with status '{}'.".format(
-                device_id,
-                status_text,
-            )
-        )
-        return True, False
-    except Exception as exc:
-        logging.error("Registration failed: %s", exc)
-        _console("Device '{}' registration failed: {}".format(device_id, exc))
-        return False, False
-
-
-def _poll_next_job(session: requests.Session, device_id: str) -> Optional[Dict[str, Any]]:
-    # サーバーから次のジョブを取得し、必要に応じて再登録を試みる
-    try:
-        resp = session.get(
-            _build_url(NEXT_PATH.format(device_id=device_id)),
-            timeout=REQUEST_TIMEOUT,
-        )
-    except Exception as exc:
-        logging.error("Failed to poll for job: %s", exc)
-        return None
-
-    if resp.status_code == 204:
-        return None
-
-    if resp.status_code == 404:
-        logging.warning("Device not registered on server. Re-registering...")
-        _console(
-            "Server returned 404 for device '{}'. Triggering re-registration.".format(
-                device_id
-            )
-        )
-        registered, manual_required = _register_device(session, device_id)
-        if not registered and manual_required:
-            logging.warning(
-                "Server still waiting for manual approval of device '%s'.", device_id
-            )
-            _console(
-                "Device '{}' still awaiting manual approval on server.".format(device_id)
-            )
-        return None
-
-    if resp.status_code != 200:
-        logging.error("Unexpected status from job endpoint: %s", resp.status_code)
-        _console(
-            "Polling jobs failed with status {} for device '{}'.".format(
-                resp.status_code,
-                device_id,
-            )
-        )
-        return None
-
-    try:
-        job = resp.json()
-        job_id = job.get("job_id") or job.get("id")
-        _console(
-            "Received job {} from server.".format(job_id if job_id is not None else "<unknown>")
-        )
-        return job
-    except json.JSONDecodeError:
-        logging.error("Job payload is not valid JSON: %s", resp.text[:200])
-        _console("Received invalid job payload from server (JSON decode error).")
-    return None
-
-
-def _post_result(
-    session: requests.Session,
-    payload: Dict[str, Any],
-    *,
-    max_attempts: int = 3,
-    backoff_seconds: float = 2.0,
-) -> bool:
-    # ジョブ結果を再試行つきでサーバーに送信
-    device_id_value = str(payload.get("device_id") or "").strip()
-    if not device_id_value:
-        logging.error("Result payload is missing device_id")
-        return False
-
-    url = _build_url(RESULT_PATH.format(device_id=device_id_value))
-    attempt = 0
-    while True:
-        attempt += 1
-        try:
-            response = session.post(url, json=payload, timeout=REQUEST_TIMEOUT)
-            if 200 <= response.status_code < 300:
-                logging.info(
-                    "Reported job %s result successfully (status=%s)",
-                    payload.get("job_id"),
-                    response.status_code,
-                )
-                _console(
-                    "Result for job {} delivered successfully (status {}).".format(
-                        payload.get("job_id"),
-                        response.status_code,
-                    )
-                )
-                return True
-
-            body_preview = response.text[:200] if response.text else ""
-            logging.error(
-                "Result post attempt %s failed with status %s. Body preview: %s",
-                attempt,
-                response.status_code,
-                body_preview,
-            )
-            _console(
-                "Attempt {} to send result for job {} failed with status {}.".format(
-                    attempt,
-                    payload.get("job_id"),
-                    response.status_code,
-                )
-            )
-        except Exception as exc:
-            logging.error("Result post attempt %s raised error: %s", attempt, exc)
-            _console(
-                "Attempt {} to send result for job {} raised error: {}.".format(
-                    attempt,
-                    payload.get("job_id"),
-                    exc,
-                )
-            )
-
-        if attempt >= max_attempts:
-            break
-
-        sleep_for = min(backoff_seconds * (2 ** (attempt - 1)), 30.0)
-        logging.info("Retrying result post in %.1f seconds", sleep_for)
-        _console(
-            "Retrying result delivery for job {} in {:.1f} seconds.".format(
-                payload.get("job_id"),
-                sleep_for,
-            )
-        )
-        time.sleep(sleep_for)
-
-    return False
-
-
-def _build_result_payload(
-    *,
-    device_id: str,
-    job_id: str,
-    ok: bool,
-    action: Optional[str],
-    parameters: Optional[Dict[str, Any]],
-    message: Optional[str],
-    result: Any,
-    error: Optional[str],
-) -> Dict[str, Any]:
-    # サーバーが期待するフォーマットに結果をまとめる
-    def _truncate_text(value: Any) -> Any:
-        if isinstance(value, str) and len(value) > _RETURN_TEXT_LIMIT:
-            head = value[:_RETURN_TEXT_KEEP]
-            tail = value[-_RETURN_TEXT_KEEP:]
-            return f"{head}...[truncated]...{tail}"
-        return value
-
-    truncated_message = _truncate_text(message)
-    truncated_result = _truncate_text(result) if isinstance(result, str) else result
-    truncated_error = _truncate_text(error)
-
-    return {
-        "device_id": device_id,
-        "job_id": job_id,
-        "ok": bool(ok),
-        "return_value": {
-            "action": action,
-            "parameters": parameters or {},
-            "message": truncated_message,
-            "result": truncated_result,
-        },
-        "stdout": None,
-        "stderr": None,
-        "error": truncated_error,
-        "ts": time.time(),
-    }
-
-
-# ==== Task execution =======================================================
-
-
-def _format_for_log(value: Any, *, max_length: int = 500) -> str:
-    # ログ出力用に値を文字列化し、長すぎる場合は省略記法にする
-    try:
-        text = json.dumps(value, ensure_ascii=False, sort_keys=True)
-    except TypeError:
-        text = repr(value)
-
-    if len(text) > max_length:
-        return text[: max_length - 20] + "...<truncated>"
-    return text
 
 
 _MOVE_ALIASES = {
@@ -796,13 +355,11 @@ _WIN_MAP = {
 
 
 def _normalize_move(value: str) -> Optional[str]:
-    # じゃんけんの手を多言語表現から正規化
     key = value.strip().lower()
     return _MOVE_ALIASES.get(key)
 
 
 def _play_rock_paper_scissors(params: Dict[str, Any]) -> Dict[str, Any]:
-    # じゃんけん対戦を行い、勝敗とメッセージを返す
     move_value = params.get("player_move") if isinstance(params, dict) else None
     if isinstance(move_value, str) and move_value.strip():
         player_move = _normalize_move(move_value)
@@ -837,8 +394,7 @@ def _play_rock_paper_scissors(params: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _get_weather(params: Dict[str, Any]) -> Dict[str, Any]:
-    # OpenWeather API を呼び出して現在の天気情報を取得
-    if not OPEN_WEATHER_API_KEY:
+    if not config.OPEN_WEATHER_API_KEY:
         raise RuntimeError("OpenWeather API key is not configured in the environment.")
 
     if not isinstance(params, dict):
@@ -860,15 +416,15 @@ def _get_weather(params: Dict[str, Any]) -> Dict[str, Any]:
 
     query_params = {
         "q": location,
-        "appid": OPEN_WEATHER_API_KEY,
+        "appid": config.OPEN_WEATHER_API_KEY,
         "units": units_value,
     }
 
     try:
         response = requests.get(
-            OPEN_WEATHER_BASE_URL,
+            config.OPEN_WEATHER_BASE_URL,
             params=query_params,
-            timeout=min(REQUEST_TIMEOUT, 30),
+            timeout=min(config.REQUEST_TIMEOUT, 30),
         )
         response.raise_for_status()
     except requests.RequestException as exc:
@@ -945,47 +501,12 @@ _OLED_TEXT_PADDING = 18
 _OLED_BACKLIGHT_STEPS = (20, 40, 60, 80, 100)
 _OLED_TEXT_DURATION_LIMIT = 60.0
 _OLED_TEXT_MIN_DURATION = 1.5
-_RETURN_TEXT_LIMIT = 3000
-_RETURN_TEXT_KEEP = 1500
-_OLED_MOTION_PRESETS: Dict[str, Dict[str, float]] = {
-    "default": {
-        "speed": 1.0,
-        "sweep": _OLED_EYE_SWEEP,
-        "beam_speed": 60.0,
-        "bob_speed": 0.7,
-        "bob_amplitude": 3.0,
-        "eye_scale": 3.0,
-    },
-    "calm": {
-        "speed": 0.55,
-        "sweep": 0.26,
-        "beam_speed": 36.0,
-        "bob_speed": 0.45,
-        "bob_amplitude": 2.0,
-        "eye_scale": 3.0,
-    },
-    "alert": {
-        "speed": 1.8,
-        "sweep": 0.62,
-        "beam_speed": 120.0,
-        "bob_speed": 1.2,
-        "bob_amplitude": 5.0,
-        "eye_scale": 3.2,
-    },
-    "scout": {
-        "speed": 1.1,
-        "sweep": 0.78,
-        "beam_speed": 80.0,
-        "bob_speed": 0.9,
-        "bob_amplitude": 4.0,
-        "eye_scale": 3.0,
-    },
-}
+
+_oled_backlight_singleton: Optional[Any] = None
+_oled_backlight_lock = threading.Lock()
 
 
 def _parse_timeout_parameter(parameters: Any, default: float) -> float:
-    """Extract a positive timeout value from action parameters."""
-
     if not isinstance(parameters, dict):
         return default
 
@@ -1018,10 +539,6 @@ def _oled_ensure_spidev_exists() -> None:
         raise FileNotFoundError(
             f"{path} が見つかりません。/boot(または /boot/firmware)/config.txt に 'dtoverlay=spi1-1cs' を追記して再起動してください。"
         )
-
-
-_oled_backlight_singleton: Optional[Any] = None
-_oled_backlight_lock = threading.Lock()
 
 
 def _oled_setup_backlight() -> Any:
@@ -1148,7 +665,7 @@ def _oled_draw_mono_eye(
     motion = motion_profile or _OLED_MOTION_PRESETS["default"]
     speed = motion.get("speed", 1.0)
     t_scaled = t * speed
-    eye_scale = motion.get("eye_scale", 3.0)  # triple the mono-eye diameter
+    eye_scale = motion.get("eye_scale", 3.0)
     track_height = int(20 * eye_scale)
     track_top = track_mid_y - track_height // 2
     track_bottom = track_mid_y + track_height // 2
@@ -1198,8 +715,6 @@ def _oled_draw_mono_eye(
 
 
 class _ActionExecutionContext:
-    """Helper for hardware demos that adds logging and timeout handling."""
-
     def __init__(self, timeout: float):
         self.started = time.monotonic()
         self.deadline = self.started + float(timeout) if timeout else None
@@ -1221,8 +736,6 @@ class _ActionExecutionContext:
         self.events.append(entry)
 
     def sleep(self, seconds: float) -> bool:
-        """Sleep while respecting the configured timeout."""
-
         if seconds <= 0:
             return True
 
@@ -1412,7 +925,7 @@ def _start_mono_eye_daemon_if_possible() -> None:
     manager = _get_or_start_oled_manager()
     if manager and manager.is_running and not _oled_daemon_logged:
         logging.info("OLED mono-eye display started in background.")
-        _console("OLED mono-eye display is running in the background.")
+        config._console("OLED mono-eye display is running in the background.")
         _oled_daemon_logged = True
     elif manager is None and not _oled_daemon_logged:
         logging.info("OLED mono-eye display not started (missing hardware drivers or SPI not enabled).")
@@ -1420,8 +933,6 @@ def _start_mono_eye_daemon_if_possible() -> None:
 
 
 _LED_PINS = {"led1": 2, "led2": 3, "led3": 16}
-
-# Passive buzzer wired to GPIO4 (matches device_test/buzzer_test.py).
 _BUZZER_PIN = 4
 _DEFAULT_BUZZER_SEQUENCE = [
     {"note": "A4", "duration": 1.0},
@@ -1523,10 +1034,7 @@ def _play_buzzer(parameters: Any) -> Dict[str, Any]:
     }
 
 
-
 def _capture_camera_photo(parameters: Any) -> Dict[str, Any]:
-    """Capture a still photo using Picamera2 with the same defaults as camera_test.py."""
-
     try:
         from picamera2 import Picamera2
     except ImportError as exc:
@@ -1534,8 +1042,8 @@ def _capture_camera_photo(parameters: Any) -> Dict[str, Any]:
             "picamera2 is required to capture photos on the Raspberry Pi. Install it before running this action."
         ) from exc
 
-    save_dir = CAMERA_SAVE_DIR
-    warmup = CAMERA_WARMUP_SECONDS
+    save_dir = config.CAMERA_SAVE_DIR
+    warmup = config.CAMERA_WARMUP_SECONDS
     filename = f"rpi_{datetime.now():%Y%m%d_%H%M%S}.jpg"
 
     if isinstance(parameters, dict):
@@ -1590,8 +1098,6 @@ def _capture_camera_photo(parameters: Any) -> Dict[str, Any]:
 
 
 def _run_led_demo(parameters: Any) -> Dict[str, Any]:
-    """Run the three-LED chase/blink routine using gpiozero, matching led_test.py wiring."""
-
     timeout = _parse_timeout_parameter(parameters, _DEFAULT_LED_TIMEOUT)
     context = _ActionExecutionContext(timeout)
 
@@ -1976,9 +1482,43 @@ def _run_oled_robot_demo(parameters: Any) -> Dict[str, Any]:
             context.log("Leaving OLED backlight on after demo")
 
 
-def _extract_servo_arguments(parameters: Any) -> Tuple[List[str], bool]:
-    """Convert structured parameters into CLI arguments for servo_tesr.py."""
+_OLED_MOTION_PRESETS: Dict[str, Dict[str, float]] = {
+    "default": {
+        "speed": 1.0,
+        "sweep": _OLED_EYE_SWEEP,
+        "beam_speed": 60.0,
+        "bob_speed": 0.7,
+        "bob_amplitude": 3.0,
+        "eye_scale": 3.0,
+    },
+    "calm": {
+        "speed": 0.55,
+        "sweep": 0.26,
+        "beam_speed": 36.0,
+        "bob_speed": 0.45,
+        "bob_amplitude": 2.0,
+        "eye_scale": 3.0,
+    },
+    "alert": {
+        "speed": 1.8,
+        "sweep": 0.62,
+        "beam_speed": 120.0,
+        "bob_speed": 1.2,
+        "bob_amplitude": 5.0,
+        "eye_scale": 3.2,
+    },
+    "scout": {
+        "speed": 1.1,
+        "sweep": 0.78,
+        "beam_speed": 80.0,
+        "bob_speed": 0.9,
+        "bob_amplitude": 4.0,
+        "eye_scale": 3.0,
+    },
+}
 
+
+def _extract_servo_arguments(parameters: Any) -> Tuple[List[str], bool]:
     if not isinstance(parameters, dict):
         return [], False
 
@@ -1999,7 +1539,6 @@ def _extract_servo_arguments(parameters: Any) -> Tuple[List[str], bool]:
     has_command = bool(args)
 
     if has_command:
-        # Boolean flag support
         if parameters.get("pigpio"):
             args.append("--pigpio")
 
@@ -2368,8 +1907,6 @@ _DUAL_SERVO_MAX_PW = 0.0025
 
 
 def _run_dual_servo_demo(parameters: Any) -> Dict[str, Any]:
-    """Dual-servo operations mirroring two_servo_test.py (demo/set/off/info)."""
-
     timeout = _parse_timeout_parameter(parameters, _DEFAULT_DUAL_SERVO_TIMEOUT)
     context = _ActionExecutionContext(timeout)
 
@@ -2544,7 +2081,7 @@ def _run_dual_servo_demo(parameters: Any) -> Dict[str, Any]:
             if hold > 0 and not context.sleep(hold):
                 context.log("Timed out while holding off state")
 
-        else:  # demo
+        else:
             while not context.timed_out:
                 if cycles > 0 and executed_cycles >= cycles:
                     break
@@ -2616,11 +2153,10 @@ def _run_dual_servo_demo(parameters: Any) -> Dict[str, Any]:
 
 
 def _execute_action(action: str, parameters: Dict[str, Any]) -> Tuple[bool, Any, Optional[str]]:
-    # アクション名に応じてローカル処理を実行し、成功可否と結果を返す
     logging.info(
         "Executing action '%s' with parameters=%s",
         action,
-        _format_for_log(parameters or {}),
+        config._format_for_log(parameters or {}),
     )
     try:
         if action == "play_rock_paper_scissors":
@@ -2654,960 +2190,13 @@ def _execute_action(action: str, parameters: Dict[str, Any]) -> Tuple[bool, Any,
         return False, None, str(exc)
 
 
-# ==== LLM interaction ======================================================
-
-
-def _plan_from_instruction(llm: Llama, instruction: str) -> Dict[str, Any]:
-    # LLM へ命令文を渡し、JSON 形式のプランを推定
-    def _validate_plan(payload: Any) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
-        if not isinstance(payload, dict):
-            return None, "response was not a JSON object."
-        action = payload.get("action")
-        if not isinstance(action, str) or not action.strip():
-            return None, "action must be a non-empty string."
-        action = action.strip()
-        if action not in SUPPORTED_ACTIONS:
-            return None, f"action '{action}' is not supported."
-        parameters = payload.get("parameters")
-        if parameters is None:
-            parameters = {}
-        if not isinstance(parameters, dict):
-            return None, "parameters must be a JSON object."
-        message = payload.get("message")
-        if message is not None and not isinstance(message, str):
-            return None, "message must be a string when provided."
-
-        normalised: Dict[str, Any] = {"action": action, "parameters": parameters}
-        if isinstance(message, str) and message.strip():
-            normalised["message"] = message.strip()
-        return normalised, None
-
-    retry_instruction: Optional[str] = None
-    plan: Dict[str, Any] = {}
-    max_attempts = 3
-
-    for attempt in range(1, max_attempts + 1):
-        messages: List[Dict[str, str]] = [
-            {"role": "system", "content": LLM_SYSTEM_PROMPT},
-        ]
-        if retry_instruction:
-            messages.append({"role": "system", "content": retry_instruction})
-        messages.append({"role": "user", "content": instruction})
-
-        logging.debug("LLM request (attempt %s): %s", attempt, instruction)
-        response = llm.create_chat_completion(
-            messages=messages,
-            temperature=LLAMA_TEMPERATURE,
-        )
-
-        text = response["choices"][0]["message"]["content"].strip()
-        logging.debug("LLM raw response: %s", text)
-
-        candidate = _extract_json(text)
-        validated, error = _validate_plan(candidate)
-        if validated:
-            plan = validated
-            break
-
-        if attempt == max_attempts:
-            break
-
-        retry_instruction = (
-            "The previous reply was invalid JSON. Respond ONLY with a JSON object shaped as "
-            '{"action": "<supported action>", "parameters": { ... }, "message": "<optional string>"}. '
-            f"Error: {error or 'Unable to parse response.'}"
-        )
-
-    if not plan:
-        fallback = _keyword_plan(instruction)
-        if fallback:
-            plan = dict(fallback)
-
-    action = plan.get("action")
-    if action not in SUPPORTED_ACTIONS:
-        plan["action"] = "no_action"
-        plan.setdefault("parameters", {})
-        plan.setdefault("message", "Model returned an unsupported action.")
-    else:
-        plan.setdefault("parameters", {})
-
-    if plan.get("action") == "no_action":
-        fallback = _keyword_plan(instruction)
-        if fallback:
-            plan["action"] = fallback["action"]
-            plan["parameters"] = fallback.get("parameters", {})
-            plan.pop("message", None)
-
-    logging.info("LLM plan resolved: %s", _format_for_log(plan))
-    return plan
-
-
-def _build_multi_action_plan(llm: Llama, instruction: str) -> List[Dict[str, Any]]:
-    # 単一アクションまたはヒューリスティックから多段プランを生成
-    normalized_text = _normalize_digits(instruction).strip()
-    lowered = normalized_text.lower()
-    wants_dual_servos = _is_dual_servo_request(normalized_text, lowered)
-
-    heuristic = _heuristic_multi_plan(instruction)
-    if heuristic:
-        return heuristic
-
-    plan = _plan_from_instruction(llm, instruction)
-    if isinstance(plan, dict) and plan:
-        if wants_dual_servos and plan.get("action") == "run_servo_demo":
-            plan = dict(plan)
-            plan["action"] = "run_dual_servo_demo"
-            plan["parameters"] = {}
-        return [plan]
-
-    return []
-
-
-def _execute_plan_sequence(
-    plans: List[Dict[str, Any]]
-) -> Tuple[bool, Any, Optional[str], Optional[str], str, Dict[str, Any]]:
-    # プラン配列を順に実行し、総合結果とメタ情報をまとめる
-    if not plans:
-        message = "No executable actions resolved from instruction."
-        return False, None, message, message, "no_action", {}
-
-    if len(plans) == 1:
-        plan = plans[0]
-        action = str(plan.get("action") or "no_action")
-        parameters = dict(plan.get("parameters") or {})
-        message = plan.get("message") if isinstance(plan.get("message"), str) else None
-        ok, result, error = _execute_action(action, parameters)
-        return ok, result, message, error, action, parameters
-
-    executed_steps: List[Dict[str, Any]] = []
-    status_parts: List[str] = []
-    plan_messages: List[str] = []
-    error_messages: List[str] = []
-
-    for index, plan in enumerate(plans, start=1):
-        action = str(plan.get("action") or "no_action")
-        parameters = dict(plan.get("parameters") or {})
-        message = plan.get("message") if isinstance(plan.get("message"), str) else None
-
-        ok, result, error = _execute_action(action, parameters)
-
-        step_record: Dict[str, Any] = {
-            "step": index,
-            "action": action,
-            "ok": ok,
-            "parameters": parameters,
-        }
-
-        if result is not None:
-            step_record["result"] = result
-
-        if message:
-            plan_messages.append(message)
-            step_record["plan_message"] = message
-
-        if error:
-            error_entry = f"{action}: {error}"
-            error_messages.append(error_entry)
-            step_record["error"] = error
-
-        status_parts.append(f"{action}: {'成功' if ok else '失敗'}")
-        executed_steps.append(step_record)
-
-    overall_ok = all(step["ok"] for step in executed_steps)
-
-    summary: Dict[str, Any] = {
-        "actions": [step["action"] for step in executed_steps],
-        "total_steps": len(executed_steps),
-        "successful_steps": sum(1 for step in executed_steps if step["ok"]),
-        "success": overall_ok,
-    }
-
-    if not overall_ok:
-        summary["failed_steps"] = [step["step"] for step in executed_steps if not step["ok"]]
-
-    message_parts: List[str] = list(dict.fromkeys(status_parts))
-    if plan_messages:
-        message_parts.extend(part for part in plan_messages if part)
-
-    message_text = " / ".join(part for part in message_parts if part) or None
-
-    error_text = " / ".join(dict.fromkeys(error_messages)) or None
-    if error_text:
-        message_text = (message_text + " / " if message_text else "") + f"エラー: {error_text}"
-
-    result_value: Dict[str, Any] = {
-        "summary": summary,
-        "steps": executed_steps,
-    }
-
-    logging.info("Multi-action plan summary: %s", _format_for_log(summary))
-    for step in executed_steps:
-        logging.info(
-            "Step %s/%s '%s' -> %s",
-            step["step"],
-            summary["total_steps"],
-            step["action"],
-            "success" if step["ok"] else "failure",
-        )
-
-    return overall_ok, result_value, message_text, error_text, "multi_action_sequence", summary
-
-
-def _extract_json(text: str) -> Optional[Any]:
-    # LLM の生テキストから JSON を抽出
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        pass
-
-    start = text.find("{")
-    end = text.rfind("}")
-    if start != -1 and end != -1 and end > start:
-        candidate = text[start : end + 1]
-        try:
-            return json.loads(candidate)
-        except json.JSONDecodeError:
-            return None
-    return None
-
-
-def _infer_units_from_instruction(instruction: str) -> Optional[str]:
-    # 命令文に含まれる単位指定を推定
-    text = instruction.lower()
-    if "fahrenheit" in text or "imperial" in text:
-        return "imperial"
-    if "celsius" in text or "metric" in text:
-        return "metric"
-    if "kelvin" in text or "standard" in text:
-        return "standard"
-    return None
-
-
-def _extract_weather_location(instruction: str) -> Optional[str]:
-    # 天気要求から地名を抽出（英語・日本語どちらにも対応）
-    patterns = [
-        r"\bweather\s+(?:in|for)\s+([A-Za-z0-9 ,'-]+)",
-        r"\btemperature\s+(?:in|for)\s+([A-Za-z0-9 ,'-]+)",
-        r"([A-Za-z0-9 ,'-]+)\s+weather",
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, instruction, re.IGNORECASE)
-        if match:
-            candidate = match.group(1).strip()
-            candidate = re.split(r"[\.?!,]", candidate)[0].strip()
-            if candidate:
-                return candidate
-
-    jp_match = re.search(r"([\w\u3040-\u30ff\u4e00-\u9faf\s]+?)の天気", instruction)
-    if jp_match:
-        candidate = jp_match.group(1).strip()
-        if candidate:
-            return candidate
-
-    return None
-
-
-def _keyword_plan(instruction: str) -> Optional[Dict[str, Any]]:
-    # 単純なキーワード一致で最適アクションを一件抽出
-    plans = _heuristic_multi_plan(instruction)
-    return plans[0] if plans else None
-
-
-def _extract_float(patterns: List[str], text: str) -> Optional[str]:
-    for pattern in patterns:
-        match = re.search(pattern, text, re.IGNORECASE)
-        if match:
-            return match.group(1)
-    return None
-
-
-def _is_dual_servo_request(text: str, lowered: str) -> bool:
-    """Return True when the instruction explicitly asks for two servos to move."""
-
-    if not text:
-        return False
-
-    dual_keywords = [
-        "dual servo",
-        "dual servos",
-        "dual servo motors",
-        "two servo",
-        "two servos",
-        "two servo motors",
-        "double servo",
-        "2 servo",
-        "2 servos",
-        "both servos",
-        "both servo",
-        "both servo motors",
-        "pair of servos",
-    ]
-    if any(keyword in lowered for keyword in dual_keywords):
-        return True
-
-    jp_phrases = [
-        "2つのサーボ",
-        "二つのサーボ",
-        "サーボ2つ",
-        "サーボ２つ",
-        "サーボ2個",
-        "サーボ２個",
-        "サーボ2基",
-        "サーボ２基",
-        "二基のサーボ",
-        "サーボ2台",
-        "サーボ２台",
-        "2台のサーボ",
-        "二台のサーボ",
-        "サーボ二台",
-        "両方のサーボ",
-        "両サーボ",
-        "左右のサーボ",
-        "サーボを2つ",
-        "サーボを２つ",
-    ]
-    if any(phrase in text for phrase in jp_phrases):
-        return True
-
-    if re.search(r"(サーボ).*(?:2つ|2個|二つ|二個|2基|二基|2台|二台)", text):
-        return True
-    if re.search(r"(?:2つ|2個|二つ|二個|2基|二基|2台|二台).*(サーボ)", text):
-        return True
-
-    return False
-
-
-def _build_servo_parameters_from_instruction(
-    instruction: str, lowered: str
-) -> Dict[str, Any]:
-    """Translate common servo-related phrases into script parameters."""
-
-    instruction = _normalize_digits(instruction)
-    lowered = instruction.lower()
-
-    params: Dict[str, Any] = {}
-    command_parts: List[str] = []
-
-    # Detect requested channel (1-4)
-    channel: Optional[int] = None
-    channel_patterns = [
-        r"\bch(?:annel)?\s*(\d+)",
-        r"(?:CH|ＣＨ)\s*(\d+)",
-        r"(\d+)\s*ch",
-        r"チャンネル\s*(\d+)",
-    ]
-    for pattern in channel_patterns:
-        match = re.search(pattern, instruction, re.IGNORECASE)
-        if match:
-            try:
-                candidate = int(match.group(1))
-            except ValueError:
-                continue
-            if 1 <= candidate <= 4:
-                channel = candidate
-                break
-
-    pigpio_requested = "pigpio" in lowered or "ピグピオ" in instruction
-
-    # Determine desired command
-    if any(keyword in lowered for keyword in ["center", "centre"]) or any(
-        kw in instruction for kw in ["センタ", "センター", "中央"]
-    ):
-        command_parts.append("center")
-    elif any(keyword in lowered for keyword in ["off", "detach"]) or any(
-        kw in instruction for kw in ["停止", "止め", "オフ"]
-    ):
-        command_parts.append("off")
-    elif any(keyword in lowered for keyword in ["info", "information"]) or "配線" in instruction:
-        command_parts.append("info")
-    else:
-        sweep_keywords = ["sweep", "scan", "swing"]
-        sweep_matches = any(keyword in lowered for keyword in sweep_keywords) or any(
-            kw in instruction for kw in ["スイープ", "往復", "揺", "振"]
-        )
-        if sweep_matches:
-            command_parts.append("sweep")
-            start_value = _extract_float(
-                [
-                    r"(?:from|start(?:ing)?(?:\s+at)?)\s*(\d+(?:\.\d+)?)",
-                    r"(\d+(?:\.\d+)?)\s*(?:度|degrees?)\s*(?:から|~|〜)",
-                ],
-                instruction,
-            )
-            end_value = _extract_float(
-                [
-                    r"(?:to|until|end(?:ing)?(?:\s+at)?)\s*(\d+(?:\.\d+)?)",
-                    r"(?:to|まで)\s*(\d+(?:\.\d+)?)",
-                ],
-                instruction,
-            )
-
-            numeric_candidates: List[str] = []
-            if start_value is None or end_value is None:
-                # Fallback: pick numbers from text excluding the channel id
-                raw_numbers = re.findall(r"\d+(?:\.\d+)?", instruction)
-                for raw in raw_numbers:
-                    try:
-                        value = float(raw)
-                    except ValueError:
-                        continue
-                    if channel is not None and abs(value - channel) < 1e-9:
-                        continue
-                    numeric_candidates.append(raw)
-
-            if start_value is None and numeric_candidates:
-                start_value = numeric_candidates.pop(0)
-            if end_value is None and numeric_candidates:
-                end_value = numeric_candidates.pop(0)
-
-            if start_value is not None:
-                command_parts.extend(["--start", start_value])
-            if end_value is not None:
-                command_parts.extend(["--end", end_value])
-
-            step_value = _extract_float([r"step(?: size)?\s*(\d+(?:\.\d+)?)", r"刻み\s*(\d+(?:\.\d+)?)"], instruction)
-            if step_value is None and numeric_candidates:
-                step_value = numeric_candidates.pop(0)
-            if step_value is not None:
-                command_parts.extend(["--step", step_value])
-
-            delay_value = _extract_float(
-                [
-                    r"delay\s*(\d+(?:\.\d+)?)",
-                    r"(\d+(?:\.\d+)?)\s*(?:sec|s|秒)(?:\s*delay)?",
-                ],
-                instruction,
-            )
-            if delay_value is not None:
-                command_parts.extend(["--delay", delay_value])
-
-            cycles_value = _extract_float(
-                [r"(\d+)\s*(?:cycles?|回|往復)"],
-                instruction,
-            )
-            if cycles_value is not None:
-                command_parts.extend(["--cycles", cycles_value])
-        else:
-            angle_value = _extract_float(
-                [
-                    r"(?:to|at|angle|set)\s*(\d+(?:\.\d+)?)\s*(?:degrees?|°)",
-                    r"(\d+(?:\.\d+)?)度",
-                ],
-                instruction,
-            )
-            if angle_value is not None:
-                command_parts.extend(["set", "--angle", angle_value])
-
-    hold_value = _extract_float(
-        [r"hold\s*(\d+(?:\.\d+)?)", r"(\d+(?:\.\d+)?)\s*秒保持"],
-        instruction,
-    )
-
-    if command_parts:
-        if channel is not None:
-            command_parts.extend(["--channel", str(channel)])
-        if pigpio_requested:
-            command_parts.append("--pigpio")
-        if hold_value is not None:
-            command_parts.extend(["--hold", hold_value])
-        params["command"] = " ".join(command_parts)
-
-    return params
-
-
-def _heuristic_multi_plan(instruction: str) -> List[Dict[str, Any]]:
-    """Resolve an instruction into a deterministic sequence of actions."""
-
-    # ヒューリスティックで複数アクションを導出
-    text = _normalize_digits(instruction).strip()
-    if not text:
-        return []
-
-    lowered = text.lower()
-    plans: List[Dict[str, Any]] = []
-    seen: Set[str] = set()
-
-    def _add(action: str, parameters: Dict[str, Any], message: Optional[str] = None) -> None:
-        if action not in SUPPORTED_ACTIONS:
-            return
-        if action in seen:
-            return
-        seen.add(action)
-        entry: Dict[str, Any] = {"action": action, "parameters": dict(parameters or {})}
-        if message:
-            entry["message"] = message
-        plans.append(entry)
-
-    if (
-        "rock paper scissors" in lowered
-        or "janken" in lowered
-        or "じゃんけん" in text
-        or "グー" in text
-    ):
-        _add("play_rock_paper_scissors", {})
-
-    if any(
-        keyword in lowered
-        for keyword in ["what time", "current time", "time is it", "clock", "時刻", "今何時"]
-    ):
-        _add("get_current_time", {})
-
-    if "weather" in lowered or "temperature" in lowered or "forecast" in lowered or "天気" in text:
-        location = _extract_weather_location(instruction)
-        if not location and LOCATION and LOCATION.lower() != "lab":
-            location = LOCATION
-        if location:
-            params: Dict[str, Any] = {"location": location}
-            units = _infer_units_from_instruction(instruction)
-            if units:
-                params["units"] = units
-            _add("get_weather", params)
-
-    if any(
-        keyword in lowered
-        for keyword in ["camera", "photo", "picture", "snapshot"]
-    ) or "カメラ" in text or "写真" in text or "撮影" in text:
-        _add("capture_camera_photo", {})
-
-    motor_keywords = ["motor test", "motor demo", "l293d", "dc motor"]
-    if (
-        any(keyword in lowered for keyword in motor_keywords)
-        or ("モーター" in text and "サーボ" not in text)
-    ) and "servo" not in lowered:
-        _add("run_motor_test", {})
-
-    led_keywords = ["led", "blink", "blinking", "light show"]
-    if any(keyword in lowered for keyword in led_keywords) or "ライト" in text or "点滅" in text:
-        _add("run_led_demo", {})
-
-    buzzer_keywords = ["buzzer", "beep", "tone", "melody"]
-    if (
-        any(keyword in lowered for keyword in buzzer_keywords)
-        or "ブザー" in text
-        or "ビープ" in text
-    ):
-        _add("play_buzzer", {})
-
-    oled_keywords = ["oled", "st7735", "robot face", "lcd animation", "mono eye", "zaku", "mono-eye"]
-    if (
-        any(keyword in lowered for keyword in oled_keywords)
-        or ("ロボット" in text and "顔" in text)
-        or "モノアイ" in text
-        or "ザク" in text
-        or "液晶" in text
-    ):
-        _add("run_oled_robot_demo", {})
-
-    if "servo" in lowered or "サーボ" in text:
-        dual_servos = _is_dual_servo_request(text, lowered)
-        if dual_servos:
-            _add("run_dual_servo_demo", {})
-        else:
-            servo_params = _build_servo_parameters_from_instruction(text, lowered)
-            _add("run_servo_demo", servo_params)
-
-    return plans
-
-
-# ==== Main loop ============================================================
-
-
-def _safe_job_id(job: Any) -> Optional[str]:
-    raw_job_id: Any = None
-    try:
-        raw_job_id = job.get("job_id") or job.get("id")
-    except Exception:
-        return None
-
-    if isinstance(raw_job_id, str):
-        job_id = raw_job_id.strip()
-    elif raw_job_id is not None:
-        job_id = str(raw_job_id)
-    else:
-        job_id = None
-
-    return job_id or None
-
-
-def _process_job(
-    session: requests.Session,
-    llm: Llama,
-    device_id: str,
-    job: Dict[str, Any],
-) -> None:
-    # サーバーから受信したジョブを解析し、適切なアクションを実行
-    raw_job_id: Any = job.get("job_id")
-    if raw_job_id is None and "id" in job:
-        raw_job_id = job.get("id")
-
-    job_id = None
-    if isinstance(raw_job_id, str):
-        job_id = raw_job_id.strip()
-    elif raw_job_id is not None:
-        job_id = str(raw_job_id)
-
-    command = job.get("command") or {}
-    args = command.get("args") if isinstance(command, dict) else {}
-    command_name = command.get("name") if isinstance(command, dict) else None
-    if isinstance(command_name, str):
-        command_name = command_name.strip()
-    else:
-        command_name = None
-
-    job_device_id = job.get("device_id") or job.get("target_device_id")
-    if job_device_id and job_device_id != device_id:
-        message = (
-            f"Job is targeted to device '{job_device_id}' but this agent is '{device_id}'."
-        )
-        logging.warning("Skipping job %s: %s", job_id or "<unknown>", message)
-        if job_id:
-            payload = _build_result_payload(
-                device_id=device_id,
-                job_id=job_id,
-                ok=False,
-                action=None,
-                parameters=None,
-                message=message,
-                result=None,
-                error=message,
-            )
-            if not _post_result(session, payload):
-                logging.error("Failed to report mismatched device for job %s", job_id)
-        return
-
-    if not job_id:
-        logging.error("Invalid job payload without a job_id: %s", job)
-        return
-    if not command_name:
-        message = "Job is missing a command name."
-        logging.error("Job %s missing command", job_id)
-        payload = _build_result_payload(
-            device_id=device_id,
-            job_id=job_id,
-            ok=False,
-            action=None,
-            parameters=None,
-            message=message,
-            result=None,
-            error=message,
-        )
-        if not _post_result(session, payload):
-            logging.error("Failed to report missing command for job %s", job_id)
-        return
-
-    resolved_action: Optional[str] = None
-    resolved_parameters: Dict[str, Any] = {}
-    resolved_message: Optional[str] = None
-    ok = False
-    return_value: Any = None
-    error_message: Optional[str] = None
-    if command_name == AGENT_COMMAND_NAME:
-        instruction_value = args.get("instruction") if isinstance(args, dict) else None
-        instruction = instruction_value.strip() if isinstance(instruction_value, str) else None
-        if not instruction:
-            message = "Job is missing instruction text."
-            logging.error("Job %s missing instruction", job_id)
-            payload = _build_result_payload(
-                device_id=device_id,
-                job_id=job_id,
-                ok=False,
-                action=None,
-                parameters=None,
-                message=message,
-                result=None,
-                error=message,
-            )
-            if not _post_result(session, payload):
-                logging.error("Failed to report missing instruction for job %s", job_id)
-            return
-
-        logging.info("Processing job %s with instruction: %s", job_id, instruction)
-        _console(
-            "Job {} instruction received: {}".format(
-                job_id,
-                instruction,
-            )
-        )
-
-        plans = _build_multi_action_plan(llm, instruction)
-        (
-            ok,
-            return_value,
-            resolved_message,
-            error_message,
-            resolved_action,
-            resolved_parameters,
-        ) = _execute_plan_sequence(plans)
-
-        if resolved_action == "multi_action_sequence" and isinstance(return_value, dict):
-            steps = return_value.get("steps") if isinstance(return_value.get("steps"), list) else []
-            for step in steps:
-                if not isinstance(step, dict):
-                    continue
-                step_no = step.get("step")
-                step_action = step.get("action") or "unknown"
-                status = "成功" if step.get("ok") else "失敗"
-                _console(
-                    "Job {} step {} '{}' 結果: {}".format(
-                        job_id,
-                        step_no if step_no is not None else "?",
-                        step_action,
-                        status,
-                    )
-                )
-
-            summary_info = (
-                return_value.get("summary")
-                if isinstance(return_value.get("summary"), dict)
-                else {}
-            )
-            if summary_info:
-                _console(
-                    "Job {} multi-action summary: {}".format(
-                        job_id,
-                        _format_for_log(summary_info),
-                    )
-                )
-    else:
-        resolved_action = command_name
-        resolved_parameters = args if isinstance(args, dict) else {}
-        logging.info(
-            "Processing job %s with direct action: %s",
-            job_id,
-            resolved_action,
-        )
-        _console(
-            "Job {} direct action request: {} with parameters {}.".format(
-                job_id,
-                resolved_action,
-                _format_for_log(resolved_parameters),
-            )
-        )
-        ok, return_value, error_message = _execute_action(
-            resolved_action,
-            resolved_parameters,
-        )
-
-    if not isinstance(resolved_action, str) or not resolved_action:
-        error_message = "Resolved action is invalid."
-        payload = _build_result_payload(
-            device_id=device_id,
-            job_id=job_id,
-            ok=False,
-            action=None,
-            parameters=None,
-            message=error_message,
-            result=None,
-            error=error_message,
-        )
-        if not _post_result(session, payload):
-            logging.error("Failed to report invalid action for job %s", job_id)
-        _console(
-            "Job {} failed: resolved action invalid, notified server.".format(job_id)
-        )
-        return
-
-    if command_name == AGENT_COMMAND_NAME and resolved_action != "multi_action_sequence":
-        _console(
-            "Job {} executing action '{}' with parameters {}.".format(
-                job_id,
-                resolved_action,
-                _format_for_log(resolved_parameters),
-            )
-        )
-
-    if ok:
-        if resolved_action == "multi_action_sequence":
-            logging.info("All actions succeeded for job %s", job_id)
-            _console(
-                "Job {} multi-action sequence completed successfully.".format(job_id)
-            )
-        else:
-            logging.info(
-                "Action '%s' succeeded for job %s", resolved_action, job_id
-            )
-            logging.info("Result payload: %s", _format_for_log(return_value))
-            _console(
-                "Job {} action '{}' succeeded. Result: {}".format(
-                    job_id,
-                    resolved_action,
-                    _format_for_log(return_value),
-                )
-            )
-    else:
-        logging.error(
-            "Action '%s' failed for job %s: %s",
-            resolved_action,
-            job_id,
-            error_message,
-        )
-        if return_value is not None:
-            logging.error(
-                "Partial result for failed action '%s': %s",
-                resolved_action,
-                _format_for_log(return_value),
-            )
-        _console(
-            "Job {} action '{}' failed: {}".format(
-                job_id,
-                resolved_action,
-                error_message or "unknown error",
-            )
-        )
-        if return_value is not None:
-            _console(
-                "Job {} partial result: {}".format(
-                    job_id,
-                    _format_for_log(return_value),
-                )
-            )
-
-    result_payload = _build_result_payload(
-        device_id=device_id,
-        job_id=job_id,
-        ok=bool(ok),
-        action=resolved_action,
-        parameters=resolved_parameters,
-        message=resolved_message,
-        result=return_value,
-        error=error_message,
-    )
-
-    logging.info(
-        "Job %s completed: action=%s ok=%s error=%s",
-        job_id,
-        resolved_action,
-        ok,
-        error_message,
-    )
-
-    if resolved_message:
-        logging.info("Job %s agent message: %s", job_id, resolved_message)
-        _console(
-            "Job {} message to user: {}".format(job_id, resolved_message)
-        )
-
-    if not _post_result(session, result_payload):
-        logging.error("Failed to deliver result for job %s", job_id)
-        _console("Job {} result delivery failed after retries.".format(job_id))
-
-
-def main() -> None:
-    # エージェントのエントリーポイント。モデル読み込みとポーリングループを開始
-    logging.basicConfig(
-        level=logging.INFO,
-        format="[%(asctime)s] %(levelname)s %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
-
-    session = requests.Session()
-    device_id = _load_device_id()
-    _console("Device ID resolved: {}".format(device_id))
-    _start_mono_eye_daemon_if_possible()
-    llm = _create_llm()
-    _console(
-        "Model ready (path='{}', threads={}, context={}).".format(
-            MODEL_PATH,
-            LLAMA_THREADS,
-            LLAMA_CONTEXT,
-        )
-    )
-
-    if AUTO_APPROVE:
-        logging.info(
-            "Auto-approval enabled; device '%s' will register itself with capabilities.",
-            device_id,
-        )
-        _console(
-            "Auto-approval ON. Registering '{}' directly with full capabilities.".format(
-                device_id
-            )
-        )
-    else:
-        if AUTO_REGISTRATION_REQUESTED:
-            logging.warning(
-                "IOT_AGENT_AUTO_REGISTER is deprecated. Manual approval is now required;"
-                " the device will not auto-register with the server."
-            )
-            _console(
-                "AUTO_REGISTER flag detected but manual approval workflow is in effect."
-            )
-        logging.info(
-            "Manual registration is required. Add device '%s' from the dashboard to approve it.",
-            device_id,
-        )
-        _console(
-            "Manual approval required on dashboard for device '{}'.".format(device_id)
-        )
-
-    manual_approval_required_logged = False
-    while True:
-        registered, manual_required = _register_device(session, device_id)
-        if registered:
-            break
-
-        if manual_required and not manual_approval_required_logged:
-            logging.warning(
-                "Waiting for manual approval of device '%s'. Once approved, registration will complete automatically.",
-                device_id,
-            )
-            manual_approval_required_logged = True
-            _console(
-                "Waiting for manual approval of device '{}' on server.".format(device_id)
-            )
-
-        logging.error("Unable to register device. Retrying in 30 seconds...")
-        _console(
-            "Device '{}' registration attempt failed. Retrying soon...".format(device_id)
-        )
-        time.sleep(30 if manual_required else 10)
-
-    logging.info("Starting polling loop as %s", device_id)
-    _console("Entering polling loop as device '{}'.".format(device_id))
-
-    try:
-        while True:
-            job = _poll_next_job(session, device_id)
-            if job:
-                try:
-                    _process_job(session, llm, device_id, job)
-                except Exception as exc:
-                    logging.exception("Unexpected error while processing job")
-                    job_id = _safe_job_id(job)
-                    command = job.get("command") if isinstance(job, dict) else {}
-                    action_name = None
-                    if isinstance(command, dict):
-                        action_name = command.get("name")
-                        if isinstance(action_name, str):
-                            action_name = action_name.strip() or None
-                    error_text = str(exc)
-                    if job_id:
-                        try:
-                            payload = _build_result_payload(
-                                device_id=device_id,
-                                job_id=job_id,
-                                ok=False,
-                                action=action_name,
-                                parameters=None,
-                                message=error_text,
-                                result=None,
-                                error=error_text,
-                            )
-                            _post_result(session, payload)
-                        except Exception:
-                            logging.exception("Failed to report unexpected error for job %s", job_id)
-                    _console(
-                        "Job {} processing failed unexpectedly: {}".format(
-                            job_id or "<unknown>",
-                            error_text,
-                        )
-                    )
-            else:
-                time.sleep(POLL_INTERVAL)
-    except KeyboardInterrupt:
-        logging.info("Stopping agent")
-        _console("Keyboard interrupt received. Stopping agent loop.")
-
-
-if __name__ == "__main__":
-    main()
+__all__ = [
+    "ACTION_CATALOG",
+    "CAPABILITIES",
+    "SUPPORTED_ACTIONS",
+    "_ActionExecutionContext",
+    "_execute_action",
+    "_get_or_start_oled_manager",
+    "_normalize_digits",
+    "_start_mono_eye_daemon_if_possible",
+]
