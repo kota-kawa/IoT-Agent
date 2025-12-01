@@ -97,7 +97,7 @@ def init_device_once() -> sh1107:
     log_info(f"Initializing OLED on /dev/i2c-{I2C_BUS} addr=0x{I2C_ADDR:02X}")
     serial = create_serial()
 
-    dev = sh1107(serial, width=WIDTH, height=HEIGHT)
+    dev = sh1107(serial, width=WIDTH, height=HEIGHT, rotate=1)
 
     # 終了時に自動で display OFF されて消えるのが嫌なら cleanup を上書き
     def _noop_cleanup(self) -> None:  # type: ignore[override]
