@@ -18,6 +18,7 @@ AVAILABLE_MODELS: List[Dict[str, str]] = [
 
     # Gemini (Google)
     {"provider": "gemini", "model": "gemini-2.5-flash", "label": "Gemini 2.5 Flash"},
+    {"provider": "gemini", "model": "gemini-2.5-flash-lite", "label": "Gemini 2.5 Flash Lite"},
     {"provider": "gemini", "model": "gemini-2.5-pro", "label": "Gemini 2.5 Pro"},
     {"provider": "gemini", "model": "gemini-3-pro-preview", "label": "Gemini 3 Pro Preview"},
 
