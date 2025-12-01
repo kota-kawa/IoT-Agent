@@ -75,7 +75,7 @@ SUPPORTED_ACTIONS: Dict[str, Dict[str, Any]] = {
         ],
     },
     "show_text_on_oled": {
-        "description": "Display text on the SSD1306 OLED screen (128x64).",
+        "description": "Display text on the SH1107 OLED screen.",
         "params": [
             {
                 "name": "text",
