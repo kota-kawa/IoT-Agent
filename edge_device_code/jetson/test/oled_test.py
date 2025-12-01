@@ -21,7 +21,7 @@ from typing import Optional
 
 from luma.core.interface.serial import i2c
 from luma.core.render import canvas
-from luma.oled.device import ssd1306
+from luma.oled.device import sh1107
 from luma.core.error import DeviceNotFoundError
 
 # ==== 設定 ====
@@ -32,7 +32,7 @@ I2C_BUS = 7
 I2C_ADDR = 0x3C
 
 WIDTH = 128
-HEIGHT = 64
+HEIGHT = 128
 
 # 負荷をかなり落として 2 FPS
 FPS = 2.0
@@ -90,14 +90,14 @@ def create_serial() -> i2c:
     return i2c(**kwargs)
 
 
-def init_device_once() -> ssd1306:
+def init_device_once() -> sh1107:
     """
     単発の初期化。失敗したら例外をそのまま投げる。
     """
     log_info(f"Initializing OLED on /dev/i2c-{I2C_BUS} addr=0x{I2C_ADDR:02X}")
     serial = create_serial()
 
-    dev = ssd1306(serial, width=WIDTH, height=HEIGHT)
+    dev = sh1107(serial, width=WIDTH, height=HEIGHT, rotate=1)
 
     # 終了時に自動で display OFF されて消えるのが嫌なら cleanup を上書き
     def _noop_cleanup(self) -> None:  # type: ignore[override]
@@ -110,7 +110,7 @@ def init_device_once() -> ssd1306:
     return dev
 
 
-def init_device_with_retry() -> ssd1306:
+def init_device_with_retry() -> sh1107:
     """
     初期起動時用のリトライ付き初期化。
     OSError / DeviceNotFoundError の場合に数回リトライして最後の例外を投げる。
@@ -141,7 +141,7 @@ def init_device_with_retry() -> ssd1306:
     raise RuntimeError("OLED init failed for unknown reason")
 
 
-def try_recover_device(device: Optional[ssd1306], frame_no: int) -> Optional[ssd1306]:
+def try_recover_device(device: Optional[sh1107], frame_no: int) -> Optional[sh1107]:
     """
     フレーム送信中に I2C エラーが多発した場合に呼び出される再初期化処理。
     ここで例外を投げず、最終的に None を返すことで上位ループは「デバイス喪失」として扱う。
@@ -184,7 +184,7 @@ def try_recover_device(device: Optional[ssd1306], frame_no: int) -> Optional[ssd
 
 # ==== 描画 ====
 
-def draw_frame(device: ssd1306, frame_no: int) -> None:
+def draw_frame(device: sh1107, frame_no: int) -> None:
     """
     I2C 負荷を極力減らした、シンプルなアニメーション。
     - 画面全体の枠
@@ -221,7 +221,7 @@ def main() -> None:
         flush=True,
     )
 
-    device: Optional[ssd1306] = None
+    device: Optional[sh1107] = None
     error_streak = 0
     frame_no = 0
 
