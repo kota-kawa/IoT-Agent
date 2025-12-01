@@ -36,11 +36,6 @@ AUTO_APPROVE = (_AUTO_APPROVE_RAW or "").strip().lower() in {
     "on",
 }
 
-OPEN_WEATHER_API_KEY = os.getenv("OPEN_WEATHER_API_KEY")
-OPEN_WEATHER_BASE_URL = os.getenv(
-    "OPEN_WEATHER_BASE_URL", "https://api.openweathermap.org/data/2.5/weather"
-)
-
 DEVICE_ID_ENV = os.getenv("IOT_AGENT_DEVICE_ID")
 DEVICE_ID_PATH = Path(
     os.getenv(
@@ -134,8 +129,6 @@ __all__ = [
     "LOCATION",
     "MODEL_PATH",
     "NEXT_PATH",
-    "OPEN_WEATHER_API_KEY",
-    "OPEN_WEATHER_BASE_URL",
     "POLL_INTERVAL",
     "REGISTER_PATH",
     "REQUEST_TIMEOUT",
