@@ -57,7 +57,7 @@ def blink_led(times: int = 5, interval_sec: float = 0.2):
 
 def led_pattern(pattern: str = "heartbeat"):
     """
-    オンボードLEDの発光パターン。pattern: heartbeat/fast/sos/beacon/double/pulse/strobe/wave/breathe/alert.
+    オンボードLEDの発光パターンを実行。
     """
     pattern = (pattern or "heartbeat").lower()
     dot = 150
@@ -842,7 +842,7 @@ def lcd_text(line1: str = "", line2: str = "", contrast_percent: int = CONTRAST_
 
 def lcd_face(mode: str = "blink_cycle", contrast_percent: int = CONTRAST_PERCENT_DEFAULT):
     """
-    LCDへ顔アニメーションを1サイクル表示。mode: blink_cycle/look/talk/smile_only/happy/sad/surprised/wink/sleepy/annoyed/grin。
+    LCDへ顔アニメーションを1サイクル表示。
     """
     set_contrast_percent(contrast_percent)
     lcd = HD44780(LCD_RS, LCD_E, LCD_D4, LCD_D5, LCD_D6, LCD_D7, cols=LCD_COLS, rows=LCD_ROWS)
