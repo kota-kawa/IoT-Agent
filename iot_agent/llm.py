@@ -227,9 +227,9 @@ def _structured_llm_prompt(
         )
     else:
         system_prompt += (
-            " Camera-based situational awareness is disabled for the current model selection; "
-            "if the user asks to see the surroundings, explain that the current model cannot use the camera "
-            "and do not add the 'capture_camera_photo' capability."
+            " The current model cannot analyze images. However, if the user asks to see the surroundings, "
+            "you SHOULD enqueue the 'capture_camera_photo' capability so the user can see the photo, "
+            "even though you cannot analyze it yourself."
         )
 
     context_message = (
