@@ -36,9 +36,17 @@ except Exception:
 
 # ポーリングや登録関連の挙動を制御するパラメータ
 POLL_INTERVAL_SEC = 1  # 1秒間隔でサーバーをポーリング
-AUTO_REGISTER_ON_BOOT = False  # True にすると起動時に自動登録
+AUTO_REGISTER_ON_BOOT = True  # True にすると起動時に自動登録
+AUTO_APPROVE = True  # True なら登録時に approved フラグを付与
 CAPABILITY_SYNC_ENABLED = True  # 手動登録後でも機能一覧をサーバーへ同期する
 CAPABILITY_RESYNC_INTERVAL_SEC = 30  # 同期失敗時の再試行間隔（秒）
+
+try:
+    from secrets import AUTO_APPROVE as _AUTO_APPROVE  # type: ignore
+
+    AUTO_APPROVE = bool(_AUTO_APPROVE)
+except Exception:
+    pass
 
 USER_AGENT = "MicroPython-IoT-Edge-Agent/1.1"
 HTTP_BODY_PREVIEW_LEN = 512
@@ -60,6 +68,7 @@ __all__ = [
     "DEVICE_LOCATION",
     "POLL_INTERVAL_SEC",
     "AUTO_REGISTER_ON_BOOT",
+    "AUTO_APPROVE",
     "CAPABILITY_SYNC_ENABLED",
     "CAPABILITY_RESYNC_INTERVAL_SEC",
     "USER_AGENT",
