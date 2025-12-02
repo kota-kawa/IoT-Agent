@@ -385,9 +385,13 @@ def _execute_agent_device_command(
     if isinstance(raw_instruction, str) and raw_instruction.strip():
         english_instruction = raw_instruction.strip()
     else:
+        target_role = None
+        if isinstance(agent.meta, dict):
+            target_role = agent.meta.get("role")
+
         try:
             english_instruction = _call_llm_text(
-                client, _structured_agent_instruction_prompt(messages)
+                client, _structured_agent_instruction_prompt(messages, target_role=target_role)
             ).strip()
         except Exception as exc:  # pragma: no cover - network/SDK errors
             message = str(exc)
@@ -666,7 +670,9 @@ def _structured_multi_command_followup_prompt_with_images(
                     "text": (
                         "You are an assistant supporting IoT devices and cameras. "
                         "Provide a concise Japanese reply grounded in the attached photos. "
-                        "Describe only what is visible without speculation."
+                        "Describe only what is visible without speculation. "
+                        "Speak naturally to the user, avoiding mechanical logs, Job IDs, or raw error codes. "
+                        "If 'Suggested phrasing' is provided in the input, treat it as a raw log and rephrase it conversationally."
                     ),
                 }
             ],
@@ -731,6 +737,10 @@ def _structured_multi_command_followup_prompt(
     guidance = (
         "All queued device commands have now completed. Use the step information provided "
         "below to craft the final assistant reply in Japanese.\n"
+        "The provided 'Suggested phrasing' is a mechanical log; DO NOT output it directly. "
+        "Instead, explain the result naturally as if chatting with a human. "
+        "Summarize technical details. Do not show Job IDs, error codes (like [Errno 121]), "
+        "or raw JSON unless specifically asked. "
         "Write one concise paragraph per step, keep the steps in order, and separate "
         "paragraphs with a blank line.\n"
         "Clearly mention the device, what was attempted, and the outcome for each step.\n"
