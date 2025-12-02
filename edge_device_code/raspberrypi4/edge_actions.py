@@ -39,8 +39,14 @@ SUPPORTED_ACTIONS: Dict[str, Dict[str, Any]] = {
         "params": [],
     },
     "play_buzzer": {
-        "description": "Play tones on the passive buzzer wired to GPIO4.",
+        "description": "Play tones on the passive buzzer wired to GPIO4. Can play specific notes, sequences, or predefined melodies.",
         "params": [
+            {
+                "name": "melody",
+                "type": "string",
+                "required": False,
+                "description": "Name of a predefined melody to play (e.g., 'success', 'error', 'alert', 'startup', 'mario'). Overrides sequence/note if provided.",
+            },
             {
                 "name": "sequence",
                 "type": "array",
@@ -62,13 +68,31 @@ SUPPORTED_ACTIONS: Dict[str, Dict[str, Any]] = {
         ],
     },
     "operate_dc_motors": {
-        "description": "Activates the dual DC motors connected via the L293D driver to perform a predefined movement sequence (forward, then backward). This is used to verify motor functionality.",
+        "description": "Control the dual DC motors connected via the L293D driver. Supports direction, speed, and duration.",
         "params": [
+            {
+                "name": "command",
+                "type": "string",
+                "required": False,
+                "description": "Movement command: 'forward', 'backward', 'left', 'right', 'stop', or 'demo' (default).",
+            },
+            {
+                "name": "speed",
+                "type": "number",
+                "required": False,
+                "description": "Motor speed from 0.0 to 1.0 (default 1.0).",
+            },
+            {
+                "name": "duration",
+                "type": "number",
+                "required": False,
+                "description": "Duration in seconds to run the motors (default 5.0 for movements).",
+            },
             {
                 "name": "timeout",
                 "type": "number",
                 "required": False,
-                "description": "Optional timeout in seconds before the motor operation is stopped.",
+                "description": "Overall timeout in seconds.",
             }
         ],
     },
@@ -97,7 +121,7 @@ SUPPORTED_ACTIONS: Dict[str, Dict[str, Any]] = {
                 "name": "motion",
                 "type": "string",
                 "required": False,
-                "description": "Mono-eye motion preset to apply temporarily (default, calm, alert, scout).",
+                "description": "Mono-eye motion preset: 'default', 'calm', 'alert', 'scout', 'sleeping', 'hyper', 'scanning'.",
             }
         ],
     },
@@ -202,8 +226,14 @@ SUPPORTED_ACTIONS: Dict[str, Dict[str, Any]] = {
         ],
     },
     "operate_led_pattern": {
-        "description": "Run a predefined light pattern (chase and blink sequence) on the three LEDs connected to GPIO pins. Useful for verifying LED circuits.",
+        "description": "Run a predefined light pattern on the three LEDs connected to GPIO pins.",
         "params": [
+            {
+                "name": "pattern",
+                "type": "string",
+                "required": False,
+                "description": "Pattern to run: 'chase', 'blink_all', 'all_on', 'random', 'breathing', 'police', or 'demo' (default).",
+            },
             {
                 "name": "cycles",
                 "type": "integer",
@@ -219,8 +249,14 @@ SUPPORTED_ACTIONS: Dict[str, Dict[str, Any]] = {
         ],
     },
     "control_dual_servos": {
-        "description": "Control two servo motors simultaneously in a coordinated inverse sweep pattern. Use this for requests involving two or both servos.",
+        "description": "Control two servo motors simultaneously.",
         "params": [
+            {
+                "name": "action",
+                "type": "string",
+                "required": False,
+                "description": "High-level action/gesture: 'nod', 'shake', 'happy', 'synced_sweep', or 'demo'.",
+            },
             {
                 "name": "command",
                 "type": "string",
@@ -499,7 +535,7 @@ def _oled_create_device() -> Any:
 def _oled_load_font() -> Any:
     from PIL import ImageFont
 
-    # Attempt to load a TrueType font at ~5x the default size (assuming default is ~10px, so 50px)
+    # Attempt to load a TrueType font (size 25)
     # Common locations for fonts on Raspberry Pi OS / Linux
     font_candidates = [
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
@@ -510,11 +546,11 @@ def _oled_load_font() -> Any:
 
     for font_path in font_candidates:
         try:
-            return ImageFont.truetype(font_path, 50)
+            return ImageFont.truetype(font_path, 25)
         except (OSError, ImportError):
             continue
 
-    logging.warning("Could not load any large TrueType fonts (size 50). Falling back to small default font.")
+    logging.warning("Could not load any TrueType fonts (size 25). Falling back to small default font.")
     return ImageFont.load_default()
 
 
@@ -875,6 +911,39 @@ _DEFAULT_BUZZER_SEQUENCE = [
     {"note": "C5", "duration": 1.0},
 ]
 
+_BUZZER_MELODIES: Dict[str, List[Dict[str, Any]]] = {
+    "success": [
+        {"note": "C5", "duration": 0.1},
+        {"note": "E5", "duration": 0.1},
+        {"note": "G5", "duration": 0.2},
+        {"note": "C6", "duration": 0.4},
+    ],
+    "error": [
+        {"note": "C4", "duration": 0.2},
+        {"note": "G3", "duration": 0.2},
+        {"note": "C3", "duration": 0.4},
+    ],
+    "alert": [
+        {"note": "A5", "duration": 0.1},
+        {"note": "A5", "duration": 0.1},
+        {"note": "A5", "duration": 0.1},
+    ],
+    "startup": [
+        {"note": "C5", "duration": 0.15},
+        {"note": "E5", "duration": 0.15},
+        {"note": "G5", "duration": 0.15},
+    ],
+    "mario": [
+         {"note": "E5", "duration": 0.1},
+         {"note": "E5", "duration": 0.1},
+         {"note": "E5", "duration": 0.1},
+         {"note": "C5", "duration": 0.1},
+         {"note": "E5", "duration": 0.1},
+         {"note": "G5", "duration": 0.2},
+         {"note": "G4", "duration": 0.2},
+    ]
+}
+
 
 def _parse_buzzer_duration(value: Any, default: float) -> float:
     if value is None:
@@ -910,6 +979,17 @@ def _normalize_buzzer_sequence(parameters: Any) -> List[Dict[str, Any]]:
 
     if not isinstance(parameters, dict):
         return _copy_default()
+
+    # Check for melody first
+    melody_name = parameters.get("melody")
+    if isinstance(melody_name, str) and melody_name.strip():
+        melody_key = melody_name.strip().lower()
+        if melody_key in _BUZZER_MELODIES:
+            return [
+                {"note": entry["note"], "duration": entry["duration"]}
+                for entry in _BUZZER_MELODIES[melody_key]
+            ]
+        # If unknown melody, fall through to sequence/note or default
 
     seq_value = parameters.get("sequence")
     if isinstance(seq_value, list):
@@ -1038,75 +1118,108 @@ def _run_led_demo(parameters: Any) -> Dict[str, Any]:
     context = _ActionExecutionContext(timeout)
 
     try:
-        from gpiozero import LED
+        from gpiozero import PWMLED
     except ImportError as exc:
         raise RuntimeError(
             "gpiozero is required to drive the LEDs. Install it on the Raspberry Pi."
         ) from exc
 
+    pattern = "demo"
     cycles = 2
-    if isinstance(parameters, dict) and "cycles" in parameters:
-        try:
-            cycles_value = int(parameters["cycles"])
-        except (TypeError, ValueError) as exc:
-            raise ValueError("cycles must be an integer (0 for continuous).") from exc
-        if cycles_value < 0:
-            raise ValueError("cycles must be zero or a positive integer.")
-        cycles = cycles_value
+    if isinstance(parameters, dict):
+        if "pattern" in parameters and isinstance(parameters["pattern"], str):
+            pattern = parameters["pattern"].strip().lower() or "demo"
+        
+        if "cycles" in parameters:
+            try:
+                cycles_value = int(parameters["cycles"])
+            except (TypeError, ValueError) as exc:
+                raise ValueError("cycles must be an integer (0 for continuous).") from exc
+            if cycles_value < 0:
+                raise ValueError("cycles must be zero or a positive integer.")
+            cycles = cycles_value
+        elif pattern != "demo":
+            # Default to more cycles for specific patterns if not specified
+            cycles = 10 if pattern in ("random", "police", "blink_all", "chase") else 3
 
-    led1 = LED(_LED_PINS["led1"])
-    led2 = LED(_LED_PINS["led2"])
-    led3 = LED(_LED_PINS["led3"])
+    led1 = PWMLED(_LED_PINS["led1"])
+    led2 = PWMLED(_LED_PINS["led2"])
+    led3 = PWMLED(_LED_PINS["led3"])
+    leds = [led1, led2, led3]
+
+    def _clear():
+        for led in leds:
+            led.off()
 
     def chase(delay: float = 0.15) -> bool:
-        led1.off()
-        led2.off()
-        led3.off()
-        if not context.sleep(delay):
-            return False
-        led1.on()
-        if not context.sleep(delay):
-            return False
-        led1.off()
-        led2.on()
-        if not context.sleep(delay):
-            return False
-        led2.off()
-        led3.on()
-        if not context.sleep(delay):
-            return False
-        led3.off()
-        return not context.timed_out
+        _clear()
+        for led in leds:
+            led.on()
+            if not context.sleep(delay):
+                return False
+            led.off()
+        return True
 
     def all_on(delay: float = 0.4) -> bool:
+        for led in leds:
+            led.on()
+        if not context.sleep(delay):
+            return False
+        _clear()
+        return not context.timed_out and context.sleep(delay)
+
+    def blink_all(delay: float = 0.07) -> bool:
+        for led in leds:
+            led.on()
+        if not context.sleep(delay):
+            return False
+        _clear()
+        return not context.timed_out and context.sleep(delay)
+
+    def random_pattern(delay: float = 0.1) -> bool:
+        for led in leds:
+            led.value = random.choice([0, 1])
+        if not context.sleep(delay):
+            return False
+        _clear()
+        return True
+
+    def police(delay: float = 0.2) -> bool:
+        # LED1 & 3 vs LED2
         led1.on()
-        led2.on()
+        led2.off()
         led3.on()
         if not context.sleep(delay):
             return False
         led1.off()
-        led2.off()
+        led2.on()
         led3.off()
         return not context.timed_out and context.sleep(delay)
 
-    def blink_all(delay: float = 0.07, times: int = 8) -> bool:
-        for _ in range(times):
-            led1.on()
-            led2.on()
-            led3.on()
-            if not context.sleep(delay):
+    def breathing(duration: float = 2.0) -> bool:
+        steps = 20
+        step_delay = duration / (steps * 2)
+        # Up
+        for i in range(steps + 1):
+            val = (i / steps) ** 2  # quadratic for better perception
+            for led in leds:
+                led.value = val
+            if not context.sleep(step_delay):
                 return False
-            led1.off()
-            led2.off()
-            led3.off()
-            if not context.sleep(delay):
+        # Down
+        for i in range(steps, -1, -1):
+            val = (i / steps) ** 2
+            for led in leds:
+                led.value = val
+            if not context.sleep(step_delay):
                 return False
         return True
 
     executed_cycles = 0
     context.log(
-        "LED demo start",
+        "LED action start",
         pins=_LED_PINS,
+        pattern=pattern,
         cycles=cycles if cycles > 0 else "until timeout",
         timeout_seconds=timeout,
     )
@@ -1116,36 +1229,45 @@ def _run_led_demo(parameters: Any) -> Dict[str, Any]:
             if cycles > 0 and executed_cycles >= cycles:
                 break
 
-            for _ in range(4):
-                if not chase():
-                    break
-            if context.timed_out:
-                break
-
-            for _ in range(3):
-                if not all_on():
-                    break
-            if context.timed_out:
-                break
-
-            if not blink_all():
+            success = True
+            if pattern == "chase":
+                success = chase()
+            elif pattern == "all_on":
+                success = all_on()
+            elif pattern == "blink_all":
+                success = blink_all()
+            elif pattern == "random":
+                success = random_pattern()
+            elif pattern == "police":
+                success = police()
+            elif pattern == "breathing":
+                success = breathing()
+            else: # demo
+                for _ in range(4):
+                    if not chase(): break
+                if context.timed_out: break
+                for _ in range(3):
+                    if not all_on(): break
+                if context.timed_out: break
+                for _ in range(8):
+                    if not blink_all(): break
+            
+            if not success or context.timed_out:
                 break
 
             executed_cycles += 1
     finally:
-        led1.off()
-        led2.off()
-        led3.off()
-        led1.close()
-        led2.close()
-        led3.close()
-        context.log("LED demo finished", cycles_executed=executed_cycles, timed_out=context.timed_out)
+        _clear()
+        for led in leds:
+            led.close()
+        context.log("LED action finished", cycles_executed=executed_cycles, timed_out=context.timed_out)
 
     return {
         "events": context.events,
         "timed_out": context.timed_out,
         "duration_seconds": context.elapsed(),
         "cycles_executed": executed_cycles,
+        "pattern": pattern,
         "pins": _LED_PINS,
     }
 
@@ -1154,8 +1276,28 @@ def _run_motor_test(parameters: Any) -> Dict[str, Any]:
     timeout = _parse_timeout_parameter(parameters, _DEFAULT_MOTOR_TEST_TIMEOUT)
     context = _ActionExecutionContext(timeout)
 
+    command = "demo"
+    speed = 1.0
+    duration = 5.0
+
+    if isinstance(parameters, dict):
+        if "command" in parameters and isinstance(parameters["command"], str):
+            command = parameters["command"].strip().lower() or "demo"
+        if "speed" in parameters:
+            try:
+                speed = float(parameters["speed"])
+                speed = max(0.0, min(1.0, speed))
+            except (ValueError, TypeError):
+                pass
+        if "duration" in parameters:
+            try:
+                duration = float(parameters["duration"])
+                duration = max(0.1, duration)
+            except (ValueError, TypeError):
+                pass
+
     try:
-        from gpiozero import OutputDevice
+        from gpiozero import OutputDevice, PWMOutputDevice
     except ImportError as exc:
         raise RuntimeError(
             "gpiozero is required to control the motors. Install it on the Raspberry Pi."
@@ -1166,72 +1308,87 @@ def _run_motor_test(parameters: Any) -> Dict[str, Any]:
 
     context.log("Initializing L293D motor outputs", motor1=motor1, motor2=motor2)
 
-    en1 = OutputDevice(motor1["EN"], active_high=True, initial_value=True)
-    en2 = OutputDevice(motor2["EN"], active_high=True, initial_value=True)
+    # EN pins as PWM for speed control
+    en1 = PWMOutputDevice(motor1["EN"], active_high=True, initial_value=0)
+    en2 = PWMOutputDevice(motor2["EN"], active_high=True, initial_value=0)
     in1_1 = OutputDevice(motor1["IN1"])
     in1_2 = OutputDevice(motor1["IN2"])
     in2_1 = OutputDevice(motor2["IN1"])
     in2_2 = OutputDevice(motor2["IN2"])
 
-    def forward() -> None:
-        in1_1.on()
-        in1_2.off()
-        in2_1.on()
-        in2_2.off()
+    def set_motor(en, in1, in2, val):
+        # val: -1.0 (full back) to 1.0 (full fwd)
+        duty = abs(val)
+        en.value = duty
+        if val > 0:
+            in1.on()
+            in2.off()
+        elif val < 0:
+            in1.off()
+            in2.on()
+        else:
+            # Stop/Coast
+            en.off()
+            in1.off()
+            in2.off()
 
-    def backward() -> None:
-        in1_1.off()
-        in1_2.on()
-        in2_1.off()
-        in2_2.on()
-
-    def coast() -> None:
-        en1.off()
-        en2.off()
-        context.log("Coasting motors (EN pins low)")
-        context.sleep(2.0)
-        en1.on()
-        en2.on()
+    def move(left_val, right_val):
+        set_motor(en1, in1_1, in1_2, left_val)
+        set_motor(en2, in2_1, in2_2, right_val)
 
     try:
-        context.log("FORWARD for 5 seconds")
-        forward()
-        if not context.sleep(5.0):
-            context.log("Timeout reached while running forward motion")
-            return {
-                "events": context.events,
-                "timed_out": True,
-                "duration_seconds": context.elapsed(),
-                "motor_pins": {"motor1": motor1, "motor2": motor2},
-            }
+        if command == "demo":
+            context.log("Running motor demo sequence")
+            context.log("FORWARD 5s")
+            move(1.0, 1.0)
+            if not context.sleep(5.0):
+                return {"events": context.events, "timed_out": True}
+            
+            context.log("COAST 2s")
+            move(0, 0)
+            if not context.sleep(2.0):
+                return {"events": context.events, "timed_out": True}
+            
+            context.log("BACKWARD 5s")
+            move(-1.0, -1.0)
+            if not context.sleep(5.0):
+                return {"events": context.events, "timed_out": True}
+        
+        elif command == "forward":
+            context.log(f"FORWARD speed={speed} duration={duration}s")
+            move(speed, speed)
+            context.sleep(duration)
+        
+        elif command == "backward":
+            context.log(f"BACKWARD speed={speed} duration={duration}s")
+            move(-speed, -speed)
+            context.sleep(duration)
 
-        context.log("COAST for 2 seconds")
-        coast()
-        if context.timed_out:
-            context.log("Timeout reached during coasting phase")
-            return {
-                "events": context.events,
-                "timed_out": True,
-                "duration_seconds": context.elapsed(),
-                "motor_pins": {"motor1": motor1, "motor2": motor2},
-            }
+        elif command == "left":
+            # Turn left: Left motor back, Right motor fwd
+            context.log(f"LEFT speed={speed} duration={duration}s")
+            move(-speed, speed)
+            context.sleep(duration)
 
-        context.log("BACKWARD for 5 seconds")
-        backward()
-        if not context.sleep(5.0):
-            context.log("Timeout reached while running backward motion")
-            return {
-                "events": context.events,
-                "timed_out": True,
-                "duration_seconds": context.elapsed(),
-                "motor_pins": {"motor1": motor1, "motor2": motor2},
-            }
+        elif command == "right":
+            # Turn right: Left motor fwd, Right motor back
+            context.log(f"RIGHT speed={speed} duration={duration}s")
+            move(speed, -speed)
+            context.sleep(duration)
+            
+        elif command == "stop":
+            context.log("STOP")
+            move(0, 0)
+            
+        else:
+            context.log(f"Unknown command '{command}', stopping.")
+            move(0, 0)
 
-        context.log("Motor diagnostic completed successfully")
         return {
             "events": context.events,
-            "timed_out": False,
+            "timed_out": context.timed_out,
             "duration_seconds": context.elapsed(),
+            "command": command,
             "motor_pins": {"motor1": motor1, "motor2": motor2},
         }
     finally:
@@ -1241,6 +1398,12 @@ def _run_motor_test(parameters: Any) -> Dict[str, Any]:
         in1_2.off()
         in2_1.off()
         in2_2.off()
+        en1.close()
+        en2.close()
+        in1_1.close()
+        in1_2.close()
+        in2_1.close()
+        in2_2.close()
 
 
 def _run_oled_robot_demo(parameters: Any) -> Dict[str, Any]:
@@ -1450,6 +1613,30 @@ _OLED_MOTION_PRESETS: Dict[str, Dict[str, float]] = {
         "bob_speed": 0.9,
         "bob_amplitude": 4.0,
         "eye_scale": 3.0,
+    },
+    "sleeping": {
+        "speed": 0.15,
+        "sweep": 0.15,
+        "beam_speed": 10.0,
+        "bob_speed": 0.2,
+        "bob_amplitude": 1.0,
+        "eye_scale": 2.2,
+    },
+    "hyper": {
+        "speed": 3.0,
+        "sweep": 0.85,
+        "beam_speed": 200.0,
+        "bob_speed": 4.0,
+        "bob_amplitude": 8.0,
+        "eye_scale": 3.5,
+    },
+    "scanning": {
+        "speed": 0.6,
+        "sweep": 0.92,
+        "beam_speed": 40.0,
+        "bob_speed": 0.1,
+        "bob_amplitude": 0.0,
+        "eye_scale": 2.8,
     },
 }
 
@@ -1847,6 +2034,7 @@ def _run_dual_servo_demo(parameters: Any) -> Dict[str, Any]:
     context = _ActionExecutionContext(timeout)
 
     command = "demo"
+    action = "demo"
     cycles = 3
     step = 3.0
     delay = 0.02
@@ -1858,6 +2046,9 @@ def _run_dual_servo_demo(parameters: Any) -> Dict[str, Any]:
     if isinstance(parameters, dict):
         if "command" in parameters and parameters["command"] is not None:
             command = str(parameters["command"]).strip().lower()
+        
+        if "action" in parameters and isinstance(parameters["action"], str):
+            action = parameters["action"].strip().lower() or "demo"
 
         if "cycles" in parameters:
             try:
@@ -1867,6 +2058,9 @@ def _run_dual_servo_demo(parameters: Any) -> Dict[str, Any]:
             if cycles_value < 0:
                 raise ValueError("cycles must be zero or a positive integer.")
             cycles = cycles_value
+        elif action in ("nod", "shake", "happy"):
+            # Default cycles for gestures
+            cycles = 5
 
         if "step" in parameters and parameters["step"] is not None:
             try:
@@ -1883,6 +2077,8 @@ def _run_dual_servo_demo(parameters: Any) -> Dict[str, Any]:
                 raise ValueError("delay must be a number.") from exc
             if delay <= 0:
                 raise ValueError("delay must be greater than zero.")
+        elif action in ("nod", "shake", "happy"):
+             delay = 0.01 # Faster for gestures
 
         if "hold" in parameters and parameters["hold"] is not None:
             try:
@@ -1978,6 +2174,7 @@ def _run_dual_servo_demo(parameters: Any) -> Dict[str, Any]:
         "Dual-servo routine start",
         pins=_DUAL_SERVO_PINS,
         command=command,
+        action=action,
         cycles=cycles if cycles > 0 else "until timeout",
         step=step,
         delay_seconds=delay,
@@ -1986,6 +2183,7 @@ def _run_dual_servo_demo(parameters: Any) -> Dict[str, Any]:
 
     executed_cycles = 0
     try:
+        # Center first
         servo1.angle = 90.0
         servo2.angle = 90.0
         context.log("Servos centered", angle1=90.0, angle2=90.0)
@@ -2017,44 +2215,89 @@ def _run_dual_servo_demo(parameters: Any) -> Dict[str, Any]:
             if hold > 0 and not context.sleep(hold):
                 context.log("Timed out while holding off state")
 
-        else:
+        else: # command == "demo"
             while not context.timed_out:
                 if cycles > 0 and executed_cycles >= cycles:
                     break
+                
+                if action == "nod":
+                    # Nod: 70 -> 110 -> 70 (both)
+                    a = 70.0
+                    while a <= 110.0:
+                        servo1.angle = a
+                        servo2.angle = a # Synced
+                        if not context.sleep(delay): break
+                        a += step
+                    a = 110.0
+                    while a >= 70.0:
+                        servo1.angle = a
+                        servo2.angle = a
+                        if not context.sleep(delay): break
+                        a -= step
 
-                angle = 0.0
-                while angle <= _DUAL_SERVO_MAX_ANGLE + 1e-9:
-                    servo1.angle = angle
-                    servo2.angle = _DUAL_SERVO_MAX_ANGLE - angle
-                    if int(angle) % 15 == 0 or angle in (
-                        _DUAL_SERVO_MIN_ANGLE,
-                        _DUAL_SERVO_MAX_ANGLE,
-                    ):
-                        context.log(
-                            "Sweep up",
-                            angle1=round(angle, 1),
-                            angle2=round(_DUAL_SERVO_MAX_ANGLE - angle, 1),
-                        )
-                    if not context.sleep(delay):
-                        break
-                    angle += step
+                elif action == "shake":
+                    # Shake: S1 70->110, S2 110->70 (Opposite)
+                    a = 70.0
+                    while a <= 110.0:
+                        servo1.angle = a
+                        servo2.angle = 180.0 - a 
+                        if not context.sleep(delay): break
+                        a += step
+                    a = 110.0
+                    while a >= 70.0:
+                        servo1.angle = a
+                        servo2.angle = 180.0 - a
+                        if not context.sleep(delay): break
+                        a -= step
+                        
+                elif action == "happy":
+                    # Happy: fast small wiggles around 90
+                    # 80 -> 100 -> 80
+                    a = 80.0
+                    while a <= 100.0:
+                        servo1.angle = a
+                        servo2.angle = 180.0 - a
+                        if not context.sleep(0.005): break
+                        a += 5
+                    a = 100.0
+                    while a >= 80.0:
+                        servo1.angle = a
+                        servo2.angle = 180.0 - a
+                        if not context.sleep(0.005): break
+                        a -= 5
 
-                angle = _DUAL_SERVO_MAX_ANGLE
-                while angle >= _DUAL_SERVO_MIN_ANGLE - 1e-9 and not context.timed_out:
-                    servo1.angle = angle
-                    servo2.angle = _DUAL_SERVO_MAX_ANGLE - angle
-                    if int(angle) % 15 == 0 or angle in (
-                        _DUAL_SERVO_MIN_ANGLE,
-                        _DUAL_SERVO_MAX_ANGLE,
-                    ):
-                        context.log(
-                            "Sweep down",
-                            angle1=round(angle, 1),
-                            angle2=round(_DUAL_SERVO_MAX_ANGLE - angle, 1),
-                        )
-                    if not context.sleep(delay):
-                        break
-                    angle -= step
+                elif action == "synced_sweep":
+                    # Synced 0->180->0
+                    angle = 0.0
+                    while angle <= _DUAL_SERVO_MAX_ANGLE + 1e-9:
+                        servo1.angle = angle
+                        servo2.angle = angle
+                        if not context.sleep(delay): break
+                        angle += step
+                    angle = _DUAL_SERVO_MAX_ANGLE
+                    while angle >= _DUAL_SERVO_MIN_ANGLE - 1e-9:
+                        servo1.angle = angle
+                        servo2.angle = angle
+                        if not context.sleep(delay): break
+                        angle -= step
+
+                else: # "demo" default (inverse sweep)
+                    angle = 0.0
+                    while angle <= _DUAL_SERVO_MAX_ANGLE + 1e-9:
+                        servo1.angle = angle
+                        servo2.angle = _DUAL_SERVO_MAX_ANGLE - angle
+                        if int(angle) % 30 == 0:
+                            context.log("Sweep up", a1=round(angle), a2=round(servo2.angle))
+                        if not context.sleep(delay): break
+                        angle += step
+                    angle = _DUAL_SERVO_MAX_ANGLE
+                    while angle >= _DUAL_SERVO_MIN_ANGLE - 1e-9:
+                        servo1.angle = angle
+                        servo2.angle = _DUAL_SERVO_MAX_ANGLE - angle
+                        if int(angle) % 30 == 0:
+                            context.log("Sweep down", a1=round(angle), a2=round(servo2.angle))
+                        if not context.sleep(delay): break
+                        angle -= step
 
                 if context.timed_out:
                     break
@@ -2070,6 +2313,7 @@ def _run_dual_servo_demo(parameters: Any) -> Dict[str, Any]:
             cycles_executed=executed_cycles,
             timed_out=context.timed_out,
             command=command,
+            action=action
         )
 
     return {
@@ -2082,6 +2326,7 @@ def _run_dual_servo_demo(parameters: Any) -> Dict[str, Any]:
         "delay": delay,
         "pigpio": use_pigpio,
         "command": command,
+        "action": action,
         "angle1": angle1,
         "angle2": angle2,
         "hold": hold,
