@@ -143,6 +143,98 @@ def _content_to_text(content: Any) -> str:
     return str(content).strip()
 
 
+def _messages_include_images(messages: Any) -> bool:
+    """Return True when the message payload already includes image content."""
+
+    if not isinstance(messages, list):
+        return False
+
+    for msg in messages:
+        if not isinstance(msg, dict):
+            continue
+        content = msg.get("content")
+        parts = content if isinstance(content, list) else []
+        for part in parts:
+            if isinstance(part, dict) and part.get("type") in {"image_url", "input_image"}:
+                return True
+    return False
+
+
+def _convert_messages_to_responses_input(messages: Any) -> List[Dict[str, Any]]:
+    """Convert Chat Completions style messages to Responses API input format."""
+
+    converted: List[Dict[str, Any]] = []
+    if not isinstance(messages, list):
+        return converted
+
+    for msg in messages:
+        if not isinstance(msg, dict):
+            continue
+        role = msg.get("role") if isinstance(msg.get("role"), str) else "user"
+        content = msg.get("content")
+        parts: List[Dict[str, Any]] = []
+
+        if isinstance(content, str):
+            parts.append({"type": "input_text", "text": content})
+        elif isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict):
+                    part_type = part.get("type")
+                    if part_type in {"text", "input_text"}:
+                        text_val = part.get("text")
+                        if isinstance(text_val, str) and text_val.strip():
+                            parts.append({"type": "input_text", "text": text_val})
+                    elif part_type in {"image_url", "input_image"}:
+                        image_url = part.get("image_url")
+                        url = None
+                        detail = None
+                        if isinstance(image_url, dict):
+                            url = image_url.get("url")
+                            detail = image_url.get("detail")
+                        elif isinstance(image_url, str):
+                            url = image_url
+                        if isinstance(url, str) and url.strip():
+                            image_part: Dict[str, Any] = {
+                                "type": "input_image",
+                                "image_url": {"url": url.strip()},
+                            }
+                            if isinstance(detail, str) and detail.strip():
+                                image_part["image_url"]["detail"] = detail.strip()
+                            parts.append(image_part)
+                elif isinstance(part, str) and part.strip():
+                    parts.append({"type": "input_text", "text": part})
+
+        if not parts:
+            continue
+        converted.append({"role": role, "content": parts})
+
+    return converted
+
+
+def _response_output_to_text(response: Any) -> str:
+    """Extract plain text from OpenAI Responses API output."""
+
+    if response is None:
+        return ""
+
+    output_text = getattr(response, "output_text", None)
+    if isinstance(output_text, str) and output_text.strip():
+        return output_text.strip()
+
+    output = getattr(response, "output", None)
+    if output:
+        try:
+            first = output[0]
+            content = getattr(first, "content", None)
+            text_candidate = _content_to_text(content)
+            if text_candidate:
+                return text_candidate
+        except Exception:
+            pass
+
+    return ""
+
+
 def _current_datetime_line() -> str:
     """Return the timestamp string used in system prompts."""
     return datetime.now().strftime("現在の日時ー%Y年%m月%d日%H時%M分")
@@ -705,6 +797,27 @@ def _call_llm_text(client: UnifiedClient, payload: Dict[str, Any]) -> str:
     
     if not model or not messages:
         raise ValueError("Invalid payload for _call_llm_text")
+
+    provider = getattr(client, "provider", "")
+    responses_client = getattr(getattr(client, "client", None), "responses", None)
+    if provider_supports_vision(provider) and responses_client and _messages_include_images(messages):
+        try:
+            responses_input = _convert_messages_to_responses_input(messages)
+            if responses_input:
+                response = responses_client.create(model=model, input=responses_input)
+                text = _response_output_to_text(response)
+                if text:
+                    return text.strip()
+        except Exception as e:  # pragma: no cover - network/SDK errors
+            print(f"[{datetime.now()}] Responses API Text Error: {str(e)}")
+            if hasattr(e, "response") and e.response:
+                try:
+                    status_code = e.response.status_code
+                except Exception:
+                    status_code = None
+                if status_code:
+                    print(f"HTTP Status: {status_code}")
+            traceback.print_exc()
 
     try:
         response = client.chat.completions.create(model=model, messages=messages)
