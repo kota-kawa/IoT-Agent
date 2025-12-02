@@ -114,7 +114,42 @@ class UnifiedClient:
             if msg.get("role") == "system":
                 system_prompt += msg.get("content", "") + "\n"
             else:
-                filtered_messages.append(msg)
+                # Anthropic 用にメッセージコンテンツを変換
+                content = msg.get("content")
+                if isinstance(content, list):
+                    new_content = []
+                    for part in content:
+                        if isinstance(part, dict):
+                            if part.get("type") == "image_url":
+                                # OpenAI format: {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,..."}}
+                                # Anthropic format: {"type": "image", "source": {"type": "base64", "media_type": "...", "data": "..."}}
+                                image_url = part.get("image_url", {}).get("url", "")
+                                if image_url.startswith("data:"):
+                                    try:
+                                        header, data = image_url.split(",", 1)
+                                        # header example: "data:image/jpeg;base64"
+                                        media_type = header.split(":")[1].split(";")[0]
+                                        new_content.append({
+                                            "type": "image",
+                                            "source": {
+                                                "type": "base64",
+                                                "media_type": media_type,
+                                                "data": data
+                                            }
+                                        })
+                                    except (ValueError, IndexError):
+                                        # Fallback or skip invalid data URIs
+                                        pass
+                                else:
+                                    # Anthropic doesn't support remote URLs easily in this flow, skip or warn
+                                    pass
+                            else:
+                                new_content.append(part)
+                        else:
+                            new_content.append(part)
+                    filtered_messages.append({"role": msg.get("role"), "content": new_content})
+                else:
+                    filtered_messages.append(msg)
 
         # Anthropic requires max_tokens
         max_tokens = kwargs.get("max_tokens", 4096)

@@ -835,14 +835,29 @@ function updateChatControls(){
 }
 
 // 役割（ユーザー/アシスタント）に応じた吹き出しをログへ追加
-function pushMessage(role, text){
+function pushMessage(role, text, extras = {}){
   chatHistory.push({ role, content: text });
   const item = document.createElement("div");
   item.className = `message message--${role}`;
+  
+  let imagesHtml = "";
+  if(extras.images && Array.isArray(extras.images)){
+    imagesHtml = `<div class="message__images">`;
+    extras.images.forEach(img => {
+      if(img.data_url){
+        imagesHtml += `<img src="${img.data_url}" alt="${escapeHtml(img.label || 'Captured Image')}" class="message__image" />`;
+      }
+    });
+    imagesHtml += `</div>`;
+  }
+
   item.innerHTML = `
     <div class="message__avatar">${role === "user" ? "👤" : "🤖"}</div>
     <div>
-      <div class="message__bubble">${escapeHtml(text)}</div>
+      <div class="message__bubble">
+        ${escapeHtml(text)}
+        ${imagesHtml}
+      </div>
       <div class="message__meta">${role === "user" ? "あなた" : "LLM"} ・ ${nowTime()}</div>
     </div>
   `;
@@ -895,7 +910,7 @@ async function requestAssistantResponse(){
   }
 
   const data = await res.json();
-  return typeof data.reply === "string" ? data.reply : "";
+  return data; // Return full data object
 }
 
 // チャット送信時の処理。入力テキストを履歴に追加し、API 応答を待機
@@ -912,10 +927,13 @@ formEl.addEventListener("submit", async (e) => {
   const localFallback = applyDeviceCommand(text);
 
   try{
-    const reply = await requestAssistantResponse();
+    const data = await requestAssistantResponse();
+    const reply = typeof data.reply === "string" ? data.reply : "";
+    const images = Array.isArray(data.images) ? data.images : [];
     const cleanReply = reply && reply.trim();
-    if(cleanReply){
-      pushMessage("assistant", cleanReply);
+    
+    if(cleanReply || images.length > 0){
+      pushMessage("assistant", cleanReply, { images });
     }else if(localFallback){
       pushMessage("assistant", localFallback);
     }else{

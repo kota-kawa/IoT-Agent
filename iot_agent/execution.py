@@ -284,11 +284,11 @@ def _execute_device_command_sequence(
     messages: List[Dict[str, str]],
     initial_reply: str,
     commands: List[Dict[str, Any]],
-) -> Tuple[str, int]:
+) -> Tuple[str, int, List[Dict[str, Any]]]:
     # 連続コマンドをできるだけ同時に処理し、レスポンス文と言語コードを返す
 
     if not commands:
-        return initial_reply, 200
+        return initial_reply, 200, []
 
     summaries: List[Optional[_CommandExecutionSummary]] = [None] * len(commands)
     threads: List[threading.Thread] = []
@@ -342,7 +342,7 @@ def _execute_device_command_sequence(
     ]
 
     if not completed_summaries:
-        return initial_reply, 200
+        return initial_reply, 200, []
 
     failure_messages: List[str] = []
     failure_status: Optional[int] = None
@@ -360,12 +360,14 @@ def _execute_device_command_sequence(
             failure_status = failure_status or summary.status
 
     if failure_messages:
-        return "\n\n".join(failure_messages), failure_status or 500
+        # 失敗時も画像が含まれている可能性があるなら抽出してもよいが、
+        # 通常はエラーで画像はないため空リストを返す
+        return "\n\n".join(failure_messages), failure_status or 500, []
 
-    final_reply = _summarize_device_command_sequence(
+    final_reply, images = _summarize_device_command_sequence(
         client, messages, initial_reply, completed_summaries
     )
-    return final_reply, 200
+    return final_reply, 200, images
 
 
 def _execute_agent_device_command(
@@ -486,7 +488,7 @@ def _summarize_device_command_sequence(
     base_messages: List[Dict[str, str]],
     initial_reply: str,
     summaries: List[_CommandExecutionSummary],
-) -> str:
+) -> Tuple[str, List[Dict[str, Any]]]:
     # 実行済みコマンドの要約を LLM もしくはフォールバックで生成
 
     fallback_parts = [
@@ -495,31 +497,31 @@ def _summarize_device_command_sequence(
         if isinstance(summary.manual_reply, str) and summary.manual_reply.strip()
     ]
     fallback_reply = "\n\n".join(fallback_parts) if fallback_parts else initial_reply
+    
+    image_inputs = _extract_image_inputs(summaries)
 
     if client is None:
-        return fallback_reply
+        return fallback_reply, image_inputs
 
     provider, model_name, _, _ = apply_model_selection("iot")
     vision_model = os.getenv("IOT_VISION_MODEL") or model_name
     vision_supported = provider_supports_vision(provider)
-    if vision_supported:
-        image_inputs = _extract_image_inputs(summaries)
-        if image_inputs:
-            try:
-                prompt_payload = _structured_multi_command_followup_prompt_with_images(
-                    base_messages,
-                    initial_reply,
-                    summaries,
-                    image_inputs,
-                    vision_model,
-                )
-                llm_reply = _call_llm_text(client, prompt_payload)
-                cleaned = llm_reply.strip() if isinstance(llm_reply, str) else ""
-                if cleaned:
-                    return cleaned
-            except Exception:
-                # Fall back to text-only summarisation below
-                pass
+    if vision_supported and image_inputs:
+        try:
+            prompt_payload = _structured_multi_command_followup_prompt_with_images(
+                base_messages,
+                initial_reply,
+                summaries,
+                image_inputs,
+                vision_model,
+            )
+            llm_reply = _call_llm_text(client, prompt_payload)
+            cleaned = llm_reply.strip() if isinstance(llm_reply, str) else ""
+            if cleaned:
+                return cleaned, image_inputs
+        except Exception:
+            # Fall back to text-only summarisation below
+            pass
 
     try:
         prompt_payload = _structured_multi_command_followup_prompt(
@@ -527,10 +529,10 @@ def _summarize_device_command_sequence(
         )
         llm_reply = _call_llm_text(client, prompt_payload)
     except Exception:
-        return fallback_reply
+        return fallback_reply, image_inputs
 
     cleaned_reply = llm_reply.strip() if isinstance(llm_reply, str) else ""
-    return cleaned_reply or fallback_reply
+    return (cleaned_reply or fallback_reply), image_inputs
 
 
 def _extract_image_inputs(summaries: List[_CommandExecutionSummary]) -> List[Dict[str, Any]]:
@@ -656,7 +658,7 @@ def _structured_multi_command_followup_prompt_with_images(
         if isinstance(data_url, str) and data_url.strip():
             user_contents.append(
                 {
-                    "type": "input_image",
+                    "type": "image_url",
                     "image_url": {"url": data_url.strip(), "detail": "high"},
                 }
             )
@@ -792,9 +794,9 @@ def _chat_via_legacy(messages: List[Dict[str, str]]) -> Tuple[Dict[str, Any], in
         return {"reply": final_reply}, 200
 
     if validated_commands:
-        final_reply, status = _execute_device_command_sequence(
+        final_reply, status, images = _execute_device_command_sequence(
             client, messages, reply_message, validated_commands
         )
-        return {"reply": final_reply}, status
+        return {"reply": final_reply, "images": images}, status
 
     return {"reply": final_reply}, 200

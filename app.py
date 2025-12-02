@@ -371,10 +371,10 @@ def chat():
                 notice = "\n".join(f"(システム通知: {error})" for error in validation_errors)
                 payload["reply"] = (reply_message + "\n" if reply_message else "") + notice
             elif validated_commands:
-                final_reply, status = _execute_device_command_sequence(
+                final_reply, status, images = _execute_device_command_sequence(
                     client, formatted_messages, reply_message, validated_commands
                 )
-                payload = {"reply": final_reply}
+                payload = {"reply": final_reply, "images": images}
         else:
             payload, status = _chat_via_legacy(formatted_messages)
     except Exception as exc:
@@ -434,12 +434,13 @@ def review_conversation():
 
     if action_required and validated_commands:
         initial_reply = analysis.get("reason", "")
-        final_reply, status = _execute_device_command_sequence(
+        final_reply, status, images = _execute_device_command_sequence(
             client, messages, initial_reply, validated_commands
         )
         response_payload["action_taken"] = True
         response_payload["analysis"]["executed_commands"] = validated_commands
         response_payload["execution_reply"] = final_reply
+        response_payload["images"] = images
         return jsonify(response_payload), status
 
     return jsonify(response_payload), 200
