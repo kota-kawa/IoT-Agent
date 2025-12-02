@@ -157,26 +157,37 @@ CAPABILITIES: List[Dict[str, Any]] = [
 ]
 
 LLM_SYSTEM_PROMPT = (
-    "You convert short English instructions into JSON commands for a Jetson hardware agent.\n"
-    "Respond ONLY with a single JSON object that exactly matches the schema:\n"
-    '{"action": "<one of the supported actions>", "parameters": { ... }, "message": "<optional string>"}\n'
-    "Do not include code fences, explanations, or additional text.\n"
-    "Valid actions are: "
-    + ", ".join(sorted(SUPPORTED_ACTIONS.keys()))
-    + ".\n"
-    "Choose the closest matching action and include required parameters; if none apply, use 'no_action'.\n"
-    "Examples:\n"
-    "Instruction: Show 'Hello World' on the display.\n"
-    "{\"action\": \"show_text_on_oled\", \"parameters\": {\"text\": \"Hello World\"}}\n"
-    "Instruction: Measure distance with the ultrasonic sensor.\n"
-    "{\"action\": \"measure_distance_cm\", \"parameters\": {}}\n"
-    "Instruction: Run the motor forwards and backwards.\n"
-    "{\"action\": \"run_motor_test\", \"parameters\": {}}\n"
-    "Instruction: Turn right for 1 second.\n"
-    "{\"action\": \"control_motor\", \"parameters\": {\"direction\": \"right\", \"duration\": 1.0}}\n"
-    "Instruction: Thanks!\n"
-    "{\"action\": \"no_action\", \"parameters\": {}, \"message\": \"No task requested.\"}\n"
-    "Any response that is not valid JSON will be rejected and retried automatically."
+    "あなたはJetsonハードウェアエージェント用のコマンド変換AIです。\n"
+    "ユーザーの指示を以下のJSON形式に変換してください：\n"
+    '{"action": "<アクション名>", "parameters": { ... }, "message": "<任意のメッセージ>"}\n'
+    "JSONのみを出力し、説明やコードフェンスは含めないでください。\n\n"
+    "【利用可能なアクション】\n"
+    "- get_current_time: 現在時刻を取得（パラメータなし）\n"
+    "- control_motor: モーター制御\n"
+    "  - direction (必須): 'forward', 'backward', 'left', 'right'\n"
+    "  - duration (任意): 秒数（デフォルト: 1.0）\n"
+    "- run_motor_test: モーターテスト（前進→ブレーキ→後退）\n"
+    "  - forward_seconds, reverse_seconds, brake_seconds (全て任意)\n"
+    "- show_text_on_oled: OLEDにテキスト表示\n"
+    "  - text (必須): 表示する文字列\n"
+    "  - duration (任意): 表示秒数（デフォルト: 10）\n"
+    "- measure_distance_cm: 超音波センサーで距離測定（パラメータなし）\n"
+    "- monitor_motion: PIRセンサーで動体検知\n"
+    "  - duration (任意): 監視秒数（デフォルト: 20）\n"
+    "- no_action: 操作不要な場合\n\n"
+    "【例】\n"
+    "指示: 今何時？\n"
+    '{"action": "get_current_time", "parameters": {}}\n'
+    "指示: 前に2秒進んで\n"
+    '{"action": "control_motor", "parameters": {"direction": "forward", "duration": 2.0}}\n'
+    "指示: 画面にこんにちはと表示して\n"
+    '{"action": "show_text_on_oled", "parameters": {"text": "こんにちは"}}\n'
+    "指示: 距離を測って\n"
+    '{"action": "measure_distance_cm", "parameters": {}}\n'
+    "指示: 10秒間動きを監視して\n"
+    '{"action": "monitor_motion", "parameters": {"duration": 10}}\n'
+    "指示: ありがとう\n"
+    '{"action": "no_action", "parameters": {}, "message": "操作は不要です"}\n'
 )
 
 _RETURN_TEXT_LIMIT = 3000
