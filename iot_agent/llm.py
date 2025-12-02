@@ -21,6 +21,50 @@ from model_selection import (
 )
 
 
+def _strip_images_from_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    メッセージリストから画像データを除去し、トークン数を削減する。
+    画像があった箇所には「[画像: 省略]」というプレースホルダーを挿入する。
+    """
+    stripped = []
+    for msg in messages:
+        if not isinstance(msg, dict):
+            stripped.append(msg)
+            continue
+
+        content = msg.get("content")
+
+        # content が文字列の場合はそのまま
+        if isinstance(content, str):
+            stripped.append(msg)
+            continue
+
+        # content がリストの場合、image_url を除去
+        if isinstance(content, list):
+            new_content = []
+            image_count = 0
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "image_url":
+                    image_count += 1
+                    continue
+                new_content.append(part)
+
+            if image_count > 0:
+                new_content.append({
+                    "type": "text",
+                    "text": f"[画像: {image_count}枚省略]"
+                })
+
+            new_msg = dict(msg)
+            new_msg["content"] = new_content if new_content else [{"type": "text", "text": "[画像のみのメッセージ]"}]
+            stripped.append(new_msg)
+            continue
+
+        stripped.append(msg)
+
+    return stripped
+
+
 def _content_to_text(content: Any) -> str:
     """Normalise chat completion content into a plain string."""
 
@@ -181,6 +225,8 @@ def _structured_llm_prompt(
     messages: List[Dict[str, str]], retry_instruction: Optional[str] = None
 ) -> Dict[str, Any]:
     # LLM へ投げる構造化プロンプトとコンテキストを組み立てる
+    # 過去の会話履歴から画像データを除去してトークン数を削減
+    messages = _strip_images_from_messages(messages)
     device_context = _build_device_context()
     timestamp_line = _current_datetime_line()
     system_prompt = (
@@ -460,6 +506,8 @@ def _normalise_conversation_messages(raw_messages: Any) -> List[Dict[str, str]]:
 
 def _structured_conversation_review_prompt(messages: List[Dict[str, str]]) -> Dict[str, Any]:
     # 会話履歴を監査し、IoT 操作が必要か判定するプロンプトを構築
+    # 過去の会話履歴から画像データを除去してトークン数を削減
+    messages = _strip_images_from_messages(messages)
 
     device_context = _build_device_context()
     timestamp_line = _current_datetime_line()
@@ -638,6 +686,8 @@ def _structured_agent_instruction_prompt(
     messages: List[Dict[str, str]], target_role: Optional[str] = None
 ) -> Dict[str, Any]:
     # エージェントデバイス向けの命令文（instruction）を生成するプロンプト
+    # 過去の会話履歴から画像データを除去してトークン数を削減
+    messages = _strip_images_from_messages(messages)
 
     device_context = _build_device_context()
     timestamp_line = _current_datetime_line()
@@ -680,6 +730,8 @@ def _structured_agent_followup_prompt(
     result: Dict[str, Any],
 ) -> Dict[str, Any]:
     # デバイス応答をもとにユーザー向け日本語要約を生成するプロンプト
+    # 過去の会話履歴から画像データを除去してトークン数を削減
+    base_messages = _strip_images_from_messages(base_messages)
 
     device_context = _build_device_context()
     summary_instruction = (
