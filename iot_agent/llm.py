@@ -176,7 +176,11 @@ def _structured_llm_prompt(
         "it is possible to execute with the available devices and capabilities, you "
         "MUST return the executable command JSON in 'device_commands'. Prefer "
         f"devices tagged with the '{AGENT_ROLE_VALUE}' role for complex or "
-        "conversational tasks. The 'reply' value must be written in Japanese prose "
+        "conversational tasks. When generating a command for the 'agent_instruction' capability, "
+        "adhere to the following language rules for the 'instruction' argument:\n"
+        "- If the target device role is 'jetson-agent', write the instruction in Japanese.\n"
+        "- If the target device role is 'raspberrypi-agent', write the instruction in English.\n"
+        "The 'reply' value must be written in Japanese prose "
         "without including JSON syntax, code formatting, or explicit mentions of "
         "'JSON'. Summarise any structured information conversationally."
     )
@@ -595,33 +599,26 @@ def _call_llm_text(client: UnifiedClient, payload: Dict[str, Any]) -> str:
         return ""
 
 
-def _structured_agent_instruction_prompt(messages: List[Dict[str, str]]) -> Dict[str, Any]:
-    # エージェント向け英語命令文の生成に必要なプロンプトを組み立てる
+def _structured_agent_instruction_prompt(
+    messages: List[Dict[str, str]], target_role: Optional[str] = None
+) -> Dict[str, Any]:
+    # エージェントデバイス向けの命令文（instruction）を生成するプロンプト
 
     device_context = _build_device_context()
     timestamp_line = _current_datetime_line()
+
+    language = "English"
+    if target_role == "jetson-agent":
+        language = "Japanese"
+
     system_prompt = (
         f"{timestamp_line}\n"
-        "You are an assistant that interprets user instructions and generates "
-        "IoT device operation commands. Always respond with a strict JSON "
-        "object containing the key 'device_commands'. The 'device_commands' "
-        "field must be either null, an empty array, or an array of objects "
-        "with the keys 'device_id', 'name', and 'args'. Each array element "
-        "represents one sequential task for the devices to execute. Do not "
-        "wrap the JSON inside code fences. If no device action is required, "
-        "set 'device_commands' to null. Only use device IDs and capability "
-        "names provided in the context. When an action is required and "
-        "the user does not specify a runtime or duration, default the "
-        "operation to 5 seconds. When an action is required and "
-        "multiple devices exist, you MUST select the single most "
-        "appropriate device_id for each step by comparing the roles and "
-        "capabilities described. Never omit 'device_id' or use an unknown "
-        "value. If the correct device cannot be determined, set "
-        "'device_commands' to null and ask the user to clarify which device "
-        "should be used. Do not invent or propose operations that the "
-        "available devices and capabilities do not support. When the user "
-        "asks for an actionable device operation and it is feasible, you "
-        "MUST output the executable command JSON in 'device_commands'."
+        "You are an operational assistant that translates user requests into specific "
+        "natural language instructions for an edge IoT agent. "
+        "Analyze the conversation and the available device capabilities. "
+        f"Output ONLY the specific instruction string in {language} that tells the agent what to do. "
+        "Do NOT output JSON. Do NOT provide explanations or markdown. "
+        "Just output the raw command text."
     )
 
     context_message = (
@@ -652,7 +649,7 @@ def _structured_agent_followup_prompt(
     device_context = _build_device_context()
     summary_instruction = (
         "The edge device executed the request using the following simple "
-        f"English instruction: {english_instruction}\n"
+        f"instruction: {english_instruction}\n"
         f"Device response details (internal): {_format_result_for_prompt(result)}\n"
         "Write a concise Japanese message for the user that summarises the "
         "outcome. Mention success or failure clearly and include key "
