@@ -499,6 +499,22 @@ def _oled_create_device() -> Any:
 def _oled_load_font() -> Any:
     from PIL import ImageFont
 
+    # Attempt to load a TrueType font at ~5x the default size (assuming default is ~10px, so 50px)
+    # Common locations for fonts on Raspberry Pi OS / Linux
+    font_candidates = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+        "DejaVuSans.ttf",
+    ]
+
+    for font_path in font_candidates:
+        try:
+            return ImageFont.truetype(font_path, 50)
+        except (OSError, ImportError):
+            continue
+
+    logging.warning("Could not load any large TrueType fonts (size 50). Falling back to small default font.")
     return ImageFont.load_default()
 
 
