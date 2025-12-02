@@ -632,9 +632,11 @@ def _structured_multi_command_followup_prompt_with_images(
         {
             "type": "text",
             "text": (
-                "Use the attached camera photos to describe what the device currently sees. "
-                "Reply in Japanese, stay concise, and base statements on the visible evidence. "
-                "If the photos are unclear, say so instead of guessing."
+                "**IMPORTANT**: The device has captured the attached image(s) just now. "
+                "You MUST describe what is visible in the image(s) to the user in Japanese. "
+                "Do not merely report that the photo was taken; tell the user what is in it. "
+                "Describe the scene, objects, colors, or text you see. "
+                "Ignore any text logs saying 'image omitted'—the real image data is provided here."
             ),
         },
         {"type": "text", "text": "Conversation context:\n" + conversation_dump},
