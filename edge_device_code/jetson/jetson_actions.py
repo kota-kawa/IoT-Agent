@@ -214,8 +214,8 @@ def _create_serial() -> i2c:
 def _init_device_once() -> sh1107:
     serial = _create_serial()
     # rotate=0 is default. SH1107 128x128 usually works best with 0 or 2.
-    # Changed to rotate=3 to flip the display upside down (180 degrees from rotate=1).
-    dev = sh1107(serial, width=OLED_WIDTH, height=OLED_HEIGHT, rotate=3)  # type: ignore[operator]
+    # Changed to rotate=1 to flip the display upside down (180 degrees from rotate=3).
+    dev = sh1107(serial, width=OLED_WIDTH, height=OLED_HEIGHT, rotate=1)  # type: ignore[operator]
 
     def _noop_cleanup(self) -> None:  # type: ignore[override]
         return
