@@ -340,26 +340,24 @@ def chat():
 
             limitation_notice: Optional[str] = None
             if wants_environment_view:
-                if not vision_supported:
-                    validated_commands = [
-                        cmd
-                        for cmd in validated_commands
-                        if str(cmd.get("name")) != "capture_camera_photo"
-                    ]
-                    limitation_notice = (
-                        "現在選択しているモデルではカメラ画像を使った回答に対応していません。"
-                    )
-                elif capture_supported and not any(
-                    str(cmd.get("name")) == "capture_camera_photo" for cmd in validated_commands
-                ):
-                    validated_commands = [
-                        {
-                            "device_id": agent_device.device_id,
-                            "name": "capture_camera_photo",
-                            "args": {},
-                        },
-                        *validated_commands,
-                    ]
+                if capture_supported:
+                    # カメラが使えるなら、モデルがVision非対応でも撮影コマンドを追加する（画像表示のため）
+                    if not any(str(cmd.get("name")) == "capture_camera_photo" for cmd in validated_commands):
+                        validated_commands = [
+                            {
+                                "device_id": agent_device.device_id,
+                                "name": "capture_camera_photo",
+                                "args": {},
+                            },
+                            *validated_commands,
+                        ]
+
+                    if not vision_supported:
+                        limitation_notice = (
+                            "（※選択中のモデルは画像分析非対応のため、撮影画像の表示のみ行います）"
+                        )
+                elif not vision_supported:
+                    pass
 
             if limitation_notice:
                 reply_message = (reply_message + "\n" if reply_message else "") + limitation_notice
