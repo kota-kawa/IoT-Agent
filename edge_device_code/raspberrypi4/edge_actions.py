@@ -202,7 +202,7 @@ SUPPORTED_ACTIONS: Dict[str, Dict[str, Any]] = {
             },
         ],
     },
-    "capture_image": {
+    "capture_camera_photo": {
         "description": "Capture a still image using the attached Picamera2 module and return it as a base64 encoded string. The image is also saved to a local directory.",
         "params": [
             {
@@ -2353,7 +2353,7 @@ def _execute_action(action: str, parameters: Dict[str, Any]) -> Tuple[bool, Any,
             return True, _run_oled_robot_demo(parameters or {}), None
         if action == "control_single_servo":
             return True, _run_servo_demo(parameters or {}), None
-        if action == "capture_image":
+        if action == "capture_camera_photo":
             return True, _capture_camera_photo(parameters or {}), None
         if action == "operate_led_pattern":
             return True, _run_led_demo(parameters or {}), None
