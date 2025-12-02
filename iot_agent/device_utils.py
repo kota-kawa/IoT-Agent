@@ -285,7 +285,7 @@ def _build_device_context() -> str:
             }
             lines.append(
                 "  Most recent result: "
-                + json.dumps(summary, ensure_ascii=False, default=str)
+                + _format_result_for_prompt(summary)
             )
         lines.append("")
     return "\n".join(lines).strip()
