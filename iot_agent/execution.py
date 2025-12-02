@@ -538,12 +538,38 @@ def _summarize_device_command_sequence(
 
 def _extract_image_inputs(summaries: List[_CommandExecutionSummary]) -> List[Dict[str, Any]]:
     # capture_camera_photo の結果から LLM へ渡す画像データ URL とメタ情報を抽出
+    # 複数のデータ構造パターンに対応
 
     images: List[Dict[str, Any]] = []
     for summary in summaries:
         result_payload = summary.result or {}
-        return_value = result_payload.get("return_value") if isinstance(result_payload, dict) else None
-        action_result = return_value.get("result") if isinstance(return_value, dict) else None
+        if not isinstance(result_payload, dict):
+            continue
+
+        # 複数のパターンに対応
+        action_result = None
+
+        # パターン1: return_value.result
+        return_value = result_payload.get("return_value")
+        if isinstance(return_value, dict):
+            candidate = return_value.get("result")
+            if isinstance(candidate, dict) and candidate.get("image_base64"):
+                action_result = candidate
+            # パターン2: return_value直下にimage_base64がある場合
+            elif return_value.get("image_base64"):
+                action_result = return_value
+
+        # パターン3: result直下
+        if not isinstance(action_result, dict) or not action_result.get("image_base64"):
+            candidate = result_payload.get("result")
+            if isinstance(candidate, dict) and candidate.get("image_base64"):
+                action_result = candidate
+
+        # パターン4: 直接result_payloadに含まれる
+        if not isinstance(action_result, dict) or not action_result.get("image_base64"):
+            if result_payload.get("image_base64"):
+                action_result = result_payload
+
         if not isinstance(action_result, dict):
             continue
 
