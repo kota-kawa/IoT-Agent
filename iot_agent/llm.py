@@ -56,7 +56,7 @@ def _strip_images_from_messages(messages: List[Dict[str, Any]]) -> List[Dict[str
                 })
 
             new_msg = dict(msg)
-            new_msg["content"] = new_content if new_content else "[画像のみのメッセージ]"
+            new_msg["content"] = new_content if new_content else [{"type": "text", "text": "[画像のみのメッセージ]"}]
             stripped.append(new_msg)
             continue
 
