@@ -1086,16 +1086,48 @@ def _capture_camera_photo(parameters: Any) -> Dict[str, Any]:
     save_dir.mkdir(parents=True, exist_ok=True)
     outfile = (save_dir / filename).with_suffix(".jpg")
 
-    picam2 = Picamera2()
-    picam2.configure(picam2.create_still_configuration())
+    max_retries = 3
+    last_error = None
+    duration = 0
 
-    started = time.monotonic()
-    picam2.start()
-    if warmup:
-        time.sleep(warmup)
-    picam2.capture_file(str(outfile))
-    picam2.stop()
-    duration = time.monotonic() - started
+    for attempt in range(max_retries):
+        picam2 = None
+        try:
+            picam2 = Picamera2()
+            picam2.configure(picam2.create_still_configuration())
+
+            started = time.monotonic()
+            picam2.start()
+            if warmup:
+                time.sleep(warmup)
+            picam2.capture_file(str(outfile))
+            picam2.stop()
+            duration = time.monotonic() - started
+            # Explicitly close to release resources
+            if hasattr(picam2, "close"):
+                picam2.close()
+            break
+        except Exception as e:
+            last_error = e
+            print(f"Camera capture failed (attempt {attempt + 1}/{max_retries}): {e}")
+            if picam2:
+                try:
+                    picam2.stop()
+                except Exception:
+                    pass
+                try:
+                    if hasattr(picam2, "close"):
+                        picam2.close()
+                except Exception:
+                    pass
+            
+            if attempt < max_retries - 1:
+                time.sleep(2)
+            else:
+                raise RuntimeError(
+                    f"Failed to capture image after {max_retries} attempts. Last error: {last_error}"
+                ) from last_error
+
     with outfile.open("rb") as image_file:
         image_bytes = image_file.read()
     image_base64 = base64.b64encode(image_bytes).decode("ascii")
