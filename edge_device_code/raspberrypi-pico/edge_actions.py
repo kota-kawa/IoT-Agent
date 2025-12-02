@@ -24,6 +24,8 @@ LCD_D7 = 9
 CONTRAST_PWM_PIN = 12
 CONTRAST_PERCENT_DEFAULT = 25
 PWM_FREQ_HZ = 100_000
+LCD_COLS = 16
+LCD_ROWS = 2
 FACE_COL = 4
 FACE_ROW_TOP = 0
 
@@ -51,6 +53,41 @@ def blink_led(times: int = 5, interval_sec: float = 0.2):
         time.sleep(interval_sec)
     print("[led] done")
     return True
+
+
+def led_pattern(pattern: str = "heartbeat"):
+    """
+    オンボードLEDの発光パターン。pattern: heartbeat/fast/sos/beacon/double.
+    """
+    pattern = (pattern or "heartbeat").lower()
+    dot = 150
+    dash = 450
+    seq = []
+    if pattern == "heartbeat":
+        seq = [(1, 110), (0, 120), (1, 220), (0, 520)]
+    elif pattern == "fast":
+        seq = [(1, 80), (0, 80)] * 8
+    elif pattern == "sos":
+        seq = []
+        for symbol in ("... --- ..."):
+            if symbol == ".":
+                seq += [(1, dot), (0, 120)]
+            elif symbol == "-":
+                seq += [(1, dash), (0, 200)]
+            else:
+                seq += [(0, 300)]
+    elif pattern == "beacon":
+        seq = [(1, 500), (0, 900)] * 3
+    elif pattern == "double":
+        seq = [(1, 140), (0, 140), (1, 140), (0, 500)] * 2
+    else:
+        raise ValueError("unknown pattern: {}".format(pattern))
+    for state, ms in seq:
+        LED_PIN.value(1 if state else 0)
+        time.sleep_ms(int(ms))
+    LED_PIN.value(0)
+    print("[led] pattern played ({})".format(pattern))
+    return {"pattern": pattern, "steps": len(seq)}
 
 
 def read_temperature(samples: int = 16, sample_interval_sec: float = 0.01):
@@ -191,6 +228,28 @@ def buzzer_demo():
         buz.play(seq)
     print("[buzzer] demo sequence complete")
     return True
+
+
+def buzzer_pattern(pattern: str = "notify", duty: float = 0.4):
+    """
+    プリセットパターンでブザーを鳴らす。pattern: notify/alarm/confirm/fail/doorbell。
+    """
+    pattern = (pattern or "notify").lower()
+    duty = 0.0 if duty is None else max(0.0, min(1.0, float(duty)))
+    presets = {
+        "notify": [(1200, 120, duty), 80, (1500, 120, duty)],
+        "alarm": [(1800, 220, duty), 60, (1800, 220, duty), 60, (1800, 220, duty)],
+        "confirm": [(1000, 90, duty), 40, (1400, 140, duty)],
+        "fail": [(400, 180, duty * 0.8), 60, (320, 260, duty * 0.8)],
+        "doorbell": [(880, 250, duty), 80, (1180, 350, duty)],
+    }
+    seq = presets.get(pattern)
+    if seq is None:
+        raise ValueError("unknown pattern: {}".format(pattern))
+    with PassiveBuzzer(BUZZER_PIN) as buz:
+        buz.play(seq)
+    print("[buzzer] pattern played ({})".format(pattern))
+    return {"pattern": pattern, "duty": duty}
 
 
 # =========================
@@ -404,6 +463,23 @@ def set_contrast_percent(percent):
     _contrast_pwm.duty_u16(duty)
 
 
+def _sanitize_text(text):
+    if text is None:
+        return ""
+    cleaned = []
+    for ch in str(text):
+        code = ord(ch)
+        cleaned.append(ch if 32 <= code <= 126 else " ")
+    return "".join(cleaned)
+
+
+def _prepare_lcd_line(text, max_len=LCD_COLS):
+    line = _sanitize_text(text)
+    if len(line) > max_len:
+        line = line[:max_len]
+    return line
+
+
 def _row(bits):
     if isinstance(bits, str):
         bits = bits.replace(".", "0").replace("#", "1")
@@ -411,7 +487,7 @@ def _row(bits):
     return int(bits) & 0x1F
 
 
-def eye_open(pupil="center"):
+def eye_open(pupil="center", wide=False):
     base = [
         _row("00000"),
         _row("01110"),
@@ -422,6 +498,9 @@ def eye_open(pupil="center"):
         _row("00000"),
         _row("00000"),
     ]
+    if wide:
+        base[1] = _row("11111")
+        base[5] = _row("11111")
     if pupil == "left":
         base[3] |= _row("00010")
     elif pupil == "right":
@@ -436,6 +515,19 @@ def eye_closed():
         _row("00000"),
         _row("00000"),
         _row("00000"),
+        _row("11111"),
+        _row("00000"),
+        _row("00000"),
+        _row("00000"),
+        _row("00000"),
+    ]
+
+
+def eye_sleepy():
+    return [
+        _row("00000"),
+        _row("00000"),
+        _row("11111"),
         _row("11111"),
         _row("00000"),
         _row("00000"),
@@ -461,6 +553,32 @@ def mouth_neutral_right():
     return mouth_neutral_left()
 
 
+def mouth_frown_left():
+    return [
+        _row("00000"),
+        _row("00000"),
+        _row("01110"),
+        _row("00100"),
+        _row("00010"),
+        _row("00000"),
+        _row("00000"),
+        _row("00000"),
+    ]
+
+
+def mouth_frown_right():
+    return [
+        _row("00000"),
+        _row("00000"),
+        _row("01110"),
+        _row("01000"),
+        _row("10000"),
+        _row("00000"),
+        _row("00000"),
+        _row("00000"),
+    ]
+
+
 def mouth_open_left():
     return [
         _row("00000"),
@@ -476,6 +594,32 @@ def mouth_open_left():
 
 def mouth_open_right():
     return mouth_open_left()
+
+
+def mouth_o_left():
+    return [
+        _row("00000"),
+        _row("00110"),
+        _row("01001"),
+        _row("01001"),
+        _row("01001"),
+        _row("00110"),
+        _row("00000"),
+        _row("00000"),
+    ]
+
+
+def mouth_o_right():
+    return [
+        _row("00000"),
+        _row("01100"),
+        _row("10010"),
+        _row("10010"),
+        _row("10010"),
+        _row("01100"),
+        _row("00000"),
+        _row("00000"),
+    ]
 
 
 def mouth_smile_left():
@@ -499,6 +643,32 @@ def mouth_smile_right():
         _row("10000"),
         _row("11000"),
         _row("11100"),
+        _row("01110"),
+        _row("00000"),
+    ]
+
+
+def mouth_grin_left():
+    return [
+        _row("00000"),
+        _row("00000"),
+        _row("00000"),
+        _row("00011"),
+        _row("00111"),
+        _row("01111"),
+        _row("01110"),
+        _row("00000"),
+    ]
+
+
+def mouth_grin_right():
+    return [
+        _row("00000"),
+        _row("00000"),
+        _row("00000"),
+        _row("11000"),
+        _row("11100"),
+        _row("11110"),
         _row("01110"),
         _row("00000"),
     ]
@@ -532,23 +702,75 @@ class FaceAnimator:
         self.lcd.write(self.MOUTH_R)
 
     def eyes(self, where="center"):
+        where = (where or "center").lower()
         if where == "blink":
-            self.lcd.create_char(self.EYE_L, eye_closed())
-            self.lcd.create_char(self.EYE_R, eye_closed())
+            left = eye_closed()
+            right = eye_closed()
+        elif where == "wink_left":
+            left = eye_closed()
+            right = eye_open("center")
+        elif where == "wink_right":
+            left = eye_open("center")
+            right = eye_closed()
+        elif where == "sleepy":
+            left = eye_sleepy()
+            right = eye_sleepy()
+        elif where == "wide":
+            left = eye_open("center", wide=True)
+            right = eye_open("center", wide=True)
         else:
-            self.lcd.create_char(self.EYE_L, eye_open(where))
-            self.lcd.create_char(self.EYE_R, eye_open(where))
+            left = eye_open(where)
+            right = eye_open(where)
+        self.lcd.create_char(self.EYE_L, left)
+        self.lcd.create_char(self.EYE_R, right)
 
     def mouth(self, shape="neutral"):
+        shape = (shape or "neutral").lower()
         if shape == "open":
             self.lcd.create_char(self.MOUTH_L, mouth_open_left())
             self.lcd.create_char(self.MOUTH_R, mouth_open_right())
         elif shape == "smile":
             self.lcd.create_char(self.MOUTH_L, mouth_smile_left())
             self.lcd.create_char(self.MOUTH_R, mouth_smile_right())
+        elif shape == "grin":
+            self.lcd.create_char(self.MOUTH_L, mouth_grin_left())
+            self.lcd.create_char(self.MOUTH_R, mouth_grin_right())
+        elif shape == "frown":
+            self.lcd.create_char(self.MOUTH_L, mouth_frown_left())
+            self.lcd.create_char(self.MOUTH_R, mouth_frown_right())
+        elif shape == "o":
+            self.lcd.create_char(self.MOUTH_L, mouth_o_left())
+            self.lcd.create_char(self.MOUTH_R, mouth_o_right())
         else:
             self.lcd.create_char(self.MOUTH_L, mouth_neutral_left())
             self.lcd.create_char(self.MOUTH_R, mouth_neutral_right())
+
+    def expression(self, name="happy"):
+        name = (name or "neutral").lower()
+        if name == "happy":
+            self.eyes("center")
+            self.mouth("smile")
+        elif name == "wink":
+            self.eyes("wink_left")
+            self.mouth("smile")
+        elif name == "surprised":
+            self.eyes("wide")
+            self.mouth("o")
+        elif name == "sad":
+            self.eyes("center")
+            self.mouth("frown")
+        elif name == "sleepy":
+            self.eyes("sleepy")
+            self.mouth("neutral")
+        elif name == "annoyed":
+            self.eyes("left")
+            self.mouth("frown")
+        elif name == "grin":
+            self.eyes("center")
+            self.mouth("grin")
+        else:
+            self.eyes("center")
+            self.mouth("neutral")
 
     def animate_blink(self, dt_open=1500, dt_close=120):
         time.sleep_ms(int(dt_open))
@@ -571,12 +793,44 @@ class FaceAnimator:
         self.mouth("neutral")
 
 
-def lcd_face(mode: str = "blink_cycle", contrast_percent: int = CONTRAST_PERCENT_DEFAULT):
+def lcd_text(line1: str = "", line2: str = "", contrast_percent: int = CONTRAST_PERCENT_DEFAULT, duration_ms: int = 0):
     """
-    LCDへ顔アニメーションを1サイクル表示。mode: blink_cycle/look/talk/smile_only。
+    任意の文字列をLCDに表示。ASCIIのみ、1行あたり最大16文字。duration_ms>0なら表示後に消去。
     """
     set_contrast_percent(contrast_percent)
-    lcd = HD44780(LCD_RS, LCD_E, LCD_D4, LCD_D5, LCD_D6, LCD_D7, cols=16, rows=2)
+    lcd = HD44780(LCD_RS, LCD_E, LCD_D4, LCD_D5, LCD_D6, LCD_D7, cols=LCD_COLS, rows=LCD_ROWS)
+    line1_clean = _prepare_lcd_line(line1)
+    line2_clean = _prepare_lcd_line(line2)
+    duration_ms_int = int(duration_ms or 0)
+    if duration_ms_int < 0:
+        duration_ms_int = 0
+    lcd.clear()
+    lcd.set_cursor(0, 0)
+    for ch in line1_clean:
+        lcd.write(ord(ch))
+    lcd.set_cursor(0, 1)
+    for ch in line2_clean:
+        lcd.write(ord(ch))
+    if duration_ms_int > 0:
+        time.sleep_ms(duration_ms_int)
+        lcd.clear()
+    print("[lcd] text displayed line1={!r} line2={!r} contrast={} duration_ms={}".format(
+        line1_clean, line2_clean, contrast_percent, duration_ms_int
+    ))
+    return {
+        "line1": line1_clean,
+        "line2": line2_clean,
+        "contrast_percent": contrast_percent,
+        "duration_ms": duration_ms_int,
+    }
+
+
+def lcd_face(mode: str = "blink_cycle", contrast_percent: int = CONTRAST_PERCENT_DEFAULT):
+    """
+    LCDへ顔アニメーションを1サイクル表示。mode: blink_cycle/look/talk/smile_only/happy/sad/surprised/wink/sleepy/annoyed/grin。
+    """
+    set_contrast_percent(contrast_percent)
+    lcd = HD44780(LCD_RS, LCD_E, LCD_D4, LCD_D5, LCD_D6, LCD_D7, cols=LCD_COLS, rows=LCD_ROWS)
     face = FaceAnimator(lcd, col=FACE_COL, row_top=FACE_ROW_TOP)
     try:
         if mode == "look":
@@ -587,6 +841,9 @@ def lcd_face(mode: str = "blink_cycle", contrast_percent: int = CONTRAST_PERCENT
             face.mouth("smile")
             time.sleep_ms(600)
             face.mouth("neutral")
+        elif mode in ("happy", "sad", "surprised", "wink", "sleepy", "annoyed", "grin"):
+            face.expression(mode)
+            time.sleep_ms(900)
         else:
             face.animate_blink(dt_open=1500, dt_close=120)
             face.animate_lookaround(dwell=220)
@@ -610,6 +867,13 @@ FUNCTIONS = {
         "params": [
             {"name": "times", "type": "int", "default": 5, "required": False},
             {"name": "interval_sec", "type": "float", "default": 0.2, "required": False},
+        ],
+    },
+    "led_pattern": {
+        "callable": led_pattern,
+        "description": "Play a preset pattern on the onboard LED. Patterns: heartbeat/fast/sos/beacon/double.",
+        "params": [
+            {"name": "pattern", "type": "str", "default": "heartbeat", "required": False},
         ],
     },
     "led0_on": {
@@ -654,6 +918,14 @@ FUNCTIONS = {
         "description": "Play a short scale demo on the passive buzzer (GPIO16).",
         "params": [],
     },
+    "buzzer_pattern": {
+        "callable": buzzer_pattern,
+        "description": "Play a preset buzzer pattern. Patterns: notify/alarm/confirm/fail/doorbell.",
+        "params": [
+            {"name": "pattern", "type": "str", "default": "notify", "required": False},
+            {"name": "duty", "type": "float", "default": 0.4, "required": False},
+        ],
+    },
     "motor_drive": {
         "callable": motor_drive,
         "description": "Drive the motor via PWM enable (GPIO13) and IN1/IN2 (GPIO14/15).",
@@ -664,9 +936,19 @@ FUNCTIONS = {
             {"name": "brake", "type": "bool", "default": False, "required": False},
         ],
     },
+    "lcd_text": {
+        "callable": lcd_text,
+        "description": "Display up to two lines of ASCII text on the HD44780 LCD (GPIO2/3/6/7/8/9, contrast PWM GPIO12).",
+        "params": [
+            {"name": "line1", "type": "str", "default": "", "required": False},
+            {"name": "line2", "type": "str", "default": "", "required": False},
+            {"name": "contrast_percent", "type": "int", "default": CONTRAST_PERCENT_DEFAULT, "required": False},
+            {"name": "duration_ms", "type": "int", "default": 0, "required": False},
+        ],
+    },
     "lcd_face": {
         "callable": lcd_face,
-        "description": "Show a short face animation on the HD44780 LCD (GPIO2/3/6/7/8/9, contrast PWM GPIO12).",
+        "description": "Show a short face animation on the HD44780 LCD (GPIO2/3/6/7/8/9, contrast PWM GPIO12). Modes include blink_cycle/look/talk/smile_only/happy/sad/surprised/wink/sleepy/annoyed/grin.",
         "params": [
             {"name": "mode", "type": "str", "default": "blink_cycle", "required": False},
             {"name": "contrast_percent", "type": "int", "default": CONTRAST_PERCENT_DEFAULT, "required": False},
@@ -710,6 +992,7 @@ __all__ = [
     "CONTRAST_PERCENT_DEFAULT",
     "roll_dice",
     "blink_led",
+    "led_pattern",
     "read_temperature",
     "led0_on",
     "led0_off",
@@ -717,7 +1000,9 @@ __all__ = [
     "led1_off",
     "buzzer_tone",
     "buzzer_demo",
+    "buzzer_pattern",
     "motor_drive",
+    "lcd_text",
     "lcd_face",
     "get_capabilities",
     "get_action_catalog",

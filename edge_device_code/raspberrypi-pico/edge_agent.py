@@ -2,6 +2,7 @@ from edge_compat import builtins, gc, io, json, sys, time
 from edge_actions import FUNCTIONS, get_action_catalog, get_capabilities
 from edge_config import (
     AUTO_REGISTER_ON_BOOT,
+    AUTO_APPROVE,
     BASE_URL,
     CAPABILITY_RESYNC_INTERVAL_SEC,
     CAPABILITY_SYNC_ENABLED,
@@ -22,6 +23,51 @@ from edge_network import ensure_wifi, http_get_text, http_post_json
 from edge_utils import _format_for_log, _truncate_text
 
 _NOT_REGISTERED_WARNED = False
+_LAST_REGISTER_ATTEMPT_SEC = 0.0
+
+
+def _now_seconds() -> float:
+    """time.time() / time.ticks_ms() のいずれかで現在秒を取得。"""
+    try:
+        return float(time.time())
+    except Exception:
+        try:
+            return float(time.ticks_ms()) / 1000.0
+        except Exception:
+            return 0.0
+
+
+def _maybe_auto_register(base_url: str, device_id: str, reason: str) -> bool:
+    """
+    サーバーから未登録扱いされた際に、自動的に再登録を試行する。
+    成功時 True。
+    """
+    global _LAST_REGISTER_ATTEMPT_SEC, _NOT_REGISTERED_WARNED
+    if not AUTO_REGISTER_ON_BOOT:
+        return False
+
+    now_sec = _now_seconds()
+    if _LAST_REGISTER_ATTEMPT_SEC > 0 and (now_sec - _LAST_REGISTER_ATTEMPT_SEC) < CAPABILITY_RESYNC_INTERVAL_SEC:
+        return False
+
+    _LAST_REGISTER_ATTEMPT_SEC = now_sec
+    print("[agent] auto-registering ({}).".format(reason))
+    try:
+        status = register_device(base_url, device_id)
+    except Exception as exc:
+        print("[agent] auto-registration error ({}): {}".format(reason, exc))
+        return False
+
+    if 200 <= (status or 0) < 300:
+        _NOT_REGISTERED_WARNED = False
+        print("[agent] auto-registration succeeded (status {}).".format(status))
+        return True
+
+    if status == 403:
+        print("[agent] auto-registration pending approval (403).")
+    else:
+        print("[agent] auto-registration failed (status {}).".format(status))
+    return False
 
 
 def register_device(base_url: str, device_id: str):
@@ -35,6 +81,8 @@ def register_device(base_url: str, device_id: str):
             "action_catalog": get_action_catalog(),
         },
     }
+    if AUTO_APPROVE:
+        payload["approved"] = True
     if DEVICE_LABEL:
         payload["meta"]["label"] = DEVICE_LABEL
     if DEVICE_LOCATION:
@@ -65,6 +113,7 @@ def fetch_next_job(base_url: str, device_id: str):
                     "this script running."
                 )
                 _NOT_REGISTERED_WARNED = True
+            _maybe_auto_register(base_url, device_id, "next-404")
         else:
             if _NOT_REGISTERED_WARNED:
                 _NOT_REGISTERED_WARNED = False
@@ -225,15 +274,6 @@ def agent_loop():
     device_id = _load_device_id()
     print("[agent] device_id={}".format(device_id))
 
-    def _current_seconds():
-        try:
-            return float(time.time())
-        except Exception:
-            try:
-                return float(time.ticks_ms()) / 1000.0
-            except Exception:
-                return 0.0
-
     capability_synced = False
     next_capability_sync = 0.0
 
@@ -243,7 +283,7 @@ def agent_loop():
             next_capability_sync = 0.0
             return
         try:
-            next_capability_sync = _current_seconds() + float(delay_sec)
+            next_capability_sync = _now_seconds() + float(delay_sec)
         except Exception:
             next_capability_sync = float(delay_sec)
 
@@ -273,8 +313,23 @@ def agent_loop():
         return False
 
     if AUTO_REGISTER_ON_BOOT:
-        if not _attempt_capability_sync("auto-register"):
-            _schedule_capability_sync(CAPABILITY_RESYNC_INTERVAL_SEC)
+        print("[agent] auto-register enabled. Entering registration loop.")
+        while not capability_synced:
+            try:
+                status = register_device(BASE_URL, device_id)
+                if 200 <= (status or 0) < 300:
+                    capability_synced = True
+                    print("[agent] registration succeeded (status {}).".format(status))
+                    break
+                elif status == 403:
+                    print("[agent] registration pending approval (403). Waiting 30s...")
+                    time.sleep(30)
+                else:
+                    print("[agent] registration failed (status {}). Retrying in 10s...".format(status))
+                    time.sleep(10)
+            except Exception as e:
+                print("[agent] registration exception: {}. Retrying in 10s...".format(e))
+                time.sleep(10)
     else:
         print(
             "[agent] auto registration is disabled. Register this device from the dashboard "
@@ -293,7 +348,7 @@ def agent_loop():
         args = {}
         try:
             if CAPABILITY_SYNC_ENABLED and not capability_synced:
-                now_sec = _current_seconds()
+                now_sec = _now_seconds()
                 if next_capability_sync <= 0 or now_sec >= next_capability_sync:
                     if _attempt_capability_sync("scheduled"):
                         next_capability_sync = 0.0
