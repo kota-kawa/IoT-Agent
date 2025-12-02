@@ -630,19 +630,19 @@ def _structured_multi_command_followup_prompt_with_images(
 
     user_contents: List[Dict[str, Any]] = [
         {
-            "type": "input_text",
+            "type": "text",
             "text": (
                 "Use the attached camera photos to describe what the device currently sees. "
                 "Reply in Japanese, stay concise, and base statements on the visible evidence. "
                 "If the photos are unclear, say so instead of guessing."
             ),
         },
-        {"type": "input_text", "text": "Conversation context:\n" + conversation_dump},
-        {"type": "input_text", "text": "Execution summary:\n" + step_block},
+        {"type": "text", "text": "Conversation context:\n" + conversation_dump},
+        {"type": "text", "text": "Execution summary:\n" + step_block},
     ]
 
     if initial_reply:
-        user_contents.append({"type": "input_text", "text": f"Earlier tentative reply: {initial_reply}"})
+        user_contents.append({"type": "text", "text": f"Earlier tentative reply: {initial_reply}"})
 
     for image in images:
         note_lines: List[str] = []
@@ -656,7 +656,7 @@ def _structured_multi_command_followup_prompt_with_images(
         if isinstance(details, str) and details.strip():
             note_lines.append(f"Metadata: {details.strip()}")
         if note_lines:
-            user_contents.append({"type": "input_text", "text": "\n".join(note_lines)})
+            user_contents.append({"type": "text", "text": "\n".join(note_lines)})
 
         data_url = image.get("data_url")
         if isinstance(data_url, str) and data_url.strip():
