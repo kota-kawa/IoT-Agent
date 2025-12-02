@@ -290,20 +290,8 @@ def _draw_text(device: sh1107, text: str) -> None:
         # Clear with black
         draw.rectangle(device.bounding_box, outline="white", fill="black")
 
-        # Calculate text width for right alignment
-        try:
-            # Pillow >= 9.2.0
-            bbox = draw.textbbox((0, 0), text)
-            text_width = bbox[2] - bbox[0]
-        except AttributeError:
-            # Fallback for older Pillow (< 9.2.0)
-            text_width, _ = draw.textsize(text)
-
-        # Right align with 5px margin
-        x = OLED_WIDTH - text_width - 5
-        # If text is too long, fallback to left margin to ensure readability of start
-        if x < 5:
-            x = 5
+        # Left align with 5px margin
+        x = 5
 
         draw.text((x, 5), text, fill="white")
 
