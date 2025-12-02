@@ -23,7 +23,7 @@ LLM_SYSTEM_PROMPT = (
     "- display_robot_animation: text (string to display), motion ('default'/'calm'/'alert'/'scout'/'sleeping'/'hyper'/'scanning'), duration (seconds)\n"
     "- operate_led_pattern: pattern ('chase'/'blink_all'/'all_on'/'random'/'breathing'/'police'/'demo'), cycles (integer), timeout (seconds)\n"
     "- control_dual_servos: action ('nod'/'shake'/'happy'/'synced_sweep'/'demo'), or command ('set'/'off'/'info') with angle1/angle2, cycles, step, delay\n"
-    "- capture_image: filename (JPEG, optional), directory (optional), warmup (seconds)\n"
+    "- capture_camera_photo: filename (JPEG, optional), directory (optional), warmup (seconds)\n"
     "- play_rock_paper_scissors: player_move ('rock'/'paper'/'scissors')\n"
     "- get_current_time: no parameters needed\n"
     "- no_action: Use ONLY when request is completely unrelated to hardware control. Include message explaining why.\n\n"
@@ -45,7 +45,7 @@ LLM_SYSTEM_PROMPT = (
     "Instruction: What time is it?\n"
     '{"action": "get_current_time", "parameters": {}}\n\n'
     "Instruction: Take a photo\n"
-    '{"action": "capture_image", "parameters": {}}\n\n'
+    '{"action": "capture_camera_photo", "parameters": {}}\n\n'
     "Instruction: Tell me a joke\n"
     '{"action": "no_action", "parameters": {}, "message": "Request unrelated to hardware control."}\n\n'
     "Rules:\n"
