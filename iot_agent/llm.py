@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import traceback
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -20,6 +21,24 @@ from model_selection import (
     update_override,
 )
 
+_IMAGE_DATA_URL_RE = re.compile(
+    r"data:image/[a-zA-Z0-9.+-]+;base64,[a-zA-Z0-9+/=\n\r]+", re.IGNORECASE
+)
+
+
+def _strip_image_data_from_text(text: str) -> str:
+    """Remove inline data URLs to avoid leaking base64 image data into history."""
+
+    if not isinstance(text, str) or "data:image" not in text:
+        return text
+
+    def _replace(match: re.Match[str]) -> str:
+        payload = match.group(0) or ""
+        return f"[画像データ省略({len(payload)} chars)]"
+
+    cleaned, count = _IMAGE_DATA_URL_RE.subn(_replace, text)
+    return cleaned if count else text
+
 
 def _strip_images_from_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
@@ -33,10 +52,20 @@ def _strip_images_from_messages(messages: List[Dict[str, Any]]) -> List[Dict[str
             continue
 
         content = msg.get("content")
+        images_field = msg.get("images")
+        extra_image_count = len(images_field) if isinstance(images_field, list) else 0
+        base_msg = dict(msg)
+        # Drop raw image payloads that may contain data URLs
+        base_msg.pop("images", None)
 
         # content が文字列の場合はそのまま
         if isinstance(content, str):
-            stripped.append(msg)
+            cleaned_text = _strip_image_data_from_text(content)
+            if extra_image_count > 0:
+                placeholder = f"[画像: {extra_image_count}枚省略]"
+                cleaned_text = f"{cleaned_text}\n{placeholder}" if cleaned_text else placeholder
+            base_msg["content"] = cleaned_text
+            stripped.append(base_msg)
             continue
 
         # content がリストの場合、image_url を除去
@@ -47,20 +76,29 @@ def _strip_images_from_messages(messages: List[Dict[str, Any]]) -> List[Dict[str
                 if isinstance(part, dict) and part.get("type") == "image_url":
                     image_count += 1
                     continue
+                if isinstance(part, dict) and part.get("type") == "text":
+                    text_value = part.get("text")
+                    part = dict(part)
+                    part["text"] = _strip_image_data_from_text(text_value) if isinstance(text_value, str) else text_value
+                elif isinstance(part, str):
+                    part = _strip_image_data_from_text(part)
                 new_content.append(part)
 
-            if image_count > 0:
+            total_images = image_count + extra_image_count
+            if total_images > 0:
                 new_content.append({
                     "type": "text",
-                    "text": f"[画像: {image_count}枚省略]"
+                    "text": f"[画像: {total_images}枚省略]"
                 })
 
-            new_msg = dict(msg)
+            new_msg = base_msg
             new_msg["content"] = new_content if new_content else [{"type": "text", "text": "[画像のみのメッセージ]"}]
             stripped.append(new_msg)
             continue
 
-        stripped.append(msg)
+        # Fallback for unexpected shapes
+        base_msg["content"] = content
+        stripped.append(base_msg)
 
     return stripped
 
@@ -485,6 +523,7 @@ def _normalise_conversation_messages(raw_messages: Any) -> List[Dict[str, str]]:
         content = entry.get("content")
         if not isinstance(content, str):
             continue
+        content = _strip_image_data_from_text(content)
 
         raw_role = entry.get("role")
         role = "system"
