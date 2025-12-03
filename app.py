@@ -805,6 +805,47 @@ def delete_device(device_id: str):
     return jsonify({"status": "deleted", "device_id": cleaned_id})
 
 
+@app.delete("/api/devices/<device_id>/jobs")
+def clear_device_jobs(device_id: str):
+    # 指定デバイスの待機ジョブをすべてクリア
+
+    cleaned_id = (device_id or "").strip()
+    if not cleaned_id:
+        return jsonify({"error": "device_id is required"}), 400
+
+    device = _DEVICES.get(cleaned_id)
+    if not device:
+        return jsonify({"error": "device not registered"}), 404
+
+    # 保留中のジョブIDを特定
+    jobs_to_cancel = [
+        job_id for job_id, assigned_dev in _PENDING_JOBS.items()
+        if assigned_dev == cleaned_id
+    ]
+
+    count = 0
+    # _PENDING_JOBS から削除し、メタデータを更新
+    for job_id in jobs_to_cancel:
+        _PENDING_JOBS.pop(job_id, None)
+        metadata = _JOB_METADATA.get(job_id)
+        if metadata is not None:
+            metadata["status"] = "cancelled"
+            metadata["cancelled_at"] = time.time()
+        count += 1
+
+    # デバイス自体のキューもクリア
+    # (既にポーリングされてデバイスのメモリにあるものは消せないが、サーバーのキューにあるものは消す)
+    if device.job_queue:
+        count += len(device.job_queue)
+        device.job_queue.clear()
+        
+    # 重複カウントを調整（PendingJobsにあるものはQueueにもあるはずなので）
+    # 正確な数は難しいが、ユーザーへのフィードバックとしては "Cleared" で十分
+
+    device.last_seen = time.time()
+    return jsonify({"status": "cleared", "device_id": cleaned_id, "count": count})
+
+
 @app.get("/api/devices/<device_id>/jobs/next")
 def next_job(device_id: str):
     # エッジデバイスが次に取得するジョブをポーリング

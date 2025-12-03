@@ -439,6 +439,16 @@ function renderDevices(){
     renameBtn.textContent = "✏️";
     tools.appendChild(renameBtn);
 
+    const clearJobsBtn = document.createElement("button");
+    clearJobsBtn.type = "button";
+    clearJobsBtn.className = "iconbtn";
+    clearJobsBtn.dataset.action = "clear-jobs";
+    clearJobsBtn.dataset.deviceId = device.device_id;
+    clearJobsBtn.title = "待機ジョブをクリア";
+    clearJobsBtn.setAttribute("aria-label", `${ariaLabel} の待機ジョブをクリア`);
+    clearJobsBtn.textContent = "🧹";
+    tools.appendChild(clearJobsBtn);
+
     const deleteBtn = document.createElement("button");
     deleteBtn.type = "button";
     deleteBtn.className = "iconbtn iconbtn--danger";
@@ -537,6 +547,30 @@ async function updateDeviceDisplayName(deviceId, displayName){
 // デバイスを削除する REST API を呼び出しローカル状態を調整
 async function deleteDevice(deviceId){
   const res = await fetch(`/api/devices/${encodeURIComponent(deviceId)}`, {
+    method: "DELETE",
+  });
+
+  const text = await res.text();
+  let data = null;
+  if(text){
+    try{
+      data = JSON.parse(text);
+    }catch(_err){
+      // ignore
+    }
+  }
+
+  if(!res.ok){
+    const message = (data && (data.error || data.message)) || text || `HTTP ${res.status}`;
+    throw new Error(message);
+  }
+
+  return data;
+}
+
+// 指定デバイスの待機ジョブを全てクリアする
+async function clearDeviceJobs(deviceId){
+  const res = await fetch(`/api/devices/${encodeURIComponent(deviceId)}/jobs`, {
     method: "DELETE",
   });
 
@@ -786,6 +820,23 @@ if(gridEl){
       }catch(err){
         const message = err instanceof Error ? err.message : String(err);
         showRegisterNotice(`名前の更新に失敗しました: ${message}`, "error");
+      }
+      return;
+    }
+
+    if(action === "clear-jobs"){
+      const device = devices.find((d) => d.device_id === deviceId);
+      const label = displayName(device) || deviceId;
+      const confirmed = window.confirm(`デバイス「${label}」の待機ジョブをすべて削除しますか？\n未実行のコマンドはキャンセルされます。`);
+      if(!confirmed) return;
+      try{
+        await clearDeviceJobs(deviceId);
+        renderDevices();
+        showRegisterNotice(`デバイス「${label}」の待機ジョブをクリアしました。`, "success");
+        fetchDevices({ silent: true });
+      }catch(err){
+        const message = err instanceof Error ? err.message : String(err);
+        showRegisterNotice(`ジョブのクリアに失敗しました: ${message}`, "error");
       }
       return;
     }

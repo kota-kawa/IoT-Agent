@@ -3,7 +3,6 @@ from edge_compat import Pin, ADC, PWM, random, time
 # =========================
 # ハードウェア初期化
 # =========================
-LED_PIN = Pin("LED", Pin.OUT)
 led0 = Pin(0, Pin.OUT)
 led1 = Pin(1, Pin.OUT)
 TEMP_ADC = ADC(4)
@@ -38,71 +37,6 @@ def roll_dice():
     print("[dice] roll -> {}".format(v))
     return v
 
-
-def blink_led(times: int = 5, interval_sec: float = 0.2):
-    """オンボードLED点滅"""
-    if times < 1:
-        raise ValueError("times must be >= 1")
-    if interval_sec <= 0:
-        raise ValueError("interval_sec must be > 0")
-    print("[led] blinking {} times @ {:.3f}s".format(times, interval_sec))
-    for _ in range(times):
-        LED_PIN.value(1)
-        time.sleep(interval_sec)
-        LED_PIN.value(0)
-        time.sleep(interval_sec)
-    print("[led] done")
-    return True
-
-
-def led_pattern(pattern: str = "heartbeat"):
-    """
-    オンボードLEDの発光パターンを実行。
-    """
-    pattern = (pattern or "heartbeat").lower()
-    dot = 150
-    dash = 450
-    seq = []
-    if pattern == "heartbeat":
-        seq = [(1, 110), (0, 120), (1, 220), (0, 520)]
-    elif pattern == "fast":
-        seq = [(1, 80), (0, 80)] * 8
-    elif pattern == "sos":
-        seq = []
-        for symbol in ("... --- ..."):
-            if symbol == ".":
-                seq += [(1, dot), (0, 120)]
-            elif symbol == "-":
-                seq += [(1, dash), (0, 200)]
-            else:
-                seq += [(0, 300)]
-    elif pattern == "beacon":
-        seq = [(1, 500), (0, 900)] * 3
-    elif pattern == "double":
-        seq = [(1, 140), (0, 140), (1, 140), (0, 500)] * 2
-    elif pattern == "pulse":
-        # ゆっくりとした明滅
-        seq = [(1, 800), (0, 800)] * 3
-    elif pattern == "strobe":
-        # 高速点滅
-        seq = [(1, 40), (0, 40)] * 15
-    elif pattern == "wave":
-        # 波のような明滅（徐々に長く、短く）
-        seq = [(1, 100), (0, 100), (1, 200), (0, 200), (1, 300), (0, 300), (1, 200), (0, 200), (1, 100), (0, 100)]
-    elif pattern == "breathe":
-        # 呼吸のような緩やかな明滅（長い点灯、短い消灯を繰り返す）
-        seq = [(1, 1000), (0, 500), (1, 1000), (0, 500)]
-    elif pattern == "alert":
-        # 警告パターン（短い点滅を3回、休止、繰り返し）
-        seq = [(1, 100), (0, 100), (1, 100), (0, 100), (1, 100), (0, 400)] * 2
-    else:
-        raise ValueError("unknown pattern: {}".format(pattern))
-    for state, ms in seq:
-        LED_PIN.value(1 if state else 0)
-        time.sleep_ms(int(ms))
-    LED_PIN.value(0)
-    print("[led] pattern played ({})".format(pattern))
-    return {"pattern": pattern, "steps": len(seq)}
 
 
 def read_temperature(samples: int = 16, sample_interval_sec: float = 0.01):
@@ -876,22 +810,6 @@ FUNCTIONS = {
         "description": "Roll a 6-sided dice and return result.",
         "params": [],  # no args
     },
-    "led": {
-        "callable": blink_led,
-        "description": "Blink onboard LED.",
-        "params": [
-            {"name": "times", "type": "int", "default": 5, "required": False},
-            {"name": "interval_sec", "type": "float", "default": 0.2, "required": False},
-        ],
-    },
-    "led_pattern": {
-        "callable": led_pattern,
-        "description": "Play a preset pattern on the onboard LED.",
-        "params": [
-            {"name": "pattern", "type": "str", "default": "heartbeat", "required": False,
-             "enum": ["heartbeat", "fast", "sos", "beacon", "double", "pulse", "strobe", "wave", "breathe", "alert"]},
-        ],
-    },
     "led0_on": {
         "callable": led0_on,
         "description": "Turn on LED 0 (GPIO0).",
@@ -1008,8 +926,6 @@ __all__ = [
     "FUNCTIONS",
     "CONTRAST_PERCENT_DEFAULT",
     "roll_dice",
-    "blink_led",
-    "led_pattern",
     "read_temperature",
     "led0_on",
     "led0_off",
