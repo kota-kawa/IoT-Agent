@@ -21,7 +21,8 @@ LCD_D5 = 7
 LCD_D6 = 8
 LCD_D7 = 9
 CONTRAST_PWM_PIN = 12
-CONTRAST_PERCENT_DEFAULT = 25
+CONTRAST_PERCENT_DEFAULT = 45  # ≈0.9V on V0 (3.3Vの約27%)
+CONTRAST_PERCENT_MAX = 60      # 上げすぎると白反転するので60%に制限
 PWM_FREQ_HZ = 100_000
 LCD_COLS = 16
 LCD_ROWS = 2
@@ -407,7 +408,7 @@ def set_contrast_percent(percent):
         percent = 0
     if percent > 100:
         percent = 100
-    max_percent = 40.0
+    max_percent = float(CONTRAST_PERCENT_MAX)
     duty = int((percent * max_percent / 100.0) * 65535.0 / 100.0)
     _contrast_pwm.duty_u16(duty)
 
@@ -747,6 +748,7 @@ def lcd_text(line1: str = "", line2: str = "", contrast_percent: int = CONTRAST_
     任意の文字列をLCDに表示。ASCIIのみ、1行あたり最大16文字。duration_ms>0なら表示後に消去。
     """
     set_contrast_percent(contrast_percent)
+    time.sleep_ms(10)  # RCフィルタが収束するまで待つ
     lcd = HD44780(LCD_RS, LCD_E, LCD_D4, LCD_D5, LCD_D6, LCD_D7, cols=LCD_COLS, rows=LCD_ROWS)
     line1_clean = _prepare_lcd_line(line1)
     line2_clean = _prepare_lcd_line(line2)
@@ -779,6 +781,7 @@ def lcd_face(mode: str = "blink_cycle", contrast_percent: int = CONTRAST_PERCENT
     LCDへ顔アニメーションを1サイクル表示。
     """
     set_contrast_percent(contrast_percent)
+    time.sleep_ms(10)
     lcd = HD44780(LCD_RS, LCD_E, LCD_D4, LCD_D5, LCD_D6, LCD_D7, cols=LCD_COLS, rows=LCD_ROWS)
     face = FaceAnimator(lcd, col=FACE_COL, row_top=FACE_ROW_TOP)
     try:

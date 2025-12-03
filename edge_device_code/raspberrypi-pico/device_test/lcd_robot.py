@@ -18,7 +18,9 @@ from machine import Pin, PWM
 import time
 
 # ===== 調整用パラメータ =====
-CONTRAST_PERCENT_DEFAULT = 25
+# 45% -> おおよそ0.9V。顔が薄い場合は60%まで段階的に上げる。
+CONTRAST_PERCENT_DEFAULT = 45
+CONTRAST_PERCENT_MAX = 60
 PWM_FREQ_HZ = 100_000
 
 # LCDピン割り当て（要求: GP13/14/15は使わない）
@@ -115,7 +117,7 @@ _pwm.freq(PWM_FREQ_HZ)
 def set_contrast_percent(percent):
     if percent < 0: percent = 0
     if percent > 100: percent = 100
-    max_percent = 40.0  # 3.3Vの40% ≈ 1.32V
+    max_percent = float(CONTRAST_PERCENT_MAX)
     duty = int((percent * max_percent / 100.0) * 65535.0 / 100.0)
     _pwm.duty_u16(duty)
 
