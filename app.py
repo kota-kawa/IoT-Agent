@@ -1164,7 +1164,7 @@ def mcp_sse_endpoint():
     def generate():
         while True:
             try:
-                msg = output_queue.get(timeout=60) # Keepalive timeout
+                msg = output_queue.get(timeout=25) # Keepalive timeout
                 if msg is None:
                     break
                 yield msg

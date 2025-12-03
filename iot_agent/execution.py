@@ -502,6 +502,10 @@ def _summarize_device_command_sequence(
     image_inputs = _extract_image_inputs(summaries)
 
     if client is None:
+        if not fallback_reply:
+            if summaries:
+                return "デバイス操作を実行しました（LLMなし）。", image_inputs
+            return "特に行うべき操作はありませんでした。", image_inputs
         return fallback_reply, image_inputs
 
     provider, model_name, _, _ = apply_model_selection("iot")
@@ -530,10 +534,18 @@ def _summarize_device_command_sequence(
         )
         llm_reply = _call_llm_text(client, prompt_payload)
     except Exception:
-        return fallback_reply, image_inputs
+        return fallback_reply or "処理が完了しましたが、応答メッセージの生成に失敗しました。", image_inputs
 
     cleaned_reply = llm_reply.strip() if isinstance(llm_reply, str) else ""
-    return (cleaned_reply or fallback_reply), image_inputs
+    final_reply = cleaned_reply or fallback_reply
+    
+    if not final_reply:
+        if summaries:
+            final_reply = "デバイス操作を実行しました。"
+        else:
+            final_reply = "特に行うべき操作はありませんでした。"
+
+    return final_reply, image_inputs
 
 
 def _extract_image_inputs(summaries: List[_CommandExecutionSummary]) -> List[Dict[str, Any]]:
