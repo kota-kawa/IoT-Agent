@@ -5,3 +5,4 @@ python-dotenv>=1.0.1
 anthropic>=0.75.0
 requests
 Flask-SocketIO
+mcp[cli]
