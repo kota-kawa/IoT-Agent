@@ -2,11 +2,19 @@ import json
 import os
 import requests
 import time
+import threading
+import queue
+import uuid
+import asyncio
+import anyio
 from collections import deque
 from importlib import metadata
 from typing import Any, Dict, List, Optional, Tuple
 
-from flask import Flask, jsonify, redirect, request, session, url_for
+from flask import Flask, jsonify, redirect, request, session, url_for, Response, stream_with_context
+from pydantic import TypeAdapter
+from mcp.types import JSONRPCMessage
+from iot_agent.mcp_server import mcp_server
 
 from iot_agent.config import APP_PASSWORD, DEVICE_RESULT_TIMEOUT, SECRET_KEY
 from iot_agent.device_utils import (
@@ -363,6 +371,12 @@ def chat():
                 reply_message = (reply_message + "\n" if reply_message else "") + limitation_notice
 
             payload = {"reply": reply_message}
+            
+            # If images were captured during tool execution (MCP flow), include them
+            captured_images = parsed_response.get("images")
+            if captured_images:
+                payload["images"] = captured_images
+
             status = 200
 
             if validation_errors:
@@ -1040,6 +1054,92 @@ def post_result(device_id: str):
         response_payload["warning"] = "device_id mismatch resolved via job_id"
 
     return jsonify(response_payload)
+
+
+# --- MCP Server Bridge ---
+_MCP_SESSIONS = {}
+
+@app.route("/mcp/sse")
+def mcp_sse_endpoint():
+    session_id = str(uuid.uuid4())
+    input_queue = queue.Queue()
+    output_queue = queue.Queue()
+    _MCP_SESSIONS[session_id] = input_queue
+    
+    def run_server_loop():
+        async def run():
+            read_stream_send, read_stream_recv = anyio.create_memory_object_stream(10)
+            write_stream_send, write_stream_recv = anyio.create_memory_object_stream(10)
+            
+            async def feed_input():
+                while True:
+                    try:
+                        # Blocking get from queue in executor
+                        msg = await asyncio.to_thread(input_queue.get)
+                        if msg is None:
+                            break
+                        try:
+                            parsed = TypeAdapter(JSONRPCMessage).validate_python(msg)
+                            await read_stream_send.send(parsed)
+                        except Exception as e:
+                            print(f"MCP Parse Error: {e}")
+                    except Exception:
+                        break
+                await read_stream_send.aclose()
+
+            async def consume_output():
+                async with write_stream_recv:
+                    async for msg in write_stream_recv:
+                        if hasattr(msg, "model_dump_json"):
+                            data = msg.model_dump_json()
+                        else:
+                            data = json.dumps(msg)
+                        output_queue.put(f"event: message\ndata: {data}\n\n")
+                output_queue.put(None)
+
+            async with anyio.create_task_group() as tg:
+                tg.start_soon(feed_input)
+                tg.start_soon(consume_output)
+                output_queue.put(f"event: endpoint\ndata: /mcp/messages?session_id={session_id}\n\n")
+                
+                try:
+                    await mcp_server.run(
+                        read_stream_recv,
+                        write_stream_send,
+                        initialization_options=mcp_server.create_initialization_options()
+                    )
+                except Exception as e:
+                    print(f"MCP Run Error: {e}")
+        
+        try:
+            asyncio.run(run())
+        finally:
+            if session_id in _MCP_SESSIONS:
+                del _MCP_SESSIONS[session_id]
+                
+    t = threading.Thread(target=run_server_loop, daemon=True)
+    t.start()
+    
+    def generate():
+        while True:
+            try:
+                msg = output_queue.get(timeout=60) # Keepalive timeout
+                if msg is None:
+                    break
+                yield msg
+            except queue.Empty:
+                yield ": keepalive\n\n"
+                
+    return Response(stream_with_context(generate()), mimetype="text/event-stream")
+
+@app.route("/mcp/messages", methods=["POST"])
+def mcp_messages_endpoint():
+    session_id = request.args.get("session_id")
+    if not session_id or session_id not in _MCP_SESSIONS:
+        return jsonify({"error": "Session not found"}), 404
+    
+    _MCP_SESSIONS[session_id].put(request.json)
+    return jsonify({"status": "accepted"}), 202
 
 
 @app.get("/api/dependencies")
