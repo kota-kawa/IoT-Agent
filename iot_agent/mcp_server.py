@@ -12,7 +12,7 @@ from mcp.types import (
 )
 import mcp.types as types
 from iot_agent.state import _DEVICES, _PENDING_JOBS, _JOB_METADATA, _COMPLETED_JOBS
-from iot_agent.device_utils import _enqueue_device_command, _await_device_result, _device_supports_capability, _serialize_device
+from iot_agent.device_utils import _enqueue_device_command, _await_device_result, _await_device_result_async, _device_supports_capability, _serialize_device
 
 # Create the server instance
 mcp_server = Server("iot-agent")
@@ -96,7 +96,7 @@ async def call_tool(name: str, arguments: Any) -> list[types.TextContent | types
 
         # Wait for result
         # Note: this blocks the async loop handling this request.
-        result = _await_device_result(device_id, job_id, timeout=10.0)
+        result = await _await_device_result_async(device_id, job_id, timeout=10.0)
         
         if result:
             return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False))]

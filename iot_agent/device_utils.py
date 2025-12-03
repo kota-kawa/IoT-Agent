@@ -1,6 +1,7 @@
 import json
 import time
 import uuid
+import asyncio
 from typing import Any, Deque, Dict, List, Optional
 
 from .config import AGENT_CAPABILITY_NAME, AGENT_ROLE_VALUE, MAX_COMPLETED_JOBS
@@ -350,6 +351,26 @@ def _await_device_result(device_id: str, job_id: str, timeout: float = 60.0) -> 
             _store_completed_job(job_id, result)
             return result
         time.sleep(0.2)
+    return None
+
+
+async def _await_device_result_async(device_id: str, job_id: str, timeout: float = 60.0) -> Optional[Dict[str, Any]]:
+    # デバイスから結果が返るまでポーリングし、タイムアウトしたら None (Async版)
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        device = _DEVICES.get(device_id)
+        if not device:
+            return None
+        result = device.job_results.pop(job_id, None)
+        if result:
+            _PENDING_JOBS.pop(job_id, None)
+            metadata = _JOB_METADATA.get(job_id)
+            if metadata is not None:
+                metadata["status"] = "completed"
+                metadata["completed_at"] = time.time()
+            _store_completed_job(job_id, result)
+            return result
+        await asyncio.sleep(0.2)
     return None
 
 
