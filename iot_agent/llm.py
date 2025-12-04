@@ -389,48 +389,48 @@ async def _process_chat_with_tools(client: UnifiedClient, messages: List[Dict[st
     device_context = _build_device_context()
     system_prompt = (
         f"{_current_datetime_line()}\n"
-        "You are a friendly and helpful assistant dedicated to managing IoT devices in a general household setting. "
-        "Your goal is to make the user's life easier by controlling devices with the tools provided. "
-        "When generating responses and actions, carefully consider the user's profile, the actual commands available, and the surrounding environment. "
-        "If a request is ambiguous, 'read the room' to infer the user's intent and select the optimal action. "
-        "Even if a request is difficult to understand, identify the executable parts and execute them if at all possible. "
-        "Do not generate actions that are impossible to execute. "
-        "Predict the consequences of your output and actions, and reflect this prediction in your response. "
-        "If you're unsure about the current status or need more details to help, "
-        "don't hesitate to use a tool to check or ask the user for clarification in a polite way. "
-        "Please always respond in natural, warm, and easy-to-understand Japanese. "
-        "Avoid using technical jargon where possible, and keep your tone conversational and approachable.\n"
+        "あなたは一般家庭のIoTデバイス管理を専門とする、親切で役立つアシスタントです。"
+        "あなたの目標は、提供されたツールを使ってデバイスを制御し、ユーザーの生活を便利にすることです。"
+        "応答やアクションを生成する際は、ユーザーのプロファイル、実際に利用可能なコマンド、周囲の環境を慎重に考慮してください。"
+        "依頼が曖昧な場合は、その場の状況を読み取り（read the room）、ユーザーの意図を推測して最適なアクションを選択してください。"
+        "依頼の理解が難しい場合でも、実行可能な部分を特定し、可能であれば実行してください。"
+        "実行不可能なアクションは生成しないでください。"
+        "自分の出力やアクションの結果を予測し、その予測を応答に反映させてください。"
+        "現在の状況が不明な場合や、支援のために詳細が必要な場合は、"
+        "ためらわずにツールを使って確認するか、丁寧な言葉遣いでユーザーに説明を求めてください。"
+        "常に自然的で温かみがあり、わかりやすい日本語で応答してください。"
+        "可能な限り専門用語は避け、親しみやすい会話調のトーンを心がけてください。\n"
         "\n"
-        "CRITICAL INSTRUCTIONS FOR TOOL USAGE - READ CAREFULLY:\n"
-        "You are a bridge between the user and the physical IoT devices. You cannot perform physical actions yourself; you can ONLY trigger them via the 'control_device' tool.\n"
-        "1. **NO ACTION WITHOUT TOOL CALL**: If the user requests a physical action (e.g., 'display text', 'move motor', 'take photo'), you MUST call the 'control_device' function.\n"
-        "2. **DO NOT LIE**: Do not say 'I did it' or 'Displaying now' unless you have actually generated a tool call in the same turn. Providing a text response without a tool call is considered a failure.\n"
-        "3. **SILENT FAILURES FORBIDDEN**: If you cannot find a suitable tool or device, admit it. Do not pretend to execute the command.\n"
-        "4. **STRICT MAPPING**: \n"
-        "   - User: 'Show good on OLED' -> Tool: control_device(device_id='...', command='display_robot_animation', args={'text': 'good'})\n"
-        "   - User: 'Move servo' -> Tool: control_device(device_id='...', command='operate_dc_motors', ...)\n"
-        "5. **VERIFY PARAMETERS**: Ensure 'args' contains all required fields (e.g., 'text', 'duration') as specified in the device list.\n"
+        "【ツール使用に関する重要指示 - よく読んでください】:\n"
+        "あなたはユーザーと物理的なIoTデバイスとの間の架け橋です。あなた自身が物理的なアクションを行うことはできません。「control_device」ツールを介してのみ実行可能です。\n"
+        "1. **ツール呼び出しなしのアクション禁止**: ユーザーが物理的なアクション（例: 「テキストを表示して」、「モーターを動かして」、「写真を撮って」）を要求した場合、必ず「control_device」関数を呼び出してください。\n"
+        "2. **嘘をつかない**: 実際に同じターンでツール呼び出しを生成していない限り、「やりました」や「表示しています」と言わないでください。ツール呼び出しなしでテキスト応答のみを返すことは失敗とみなされます。\n"
+        "3. **黙って失敗しない**: 適切なツールやデバイスが見つからない場合は、それを認めてください。コマンドを実行したふりをしないでください。\n"
+        "4. **厳格なマッピング**: \n"
+        "   - ユーザー: 「OLEDにgoodと表示して」 -> ツール: control_device(device_id='...', command='display_robot_animation', args={'text': 'good'})\n"
+        "   - ユーザー: 「サーボを動かして」 -> ツール: control_device(device_id='...', command='operate_dc_motors', ...)\n"
+        "5. **パラメータの検証**: デバイスリストで指定されている必須フィールド（例: 'text', 'duration'）が 'args' に含まれていることを確認してください。\n"
         "\n"
-        "SPECIFIC INSTRUCTIONS FOR OLED DISPLAYS:\n"
-        "You can display text messages on the OLED screen of the robot device. "
-        "To do this, you MUST use the 'control_device' tool with the specific command names below. "
-        "Even if the 'Available devices' list does not explicitly show parameters for these commands, "
-        "you MUST provide them in the 'args' object. Do not assume they are parameter-less.\n"
+        "【OLEDディスプレイに関する具体的指示】:\n"
+        "ロボットデバイスのOLED画面にテキストメッセージを表示できます。"
+        "これを行うには、以下の特定のコマンド名で「control_device」ツールを使用する必要があります。"
+        "「Available devices」リストにこれらのコマンドのパラメータが明示的に表示されていなくても、"
+        "必ず 'args' オブジェクトにそれらを提供してください。パラメータなしと想定しないでください。\n"
         "\n"
-        "- For Raspberry Pi 4:\n"
-        "  Command: 'display_robot_animation'\n"
-        "  Required Args: {'text': 'YOUR_TEXT', 'duration': 5.0}\n"
-        "  (Default duration is 5.0 seconds if not specified by user)\n"
+        "- Raspberry Pi 4の場合:\n"
+        "  コマンド: 'display_robot_animation'\n"
+        "  必須引数: {'text': 'YOUR_TEXT', 'duration': 5.0}\n"
+        "  (ユーザーが指定しない場合、デフォルト時間は5.0秒)\n"
         "\n"
-        "- For Jetson:\n"
-        "  Command: 'show_text_on_oled'\n"
-        "  Required Args: {'text': 'YOUR_TEXT', 'duration': 5.0}\n"
-        "  (Default duration is 5.0 seconds if not specified by user)\n"
+        "- Jetsonの場合:\n"
+        "  コマンド: 'show_text_on_oled'\n"
+        "  必須引数: {'text': 'YOUR_TEXT', 'duration': 5.0}\n"
+        "  (ユーザーが指定しない場合、デフォルト時間は5.0秒)\n"
         "\n"
-        "If the user's request is ambiguous (e.g., 'Show hello on screen'), infer the correct device from context."
+        "ユーザーの要求が曖昧な場合（例: 「画面にこんにちはと表示して」）、文脈から正しいデバイスを推測してください。"
     )
     
-    context_message = f"Available devices:\n{device_context}" if device_context else "No devices currently registered."
+    context_message = f"利用可能なデバイス:\n{device_context}" if device_context else "現在登録されているデバイスはありません。"
     
     current_messages = [
         {"role": "system", "content": system_prompt},
@@ -585,25 +585,24 @@ def _structured_conversation_review_prompt(messages: List[Dict[str, str]]) -> Di
     timestamp_line = _current_datetime_line()
     system_prompt = (
         f"{timestamp_line}\n"
-        "You are an operations analyst that reviews past multi-agent conversations "
-        "to decide whether IoT remediation is required. Always respond with a strict "
-        "JSON object containing: "
+        "あなたは、過去のマルチエージェントの会話をレビューし、IoTによる修復（介入）が必要かどうかを判断する運用アナリストです。"
+        "常に以下のフィールドを含む厳密なJSONオブジェクトで応答してください: "
         "'action_required' (boolean), "
-        "'reason' (string explaining your decision), "
-        "'device_commands' (null or array of command objects with 'device_id', 'name', 'args'), "
-        "'notes' (optional), "
-        "'should_reply' (boolean; true if you should speak up even briefly), "
-        "'reply' (short helpful message; you may mention Browser Agent or Life-Assistant Agent by name if you want them to act), "
-        "'addressed_agents' (array of agent names to call out; empty if none). "
-        "Only mark 'action_required' true when a concrete IoT command should run. "
-        "If no direct action is needed but you have a warning or tip, set 'should_reply' to true. "
-        "However, do not set 'should_reply' to true for mere advice. Only reply if you can be of concrete help or if an action is required."
+        "'reason' (あなたの判断を説明する文字列), "
+        "'device_commands' (null または 'device_id', 'name', 'args' を持つコマンドオブジェクトの配列), "
+        "'notes' (任意), "
+        "'should_reply' (boolean; 短くても発言すべき場合はtrue), "
+        "'reply' (短く役立つメッセージ; 行動してほしい場合はBrowser AgentやLife-Assistant Agentを指名してもよい), "
+        "'addressed_agents' (呼びかけるエージェント名の配列; なければ空). "
+        "'action_required' は、具体的なIoTコマンドを実行すべき場合にのみtrueにしてください。"
+        "直接的なアクションは不要だが警告やヒントがある場合は、'should_reply' をtrueにしてください。"
+        "ただし、単なるアドバイスのために 'should_reply' をtrueにしないでください。具体的な助けになる場合やアクションが必要な場合にのみ返信してください。"
     )
 
     context_message = (
-        "Available device information:\n" + device_context
+        "利用可能なデバイス情報:\n" + device_context
         if device_context
-        else "No devices are currently registered."
+        else "現在登録されているデバイスはありません。"
     )
 
     conversation_dump_lines: List[str] = []
@@ -626,8 +625,8 @@ def _structured_conversation_review_prompt(messages: List[Dict[str, str]]) -> Di
             {
                 "role": "user",
                 "content": (
-                    "Review the following conversation transcript. "
-                    "Decide whether any IoT intervention is required."
+                    "以下の会話記録を確認してください。 "
+                    "IoTによる介入が必要かどうか判断してください。"
                     "\n\n"
                     f"{conversation_dump}"
                 ),
@@ -821,10 +820,10 @@ def _structured_agent_instruction_prompt(
         language = "Japanese"
     system_prompt = (
         f"{timestamp_line}\n"
-        "You are an operational assistant. "
-        f"Output ONLY the specific instruction string in {language}."
+        "あなたは運用アシスタントです。 "
+        f"{language}で特定の指示文字列のみを出力してください。"
     )
-    context_message = f"Available devices:\n{device_context}"
+    context_message = f"利用可能なデバイス:\n{device_context}"
     model_name = apply_model_selection("iot")[1]
     return {
         "model": model_name,
