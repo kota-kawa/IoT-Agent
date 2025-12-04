@@ -56,13 +56,13 @@ async def list_tools() -> list[Tool]:
     # Generic control tool
     tools.append(Tool(
         name="control_device",
-        description="Control an IoT device. Use this to execute actions like turning on/off, setting colors, capturing photos, etc.",
+        description="IoTデバイスを制御します。電源のオン/オフ、色の設定、写真撮影などのアクションを実行するために使用します。",
         inputSchema={
             "type": "object",
             "properties": {
-                "device_id": {"type": "string", "description": "The ID of the device to control"},
-                "command": {"type": "string", "description": "The capability/command name (e.g., 'turn_on', 'set_color', 'set_brightness')"},
-                "args": {"type": "object", "description": "Arguments for the command (e.g., {'duration': 5})"}
+                "device_id": {"type": "string", "description": "制御対象のデバイスID"},
+                "command": {"type": "string", "description": "機能/コマンド名（例: 'turn_on', 'set_color', 'set_brightness'）"},
+                "args": {"type": "object", "description": "コマンドの引数（例: {'duration': 5}）"}
             },
             "required": ["device_id", "command"]
         }
@@ -79,20 +79,20 @@ async def call_tool(name: str, arguments: Any) -> list[types.TextContent | types
         args = arguments.get("args", {})
         
         if not device_id or not command:
-             return [TextContent(type="text", text="Error: device_id and command are required")]
+             return [TextContent(type="text", text="エラー: device_id と command は必須です")]
         
         device = _DEVICES.get(device_id)
         if not device:
-             return [TextContent(type="text", text="Error: Device not found")]
+             return [TextContent(type="text", text="エラー: デバイスが見つかりません")]
              
         # Use internal validation helper? Or just _device_supports_capability
         if not _device_supports_capability(device, command):
-             return [TextContent(type="text", text=f"Error: Device {device_id} does not support '{command}'")]
+             return [TextContent(type="text", text=f"エラー: デバイス {device_id} は '{command}' をサポートしていません")]
              
         # Enqueue job
         job_id = _enqueue_device_command(device_id, {"name": command, "args": args}, source="mcp")
         if not job_id:
-             return [TextContent(type="text", text="Error: Failed to enqueue command (device might be disconnected)")]
+             return [TextContent(type="text", text="エラー: コマンドをキューに追加できませんでした（デバイスが切断されている可能性があります）")]
 
         # Wait for result
         # Note: this blocks the async loop handling this request.
@@ -101,6 +101,6 @@ async def call_tool(name: str, arguments: Any) -> list[types.TextContent | types
         if result:
             return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False))]
         else:
-            return [TextContent(type="text", text="Command queued but timed out waiting for result.")]
+            return [TextContent(type="text", text="コマンドはキューに入れられましたが、結果待ちでタイムアウトしました。")]
             
     raise ValueError(f"Tool not found: {name}")

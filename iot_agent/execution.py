@@ -410,7 +410,7 @@ def _execute_agent_device_command(
             )
 
         if not english_instruction:
-            message = "Failed to build instruction for device."
+            message = "デバイスへの指示の生成に失敗しました。"
             return _CommandExecutionSummary(
                 device_id=agent.device_id,
                 command_name=AGENT_COMMAND_NAME,
@@ -648,22 +648,22 @@ def _structured_multi_command_followup_prompt_with_images(
         if summary.result is not None:
             result_text = _format_return_value_for_user(summary.result)
         else:
-            result_text = "No structured result was reported."
+            result_text = "構造化された結果は報告されませんでした。"
 
         manual = summary.manual_reply.strip() if isinstance(summary.manual_reply, str) else ""
         error_context = summary.error_text.strip() if isinstance(summary.error_text, str) else ""
 
         lines = [
-            f"Step {index}:",
-            f"  Device: {device_label}",
-            f"  Command or instruction: {summary.instruction or summary.command_name}",
-            f"  Arguments: {args_text}",
-            f"  Result details (internal): {result_text}",
+            f"ステップ {index}:",
+            f"  デバイス: {device_label}",
+            f"  コマンドまたは指示: {summary.instruction or summary.command_name}",
+            f"  引数: {args_text}",
+            f"  結果詳細 (内部): {result_text}",
         ]
         if manual:
-            lines.append(f"  Suggested phrasing: {manual}")
+            lines.append(f"  提案される言い回し (Suggested phrasing): {manual}")
         if error_context:
-            lines.append(f"  Error context: {error_context}")
+            lines.append(f"  エラーコンテキスト: {error_context}")
 
         step_descriptions.append("\n".join(lines))
 
@@ -673,31 +673,31 @@ def _structured_multi_command_followup_prompt_with_images(
         {
             "type": "text",
             "text": (
-                "**IMPORTANT**: The device has captured the attached image(s) just now. "
-                "You MUST describe what is visible in the image(s) to the user in Japanese. "
-                "Do not merely report that the photo was taken; tell the user what is in it. "
-                "Describe the scene, objects, colors, or text you see. "
-                "Ignore any text logs saying 'image omitted'—the real image data is provided here."
+                "**重要**: デバイスがたった今、添付の画像を撮影しました。"
+                "画像に何が写っているかを必ず日本語でユーザーに説明してください。"
+                "単に「写真が撮られました」と報告するのではなく、中身を伝えてください。"
+                "シーン、物体、色、あるいはテキストなど、見えるものを説明してください。"
+                "テキストログに「画像省略」とあっても無視してください。ここにあるのが本物の画像データです。"
             ),
         },
-        {"type": "text", "text": "Conversation context:\n" + conversation_dump},
-        {"type": "text", "text": "Execution summary:\n" + step_block},
+        {"type": "text", "text": "会話のコンテキスト:\n" + conversation_dump},
+        {"type": "text", "text": "実行サマリ:\n" + step_block},
     ]
 
     if initial_reply:
-        user_contents.append({"type": "text", "text": f"Earlier tentative reply: {initial_reply}"})
+        user_contents.append({"type": "text", "text": f"以前の仮の返答: {initial_reply}"})
 
     for image in images:
         note_lines: List[str] = []
         label = image.get("label")
         if isinstance(label, str) and label.strip():
-            note_lines.append(f"Image label: {label.strip()}")
+            note_lines.append(f"画像のラベル: {label.strip()}")
         device_label = image.get("device_id")
         if isinstance(device_label, str) and device_label.strip():
-            note_lines.append(f"Captured by device: {device_label.strip()}")
+            note_lines.append(f"撮影デバイス: {device_label.strip()}")
         details = image.get("details")
         if isinstance(details, str) and details.strip():
-            note_lines.append(f"Metadata: {details.strip()}")
+            note_lines.append(f"メタデータ: {details.strip()}")
         if note_lines:
             user_contents.append({"type": "text", "text": "\n".join(note_lines)})
 
@@ -717,11 +717,11 @@ def _structured_multi_command_followup_prompt_with_images(
                 {
                     "type": "text",
                     "text": (
-                        "You are a friendly assistant supporting IoT devices and cameras. "
-                        "Provide a warm and concise Japanese reply grounded in the attached photos. "
-                        "Describe what is visible in a natural way, avoiding speculation. "
-                        "Speak conversationally to the user, avoiding mechanical logs, Job IDs, or raw error codes. "
-                        "If 'Suggested phrasing' is provided in the input, treat it as a raw log and rephrase it into a friendly, easy-to-understand explanation."
+                        "あなたはIoTデバイスとカメラをサポートする親切なアシスタントです。"
+                        "添付された写真に基づいて、温かく簡潔な日本語の返答を提供してください。"
+                        "推測を避け、自然な方法で見えるものを説明してください。"
+                        "機械的なログ、ジョブID、生のエラーコードなどは避け、ユーザーに話しかけるように会話してください。"
+                        "入力に「Suggested phrasing（提案された言い回し）」がある場合、それは生のログとして扱い、親しみやすく分かりやすい説明に言い換えてください。"
                     ),
                 }
             ],
@@ -731,7 +731,7 @@ def _structured_multi_command_followup_prompt_with_images(
         messages.append(
             {
                 "role": "system",
-                "content": [{"type": "text", "text": "Available device information:\n" + device_context}],
+                "content": [{"type": "text", "text": "利用可能なデバイス情報:\n" + device_context}],
             }
         )
 
@@ -764,49 +764,48 @@ def _structured_multi_command_followup_prompt(
         if summary.result is not None:
             result_text = _format_return_value_for_user(summary.result)
         else:
-            result_text = "No structured result was reported."
+            result_text = "構造化された結果は報告されませんでした。"
 
         manual = summary.manual_reply.strip() if isinstance(summary.manual_reply, str) else ""
         error_context = summary.error_text.strip() if isinstance(summary.error_text, str) else ""
 
         lines = [
-            f"Step {index}:",
-            f"  Device: {device_label}",
-            f"  Command or instruction: {summary.instruction or summary.command_name}",
-            f"  Arguments: {args_text}",
-            f"  Result details (internal): {result_text}",
+            f"ステップ {index}:",
+            f"  デバイス: {device_label}",
+            f"  コマンドまたは指示: {summary.instruction or summary.command_name}",
+            f"  引数: {args_text}",
+            f"  結果詳細 (内部): {result_text}",
         ]
         if manual:
-            lines.append(f"  Suggested phrasing: {manual}")
+            lines.append(f"  提案される言い回し (Suggested phrasing): {manual}")
         if error_context:
-            lines.append(f"  Error context: {error_context}")
+            lines.append(f"  エラーコンテキスト: {error_context}")
 
         step_descriptions.append("\n".join(lines))
 
     step_block = "\n\n".join(step_descriptions)
 
     guidance = (
-        "All queued device commands have now completed. Use the step information provided "
-        "below to craft the final assistant reply in friendly Japanese.\n"
-        "The provided 'Suggested phrasing' is a mechanical log; DO NOT output it directly. "
-        "Instead, explain the result naturally and warmly, as if chatting with a friend. "
-        "Summarize technical details into easy-to-understand language. Do not show Job IDs, error codes (like [Errno 121]), "
-        "or raw JSON unless specifically asked. "
-        "Write one concise paragraph per step, keep the steps in order, and separate "
-        "paragraphs with a blank line.\n"
-        "Clearly mention the device, what was attempted, and the outcome for each step in a helpful manner.\n"
-        "Do not invent new steps or request further actions unless explicitly requested "
-        "by the user."
+        "キューに入っていたすべてのデバイスコマンドが完了しました。以下のステップ情報を基に、"
+        "親しみやすい日本語で最終的なアシスタントの返答を作成してください。\n"
+        "提供されている「Suggested phrasing（提案された言い回し）」は機械的なログです。これをそのまま出力しないでください。"
+        "代わりに、友達とチャットしているかのように、結果を自然かつ温かく説明してください。"
+        "技術的な詳細は分かりやすい言葉に要約してください。ジョブID、エラーコード（[Errno 121]など）、"
+        "または生のJSONは、特に求められない限り表示しないでください。"
+        "各ステップにつき簡潔な段落を1つ書き、ステップの順序を維持し、"
+        "段落の間には空行を入れてください。\n"
+        "各ステップについて、どのデバイスで何を試み、どのような結果になったのかを役立つように明確に言及してください。\n"
+        "ユーザーから明示的に要求されない限り、新しいステップを勝手に作ったり、さらなるアクションを要求したりしないでください。"
     )
 
     if initial_reply:
         guidance += f"\nThe assistant previously told the user: {initial_reply}"
 
     messages: List[Dict[str, str]] = [
-        {"role": "system", "content": "You are a friendly assistant supporting IoT devices."},
+        {"role": "system", "content": "あなたはIoTデバイスをサポートする親切なアシスタントです。"},
     ]
     if device_context:
-        messages.append({"role": "system", "content": "Available device information:\n" + device_context})
+        messages.append({"role": "system", "content": "利用可能なデバイス情報:\n" + device_context})
 
     messages.extend(base_messages)
 
@@ -814,8 +813,8 @@ def _structured_multi_command_followup_prompt(
         messages.append({"role": "assistant", "content": initial_reply})
 
     messages.append({"role": "system", "content": guidance})
-    messages.append({"role": "system", "content": "Step summaries:\n" + step_block})
-    messages.append({"role": "system", "content": "Respond now with the final Japanese reply."})
+    messages.append({"role": "system", "content": "ステップサマリ:\n" + step_block})
+    messages.append({"role": "system", "content": "今すぐ最終的な日本語の返答を返してください。"})
 
     resolved_model = model_name or apply_model_selection("iot")[1]
     return {"model": resolved_model, "input": messages}
