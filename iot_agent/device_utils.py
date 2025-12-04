@@ -376,6 +376,22 @@ async def _await_device_result_async(device_id: str, job_id: str, timeout: float
 
 def _serialize_device(device: DeviceState) -> Dict[str, Any]:
     # クライアント向けにデバイス状態を辞書へ変換する
+
+    def _strip_media(value: Any) -> Any:
+        if isinstance(value, dict):
+            cleaned: Dict[str, Any] = {}
+            for key, val in value.items():
+                if key in {"image_base64", "image_data", "image_base64_jpeg"} and isinstance(val, str):
+                    cleaned[key] = f"[base64 data omitted ({len(val)} chars)]"
+                else:
+                    cleaned[key] = _strip_media(val)
+            return cleaned
+        if isinstance(value, list):
+            return [_strip_media(item) for item in value]
+        return value
+
+    safe_result = _strip_media(device.last_result) if device.last_result else None
+
     return {
         "device_id": device.device_id,
         "capabilities": device.capabilities,
@@ -384,7 +400,7 @@ def _serialize_device(device: DeviceState) -> Dict[str, Any]:
         "queue_depth": len(device.job_queue),
         "last_seen": device.last_seen,
         "registered_at": device.registered_at,
-        "last_result": device.last_result,
+        "last_result": safe_result,
         "approved": device.approved,
     }
 
