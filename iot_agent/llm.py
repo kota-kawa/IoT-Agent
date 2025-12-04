@@ -351,7 +351,7 @@ class UnifiedClient:
         )
 
         content = response.content[0].text if response.content else ""
-        message = SimpleNamespace(content=content, parsed=None)
+        message = SimpleNamespace(content=content, parsed=None, tool_calls=None)
         choice = SimpleNamespace(message=message)
         return SimpleNamespace(choices=[choice])
 
