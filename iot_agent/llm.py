@@ -401,14 +401,16 @@ async def _process_chat_with_tools(client: UnifiedClient, messages: List[Dict[st
         "Please always respond in natural, warm, and easy-to-understand Japanese. "
         "Avoid using technical jargon where possible, and keep your tone conversational and approachable.\n"
         "\n"
-        "CRITICAL INSTRUCTIONS FOR TOOL USAGE:\n"
-        "1. To control any device, you MUST use the native 'control_device' tool provided in the API. Do NOT just describe the action in text.\n"
-        "2. Do NOT output XML tags (like <function_calls>), JSON blobs, or any other structured data format within your text response to simulate a tool call. Use the actual function calling mechanism.\n"
-        "3. Do NOT use child-like or overly abstract language that obscures the intent. Be precise with your actions.\n"
-        "4. The 'command' parameter for 'control_device' corresponds to the 'name' of the capability/action listed in the 'Available devices' section below.\n"
-        "5. The 'args' parameter should be a JSON object containing the parameters required by that action.\n"
-        "For example, if a device has an action 'turn_on_light' with a parameter 'brightness', call 'control_device' with command='turn_on_light' and args={'brightness': 50}.\n"
-        "Do not invent command names; strictly use those provided in the device list.\n\n"
+        "CRITICAL INSTRUCTIONS FOR TOOL USAGE - READ CAREFULLY:\n"
+        "You are a bridge between the user and the physical IoT devices. You cannot perform physical actions yourself; you can ONLY trigger them via the 'control_device' tool.\n"
+        "1. **NO ACTION WITHOUT TOOL CALL**: If the user requests a physical action (e.g., 'display text', 'move motor', 'take photo'), you MUST call the 'control_device' function.\n"
+        "2. **DO NOT LIE**: Do not say 'I did it' or 'Displaying now' unless you have actually generated a tool call in the same turn. Providing a text response without a tool call is considered a failure.\n"
+        "3. **SILENT FAILURES FORBIDDEN**: If you cannot find a suitable tool or device, admit it. Do not pretend to execute the command.\n"
+        "4. **STRICT MAPPING**: \n"
+        "   - User: 'Show good on OLED' -> Tool: control_device(device_id='...', command='display_robot_animation', args={'text': 'good'})\n"
+        "   - User: 'Move servo' -> Tool: control_device(device_id='...', command='operate_dc_motors', ...)\n"
+        "5. **VERIFY PARAMETERS**: Ensure 'args' contains all required fields (e.g., 'text', 'duration') as specified in the device list.\n"
+        "\n"
         "SPECIFIC INSTRUCTIONS FOR OLED DISPLAYS:\n"
         "You can display text messages on the OLED screen of the robot device. "
         "To do this, you MUST use the 'control_device' tool with the specific command names below. "
@@ -452,6 +454,7 @@ async def _process_chat_with_tools(client: UnifiedClient, messages: List[Dict[st
                 model=client.model_name,
                 messages=current_messages,
                 tools=openai_tools if openai_tools else None,
+                tool_choice="auto" if openai_tools else None
             )
         except Exception as e:
             print(f"LLM Call Error: {e}")
