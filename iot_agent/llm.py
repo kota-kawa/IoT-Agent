@@ -399,7 +399,10 @@ async def _process_chat_with_tools(client: UnifiedClient, messages: List[Dict[st
         "If you're unsure about the current status or need more details to help, "
         "don't hesitate to use a tool to check or ask the user for clarification in a polite way. "
         "Please always respond in natural, warm, and easy-to-understand Japanese. "
-        "Avoid using technical jargon where possible, and keep your tone conversational and approachable."
+        "Avoid using technical jargon where possible, and keep your tone conversational and approachable.\n"
+        "IMPORTANT: You can display text messages on the OLED screen of the robot device. "
+        "To do this, use the 'display_robot_animation' command and provide the message in the 'text' parameter. "
+        "For example, to display 'Hello', use: {'name': 'display_robot_animation', 'args': {'text': 'Hello', 'duration': 5.0}}."
     )
     
     context_message = f"Available devices:\n{device_context}" if device_context else "No devices currently registered."
