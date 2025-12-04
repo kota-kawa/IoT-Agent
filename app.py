@@ -392,6 +392,10 @@ def chat():
     except Exception as exc:
         payload, status = _llm_unavailable_response(exc)
 
+    # Multi-Agent-Platform (requests) からのアクセスの場合は画像を削除する
+    if "python-requests" in request.headers.get("User-Agent", ""):
+        payload.pop("images", None)
+
     return jsonify(payload), status
 
 
@@ -452,7 +456,7 @@ def review_conversation():
         response_payload["action_taken"] = True
         response_payload["analysis"]["executed_commands"] = validated_commands
         response_payload["execution_reply"] = final_reply
-        response_payload["images"] = images
+        # response_payload["images"] = images  # Images omitted for platform review
         return jsonify(response_payload), status
 
     return jsonify(response_payload), 200
