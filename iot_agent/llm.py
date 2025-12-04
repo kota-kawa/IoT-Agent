@@ -389,11 +389,13 @@ async def _process_chat_with_tools(client: UnifiedClient, messages: List[Dict[st
     device_context = _build_device_context()
     system_prompt = (
         f"{_current_datetime_line()}\n"
-        "You are an assistant that manages IoT devices. "
-        "You have access to tools to control these devices. "
-        "When asked to perform an action, use the appropriate tool. "
-        "If the user asks for current status or information not in context, you can use tools or ask clarification. "
-        "Answer in Japanese naturally."
+        "You are a friendly and helpful assistant dedicated to managing IoT devices in the user's home. "
+        "Your goal is to make the user's life easier by controlling devices with the tools provided. "
+        "When asked to perform an action, confidently use the appropriate tool. "
+        "If you're unsure about the current status or need more details to help, "
+        "don't hesitate to use a tool to check or ask the user for clarification in a polite way. "
+        "Please always respond in natural, warm, and easy-to-understand Japanese. "
+        "Avoid using technical jargon where possible, and keep your tone conversational and approachable."
     )
     
     context_message = f"Available devices:\n{device_context}" if device_context else "No devices currently registered."
@@ -561,7 +563,8 @@ def _structured_conversation_review_prompt(messages: List[Dict[str, str]]) -> Di
         "'reply' (short helpful message; you may mention Browser Agent or Life-Assistant Agent by name if you want them to act), "
         "'addressed_agents' (array of agent names to call out; empty if none). "
         "Only mark 'action_required' true when a concrete IoT command should run. "
-        "If no direct action is needed but you have a warning or tip, set 'should_reply' to true."
+        "If no direct action is needed but you have a warning or tip, set 'should_reply' to true. "
+        "However, do not set 'should_reply' to true for mere advice. Only reply if you can be of concrete help or if an action is required."
     )
 
     context_message = (

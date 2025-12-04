@@ -717,11 +717,11 @@ def _structured_multi_command_followup_prompt_with_images(
                 {
                     "type": "text",
                     "text": (
-                        "You are an assistant supporting IoT devices and cameras. "
-                        "Provide a concise Japanese reply grounded in the attached photos. "
-                        "Describe only what is visible without speculation. "
-                        "Speak naturally to the user, avoiding mechanical logs, Job IDs, or raw error codes. "
-                        "If 'Suggested phrasing' is provided in the input, treat it as a raw log and rephrase it conversationally."
+                        "You are a friendly assistant supporting IoT devices and cameras. "
+                        "Provide a warm and concise Japanese reply grounded in the attached photos. "
+                        "Describe what is visible in a natural way, avoiding speculation. "
+                        "Speak conversationally to the user, avoiding mechanical logs, Job IDs, or raw error codes. "
+                        "If 'Suggested phrasing' is provided in the input, treat it as a raw log and rephrase it into a friendly, easy-to-understand explanation."
                     ),
                 }
             ],
@@ -787,14 +787,14 @@ def _structured_multi_command_followup_prompt(
 
     guidance = (
         "All queued device commands have now completed. Use the step information provided "
-        "below to craft the final assistant reply in Japanese.\n"
+        "below to craft the final assistant reply in friendly Japanese.\n"
         "The provided 'Suggested phrasing' is a mechanical log; DO NOT output it directly. "
-        "Instead, explain the result naturally as if chatting with a human. "
-        "Summarize technical details. Do not show Job IDs, error codes (like [Errno 121]), "
+        "Instead, explain the result naturally and warmly, as if chatting with a friend. "
+        "Summarize technical details into easy-to-understand language. Do not show Job IDs, error codes (like [Errno 121]), "
         "or raw JSON unless specifically asked. "
         "Write one concise paragraph per step, keep the steps in order, and separate "
         "paragraphs with a blank line.\n"
-        "Clearly mention the device, what was attempted, and the outcome for each step.\n"
+        "Clearly mention the device, what was attempted, and the outcome for each step in a helpful manner.\n"
         "Do not invent new steps or request further actions unless explicitly requested "
         "by the user."
     )
@@ -803,7 +803,7 @@ def _structured_multi_command_followup_prompt(
         guidance += f"\nThe assistant previously told the user: {initial_reply}"
 
     messages: List[Dict[str, str]] = [
-        {"role": "system", "content": "You are an assistant supporting IoT devices."},
+        {"role": "system", "content": "You are a friendly assistant supporting IoT devices."},
     ]
     if device_context:
         messages.append({"role": "system", "content": "Available device information:\n" + device_context})
