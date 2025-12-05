@@ -53,26 +53,44 @@ async def read_resource(uri: str) -> str | bytes:
 async def list_tools() -> list[Tool]:
     tools = []
     
-    # Generic control tool
+    device_ids = list(_DEVICES.keys())
+    
+    # Generic control tool with dynamic device_id enum
     tools.append(Tool(
         name="control_device",
         description="IoTデバイスを制御します。電源のオン/オフ、色の設定、写真撮影などのアクションを実行するために使用します。",
         inputSchema={
             "type": "object",
             "properties": {
-                "device_id": {"type": "string", "description": "制御対象のデバイスID"},
-                "command": {"type": "string", "description": "機能/コマンド名（例: 'turn_on', 'set_color', 'set_brightness'）"},
+                "device_id": {
+                    "type": "string", 
+                    "description": "制御対象のデバイスID",
+                    "enum": device_ids if device_ids else ["no_devices_available"]
+                },
+                "command": {"type": "string", "description": "機能/コマンド名（例: 'turn_on', 'set_color', 'set_brightness', 'capture_camera_photo'）"},
                 "args": {"type": "object", "description": "コマンドの引数（例: {'duration': 5}）"}
             },
             "required": ["device_id", "command"]
         }
     ))
+    
+    tools.append(Tool(
+        name="get_device_list",
+        description="現在登録されているIoTデバイスの一覧と、それぞれの機能（capabilities）を取得します。",
+        inputSchema={
+            "type": "object",
+            "properties": {},
+        }
+    ))
 
-    # We could also dynamically expose specific tools if needed, but generic is flexible.
     return tools
 
 @mcp_server.call_tool()
 async def call_tool(name: str, arguments: Any) -> list[types.TextContent | types.ImageContent | types.EmbeddedResource]:
+    if name == "get_device_list":
+        devices = [_serialize_device(d) for d in _DEVICES.values()]
+        return [TextContent(type="text", text=json.dumps(devices, ensure_ascii=False, indent=2))]
+
     if name == "control_device":
         device_id = arguments.get("device_id")
         command = arguments.get("command")
@@ -83,7 +101,7 @@ async def call_tool(name: str, arguments: Any) -> list[types.TextContent | types
         
         device = _DEVICES.get(device_id)
         if not device:
-             return [TextContent(type="text", text="エラー: デバイスが見つかりません")]
+             return [TextContent(type="text", text=f"エラー: デバイス '{device_id}' が見つかりません")]
              
         # Use internal validation helper? Or just _device_supports_capability
         if not _device_supports_capability(device, command):
