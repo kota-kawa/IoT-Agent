@@ -243,6 +243,19 @@ def _build_device_context() -> str:
         return "No devices are currently registered."
 
     lines: List[str] = []
+    
+    # デバイス数に応じた指示を記載
+    if len(_DEVICES) == 1:
+        only_device = next(iter(_DEVICES.values()))
+        lines.append(f"[IMPORTANT] Only ONE device is registered: {only_device.device_id}")
+        lines.append("Always use this device without asking for clarification.")
+        lines.append("")
+    else:
+        lines.append(f"[INFO] {len(_DEVICES)} devices are registered.")
+        lines.append("If the user's request clearly maps to a specific device or capability, execute immediately without confirmation.")
+        lines.append("Only ask for clarification when there are genuinely ambiguous choices that cannot be inferred from context.")
+        lines.append("")
+    
     for device in _DEVICES.values():
         lines.append(f"Device ID: {device.device_id}")
         display_name = device.meta.get("display_name") if isinstance(device.meta, dict) else None
