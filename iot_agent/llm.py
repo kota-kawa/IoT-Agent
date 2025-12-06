@@ -595,7 +595,7 @@ def _structured_conversation_review_prompt(messages: List[Dict[str, str]]) -> Di
         "'device_commands' (null または 'device_id', 'name', 'args' を持つコマンドオブジェクトの配列), "
         "'notes' (任意), "
         "'should_reply' (boolean; 短くても発言すべき場合はtrue), "
-        "'reply' (短く役立つメッセージ; 行動してほしい場合はBrowser AgentやLife-Assistant Agentを指名してもよい), "
+        "'reply' (短く役立つメッセージ; 行動してほしい場合はBrowser AgentやLife-Style Agentを指名してもよい), "
         "'addressed_agents' (呼びかけるエージェント名の配列; なければ空). "
         "'action_required' は、具体的なIoTコマンドを実行すべき場合にのみtrueにしてください。"
         "直接的なアクションは不要だが警告やヒントがある場合は、'should_reply' をtrueにしてください。"
