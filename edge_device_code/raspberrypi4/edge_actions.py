@@ -191,6 +191,77 @@ SUPPORTED_ACTIONS: Dict[str, Dict[str, Any]] = {
             },
         ],
     },
+    "control_specific_servo": {
+        "description": "Control an individual servo channel (1-4) with the same options as control_single_servo.",
+        "params": [
+            {
+                "name": "servo_id",
+                "type": "integer",
+                "required": True,
+                "description": "Servo channel number (1-4).",
+            },
+            {
+                "name": "mode",
+                "type": "string",
+                "required": False,
+                "description": "Named subcommand to run (set, center, off, sweep, info).",
+            },
+            {
+                "name": "angle",
+                "type": "number",
+                "required": False,
+                "description": "Angle in degrees used with the set subcommand (0-180).",
+            },
+            {
+                "name": "start",
+                "type": "number",
+                "required": False,
+                "description": "Start angle in degrees for sweep operations.",
+            },
+            {
+                "name": "end",
+                "type": "number",
+                "required": False,
+                "description": "End angle in degrees for sweep operations.",
+            },
+            {
+                "name": "step",
+                "type": "number",
+                "required": False,
+                "description": "Step size in degrees for sweep operations.",
+            },
+            {
+                "name": "delay",
+                "type": "number",
+                "required": False,
+                "description": "Delay in seconds between sweep steps.",
+            },
+            {
+                "name": "cycles",
+                "type": "integer",
+                "required": False,
+                "description": "Number of sweep cycles to execute (0 for infinite).",
+            },
+            {
+                "name": "pigpio",
+                "type": "boolean",
+                "required": False,
+                "description": "When true, add the --pigpio flag to use the PiGPIO factory.",
+            },
+            {
+                "name": "hold",
+                "type": "number",
+                "required": False,
+                "description": "Hold duration in seconds after executing the servo command.",
+            },
+            {
+                "name": "timeout",
+                "type": "number",
+                "required": False,
+                "description": "Optional timeout in seconds before stopping the servo script.",
+            },
+        ],
+    },
     "capture_camera_photo": {
         "description": "Capture a still image using the attached Picamera2 module and return it as a base64 encoded string. The image is also saved to a local directory.",
         "params": [
@@ -397,10 +468,10 @@ def _normalize_digits(text: str) -> str:
     return text.translate(_DIGIT_NORMALIZATION)
 
 
-_DEFAULT_MOTOR_TEST_TIMEOUT = 30.0
+_DEFAULT_MOTOR_TEST_TIMEOUT = 60.0
 _DEFAULT_OLED_DEMO_TIMEOUT = 60.0
 _DEFAULT_SERVO_TIMEOUT = 60.0
-_DEFAULT_LED_TIMEOUT = 45.0
+_DEFAULT_LED_TIMEOUT = 60.0
 _DEFAULT_DUAL_SERVO_TIMEOUT = 60.0
 _OLED_RESULT_RETURN_SECONDS = 3.0
 _OLED_SPI_PORT = 1
@@ -2208,6 +2279,31 @@ def _run_servo_demo(parameters: Any) -> Dict[str, Any]:
     }
 
 
+def _control_specific_servo(parameters: Any) -> Dict[str, Any]:
+    if not isinstance(parameters, dict):
+        raise ValueError("parameters must be a dictionary.")
+
+    merged: Dict[str, Any] = dict(parameters)
+    servo_raw = merged.get("servo_id", merged.get("channel"))
+    if servo_raw is None:
+        raise ValueError("servo_id (1-4) is required.")
+
+    try:
+        servo_id = int(str(servo_raw).strip())
+    except (ValueError, TypeError) as exc:
+        raise ValueError("servo_id must be an integer between 1 and 4.") from exc
+
+    if servo_id not in (1, 2, 3, 4):
+        raise ValueError("servo_id must be between 1 and 4.")
+
+    merged["channel"] = servo_id
+    merged.pop("servo_id", None)
+
+    result = _run_servo_demo(merged)
+    result["servo_id"] = servo_id
+    return result
+
+
 _DUAL_SERVO_PINS = {"servo1": 12, "servo2": 19}
 _DUAL_SERVO_MIN_ANGLE = 0.0
 _DUAL_SERVO_MAX_ANGLE = 180.0
@@ -2537,6 +2633,8 @@ def _execute_action(action: str, parameters: Dict[str, Any]) -> Tuple[bool, Any,
             return True, _run_oled_robot_demo(parameters or {}), None
         if action == "control_single_servo":
             return True, _run_servo_demo(parameters or {}), None
+        if action == "control_specific_servo":
+            return True, _control_specific_servo(parameters or {}), None
         if action == "capture_camera_photo":
             return True, _capture_camera_photo(parameters or {}), None
         if action == "operate_led_pattern":

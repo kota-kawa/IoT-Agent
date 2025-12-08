@@ -19,6 +19,7 @@ LLM_SYSTEM_PROMPT = (
     "Action Parameters:\n"
     "- operate_dc_motors: command ('forward'/'backward'/'left'/'right'/'stop'/'demo'), speed (0.0-1.0), duration (seconds), timeout (seconds)\n"
     "- control_single_servo: mode ('set'/'center'/'off'/'sweep'/'info'), angle (0-180 for set), channel (1-4), start/end/step/delay/cycles (for sweep)\n"
+    "- control_specific_servo: servo_id (1-4), mode ('set'/'center'/'off'/'sweep'/'info'), angle/start/end/step/delay/cycles, pigpio, hold, timeout\n"
     "- play_buzzer: melody ('success'/'error'/'alert'/'startup'/'mario') or note/duration for single tone\n"
     "- display_robot_animation: text (string to display), motion ('default'/'calm'/'alert'/'scout'/'sleeping'/'hyper'/'scanning'), duration (seconds)\n"
     "- operate_led_pattern: pattern ('chase'/'blink_all'/'all_on'/'random'/'breathing'/'police'/'demo'), cycles (integer), timeout (seconds)\n"
@@ -33,6 +34,8 @@ LLM_SYSTEM_PROMPT = (
     '{"action": "operate_dc_motors", "parameters": {"command": "forward", "duration": 3, "speed": 0.5}}\n\n'
     "Instruction: Set the servo to 45 degrees\n"
     '{"action": "control_single_servo", "parameters": {"mode": "set", "angle": 45}}\n\n'
+    "Instruction: Move servo 2 to 120 degrees\n"
+    '{"action": "control_specific_servo", "parameters": {"servo_id": 2, "mode": "set", "angle": 120}}\n\n'
     "Instruction: Play the mario melody on the buzzer\n"
     '{"action": "play_buzzer", "parameters": {"melody": "mario"}}\n\n'
     "Instruction: Show 'Hello World' on the display with alert mode\n"
@@ -53,7 +56,7 @@ LLM_SYSTEM_PROMPT = (
     '{"action": "no_action", "parameters": {}, "message": "Request unrelated to hardware control."}\n\n'
     "Rules:\n"
     "- Always choose the most appropriate action for the instruction\n"
-    "- When a request mentions two servos or dual servos, use 'control_dual_servos'\n"
+    "- When a request names a specific servo channel (CH1-4 or 'servo 1'), use 'control_specific_servo'; if it mentions two servos, use 'control_dual_servos'\n"
     "- Include all relevant parameters from the instruction\n"
     "- If ambiguous but hardware-related, make a reasonable assumption and execute\n"
     "- Use 'no_action' ONLY for requests completely unrelated to hardware"
@@ -94,6 +97,15 @@ def _extract_float(patterns: List[str], text: str) -> Optional[str]:
         if match:
             return match.group(1)
     return None
+
+
+_SERVO_CHANNEL_PATTERNS = [
+    r"\bch(?:annel)?\s*(\d+)",
+    r"(?:CH|ＣＨ)\s*(\d+)",
+    r"(\d+)\s*ch",
+    r"チャンネル\s*(\d+)",
+    r"(?:servo|サーボ)\s*#?\s*(\d+)",
+]
 
 
 def _is_dual_servo_request(text: str, lowered: str) -> bool:
@@ -150,6 +162,21 @@ def _is_dual_servo_request(text: str, lowered: str) -> bool:
     return False
 
 
+def _extract_servo_channel(instruction: str) -> Optional[int]:
+    instruction = actions._normalize_digits(instruction)
+    for pattern in _SERVO_CHANNEL_PATTERNS:
+        match = re.search(pattern, instruction, re.IGNORECASE)
+        if not match:
+            continue
+        try:
+            channel = int(match.group(1))
+        except ValueError:
+            continue
+        if 1 <= channel <= 4:
+            return channel
+    return None
+
+
 def _build_servo_parameters_from_instruction(
     instruction: str, lowered: str
 ) -> Dict[str, Any]:
@@ -160,13 +187,7 @@ def _build_servo_parameters_from_instruction(
     command_parts: List[str] = []
 
     channel: Optional[int] = None
-    channel_patterns = [
-        r"\bch(?:annel)?\s*(\d+)",
-        r"(?:CH|ＣＨ)\s*(\d+)",
-        r"(\d+)\s*ch",
-        r"チャンネル\s*(\d+)",
-    ]
-    for pattern in channel_patterns:
+    for pattern in _SERVO_CHANNEL_PATTERNS:
         match = re.search(pattern, instruction, re.IGNORECASE)
         if match:
             try:
@@ -289,6 +310,7 @@ def _heuristic_multi_plan(instruction: str) -> List[Dict[str, Any]]:
         return []
 
     lowered = text.lower()
+    servo_channel = _extract_servo_channel(text)
     plans: List[Dict[str, Any]] = []
     seen: Set[str] = set()
 
@@ -362,13 +384,18 @@ def _heuristic_multi_plan(instruction: str) -> List[Dict[str, Any]]:
     ):
         _add("display_robot_animation", {})
 
-    if "servo" in lowered or "サーボ" in text:
+    if "servo" in lowered or "サーボ" in text or servo_channel is not None:
         dual_servos = _is_dual_servo_request(text, lowered)
         if dual_servos:
             _add("control_dual_servos", {})
         else:
             servo_params = _build_servo_parameters_from_instruction(text, lowered)
-            _add("control_single_servo", servo_params)
+            if servo_channel is not None:
+                servo_params.setdefault("servo_id", servo_channel)
+                servo_params.setdefault("channel", servo_channel)
+                _add("control_specific_servo", servo_params)
+            else:
+                _add("control_single_servo", servo_params)
 
     return plans
 
