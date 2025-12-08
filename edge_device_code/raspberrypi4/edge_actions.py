@@ -1185,6 +1185,42 @@ _DEFAULT_BUZZER_SEQUENCE = [
     {"note": "C5", "duration": 1.0},
 ]
 
+_led_singletons: Dict[str, Any] = {}
+_led_singleton_lock = threading.Lock()
+
+
+def _get_led_singleton(led_key: str) -> Any:
+    try:
+        from gpiozero import LED
+    except ImportError as exc:
+        raise RuntimeError(
+            "gpiozero is required to drive the LEDs. Install it on the Raspberry Pi."
+        ) from exc
+
+    with _led_singleton_lock:
+        led = _led_singletons.get(led_key)
+        if led is None or getattr(led, "closed", False):
+            led = LED(_LED_PINS[led_key])
+            _led_singletons[led_key] = led
+        return led
+
+
+def _close_led_singleton(led_key: str) -> None:
+    with _led_singleton_lock:
+        led = _led_singletons.pop(led_key, None)
+    if led is None:
+        return
+    try:
+        led.close()
+    except Exception:
+        pass
+
+
+def _close_all_led_singletons() -> None:
+    for led_key in list(_led_singletons.keys()):
+        _close_led_singleton(led_key)
+
+
 _BUZZER_MELODIES: Dict[str, List[Dict[str, Any]]] = {
     "success": [
         {"note": "C5", "duration": 0.1},
@@ -1515,6 +1551,8 @@ def _run_led_demo(parameters: Any) -> Dict[str, Any]:
             "gpiozero is required to drive the LEDs. Install it on the Raspberry Pi."
         ) from exc
 
+    _close_all_led_singletons()
+
     pattern = "demo"
     cycles = 2
     if isinstance(parameters, dict):
@@ -1669,7 +1707,7 @@ def _run_motor_test(parameters: Any) -> Dict[str, Any]:
 
     command = "demo"
     speed = 1.0
-    duration = 5.0
+    duration: Optional[float] = None
 
     if isinstance(parameters, dict):
         if "command" in parameters and isinstance(parameters["command"], str):
@@ -1810,10 +1848,10 @@ def _control_specific_led(parameters: Any) -> Dict[str, Any]:
 
     led_id = 1
     command = "on"
-    duration = 5.0
-    duration_provided = False
+    duration: Optional[float] = None
     blink_on_time = 0.5
     blink_off_time = 0.5
+    duration_overridden = False
 
     if isinstance(parameters, dict):
         if "led_id" in parameters:
@@ -1828,7 +1866,7 @@ def _control_specific_led(parameters: Any) -> Dict[str, Any]:
         if "duration" in parameters:
             try:
                 duration = float(parameters["duration"])
-                duration_provided = True
+                duration_overridden = True
             except (ValueError, TypeError):
                 pass
         
@@ -1845,15 +1883,7 @@ def _control_specific_led(parameters: Any) -> Dict[str, Any]:
 
     led_key = f"led{led_id}"
     pin = _LED_PINS[led_key]
-
-    try:
-        from gpiozero import LED
-    except ImportError as exc:
-        raise RuntimeError(
-            "gpiozero is required to drive the LEDs."
-        ) from exc
-
-    led = LED(pin)
+    led = _get_led_singleton(led_key)
     
     context.log("Specific LED control start", led_id=led_id, pin=pin, command=command, duration=duration)
 
@@ -1861,30 +1891,33 @@ def _control_specific_led(parameters: Any) -> Dict[str, Any]:
         if command == "on":
             led.on()
             context.log("LED turned ON", led_id=led_id, pin=pin)
-            if duration_provided and duration > 0:
+            if duration is not None and duration > 0:
                 context.sleep(duration)
                 led.off()
                 context.log("LED turned OFF after duration", led_id=led_id, duration=duration)
-            # If duration not provided or duration <= 0, leave LED on (no close)
-            elif not duration_provided:
-                # Default behavior: leave LED on indefinitely
-                pass
+                _close_led_singleton(led_key)
+            else:
+                context.log("LED left ON until further instruction", led_id=led_id, duration_parameter=duration if duration_overridden else None)
         elif command == "off":
             led.off()
             context.log("LED turned OFF", led_id=led_id, pin=pin)
-            led.close()
+            _close_led_singleton(led_key)
         elif command == "blink":
             led.blink(on_time=blink_on_time, off_time=blink_off_time, n=None, background=True)
-            context.sleep(duration)
-            led.off()
-            led.close()
+            hold_seconds = duration if duration is not None else 5.0
+            if hold_seconds > 0:
+                context.sleep(hold_seconds)
+                led.off()
+                _close_led_singleton(led_key)
+            else:
+                context.log("LED blinking until stopped", led_id=led_id, blink_rate=1.0 / blink_on_time if blink_on_time else None)
         else:
             context.log(f"Unknown command '{command}'")
-            led.close()
+            _close_led_singleton(led_key)
     except Exception as exc:
         context.log(f"LED control error: {exc}", led_id=led_id)
         try:
-            led.close()
+            _close_led_singleton(led_key)
         except Exception:
             pass
         raise
@@ -1903,9 +1936,9 @@ def _control_all_leds(parameters: Any) -> Dict[str, Any]:
 
     command = "off"
     duration: Optional[float] = None
-    duration_provided = False
     blink_on_time = 0.5
     blink_off_time = 0.5
+    duration_overridden = False
 
     if isinstance(parameters, dict):
         if "command" in parameters and isinstance(parameters["command"], str):
@@ -1914,7 +1947,7 @@ def _control_all_leds(parameters: Any) -> Dict[str, Any]:
         if "duration" in parameters:
             try:
                 duration = float(parameters["duration"])
-                duration_provided = True
+                duration_overridden = True
             except (ValueError, TypeError):
                 pass
 
@@ -1926,14 +1959,7 @@ def _control_all_leds(parameters: Any) -> Dict[str, Any]:
             except (ValueError, TypeError):
                 pass
 
-    try:
-        from gpiozero import LED
-    except ImportError as exc:
-        raise RuntimeError(
-            "gpiozero is required to drive the LEDs."
-        ) from exc
-
-    leds = [LED(pin) for pin in _LED_PINS.values()]
+    leds = [_get_led_singleton(key) for key in _LED_PINS.keys()]
 
     context.log(
         "All LED control start",
@@ -1947,41 +1973,44 @@ def _control_all_leds(parameters: Any) -> Dict[str, Any]:
             for led in leds:
                 led.on()
             context.log("All LEDs turned ON", pins=_LED_PINS)
-            if duration_provided and duration is not None and duration > 0:
+            if duration is not None and duration > 0:
                 context.sleep(duration)
                 for led in leds:
                     led.off()
-                for led in leds:
-                    led.close()
+                _close_all_led_singletons()
                 context.log("All LEDs turned OFF after duration", duration=duration)
-            # If duration not provided, leave LEDs on (no close)
+            else:
+                context.log(
+                    "LEDs left ON until further instruction",
+                    duration_parameter=duration if duration_overridden else None,
+                )
         elif command == "off":
             for led in leds:
                 led.off()
             context.log("All LEDs turned OFF", pins=_LED_PINS)
-            for led in leds:
-                led.close()
+            _close_all_led_singletons()
         elif command == "blink":
-            hold_seconds = duration if duration_provided and duration is not None else 5.0
+            hold_seconds = duration if duration is not None else 5.0
             for led in leds:
                 led.blink(on_time=blink_on_time, off_time=blink_off_time, n=None, background=True)
             if hold_seconds > 0:
                 context.sleep(hold_seconds)
             for led in leds:
                 led.off()
-            for led in leds:
-                led.close()
+            if hold_seconds > 0:
+                _close_all_led_singletons()
+            else:
+                context.log(
+                    "LEDs blinking until stopped",
+                    blink_rate=1.0 / blink_on_time if blink_on_time else None,
+                    duration_parameter=duration if duration_overridden else None,
+                )
         else:
             context.log(f"Unknown command '{command}' for all LEDs.")
-            for led in leds:
-                led.close()
+            _close_all_led_singletons()
     except Exception as exc:
         context.log(f"All LED control error: {exc}")
-        for led in leds:
-            try:
-                led.close()
-            except Exception:
-                pass
+        _close_all_led_singletons()
         raise
 
     return {
