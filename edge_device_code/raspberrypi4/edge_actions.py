@@ -27,6 +27,29 @@ SUPPORTED_ACTIONS: Dict[str, Dict[str, Any]] = {
         "description": "Return the current local time in ISO 8601 format.",
         "params": [],
     },
+    "run_sequence": {
+        "description": "Execute multiple actions sequentially (parallel requests fall back to sequential for safety).",
+        "params": [
+            {
+                "name": "commands",
+                "type": "array",
+                "required": True,
+                "description": "List of commands to run. Each entry should include 'name' and optional 'args' dict.",
+            },
+            {
+                "name": "mode",
+                "type": "string",
+                "required": False,
+                "description": "Requested execution mode: 'sequential' or 'parallel' (parallel currently runs sequentially).",
+            },
+            {
+                "name": "timeout",
+                "type": "number",
+                "required": False,
+                "description": "Overall timeout in seconds for the full sequence.",
+            },
+        ],
+    },
     "play_buzzer": {
         "description": "Play tones on the passive buzzer wired to GPIO4. Can play specific notes, sequences, or predefined melodies.",
         "params": [
@@ -473,6 +496,7 @@ _DEFAULT_OLED_DEMO_TIMEOUT = 60.0
 _DEFAULT_SERVO_TIMEOUT = 60.0
 _DEFAULT_LED_TIMEOUT = 60.0
 _DEFAULT_DUAL_SERVO_TIMEOUT = 60.0
+_DEFAULT_SEQUENCE_TIMEOUT = 120.0
 _OLED_RESULT_RETURN_SECONDS = 3.0
 _OLED_SPI_PORT = 1
 _OLED_SPI_DEVICE = 0
@@ -1198,6 +1222,91 @@ def _capture_camera_photo(parameters: Any) -> Dict[str, Any]:
         "image_mime_type": "image/jpeg",
         "file_size_bytes": len(image_bytes),
         "summary": "周囲の様子を確認するために写真を1枚撮影しました。",
+    }
+
+
+def _run_sequence(parameters: Any) -> Dict[str, Any]:
+    timeout = _parse_timeout_parameter(parameters, _DEFAULT_SEQUENCE_TIMEOUT)
+    context = _ActionExecutionContext(timeout)
+
+    requested_mode = "sequential"
+    commands: List[Dict[str, Any]] = []
+    if isinstance(parameters, dict):
+        mode_value = parameters.get("mode")
+        if isinstance(mode_value, str) and mode_value.strip():
+            requested_mode = mode_value.strip().lower()
+
+        commands_value = parameters.get("commands")
+        if isinstance(commands_value, list):
+            commands = [cmd for cmd in commands_value if isinstance(cmd, dict)]
+
+    if not commands:
+        raise ValueError("commands must be a non-empty list of command dictionaries.")
+
+    executed_mode = "sequential"
+    if requested_mode not in ("sequential", "parallel"):
+        context.log("Unsupported sequence mode requested; falling back to sequential", requested_mode=requested_mode)
+    elif requested_mode == "parallel":
+        context.log("Parallel mode requested; executing sequentially for safety")
+
+    context.log(
+        "Starting action sequence",
+        command_count=len(commands),
+        requested_mode=requested_mode,
+        executed_mode=executed_mode,
+        timeout_seconds=timeout,
+    )
+
+    results: List[Dict[str, Any]] = []
+    for index, command in enumerate(commands, start=1):
+        if context.timed_out or (context.remaining() is not None and context.remaining() <= 0):
+            context.timed_out = True
+            break
+
+        name = command.get("name") if isinstance(command, dict) else None
+        args = command.get("args") if isinstance(command, dict) and isinstance(command.get("args"), dict) else {}
+
+        if not isinstance(name, str) or not name.strip():
+            results.append({"index": index, "ok": False, "error": "command name is required"})
+            continue
+
+        normalized_name = name.strip()
+        if normalized_name == "run_sequence":
+            results.append(
+                {
+                    "index": index,
+                    "name": normalized_name,
+                    "ok": False,
+                    "error": "nested run_sequence is not supported on this device",
+                }
+            )
+            continue
+
+        context.log("Executing sub-action", index=index, name=normalized_name)
+        ok, result, error = _execute_action(normalized_name, args)
+        entry: Dict[str, Any] = {
+            "index": index,
+            "name": normalized_name,
+            "ok": bool(ok),
+            "result": result,
+        }
+        if error:
+            entry["error"] = error
+        results.append(entry)
+
+    context.log(
+        "Sequence finished",
+        executed=len(results),
+        timed_out=context.timed_out,
+        executed_mode=executed_mode,
+    )
+
+    return {
+        "results": results,
+        "requested_mode": requested_mode,
+        "executed_mode": executed_mode,
+        "timed_out": context.timed_out,
+        "duration_seconds": context.elapsed(),
     }
 
 
@@ -2625,6 +2734,8 @@ def _execute_action(action: str, parameters: Dict[str, Any]) -> Tuple[bool, Any,
         if action == "get_current_time":
             now = datetime.now(timezone.utc).astimezone()
             return True, {"current_time": now.isoformat()}, None
+        if action == "run_sequence":
+            return True, _run_sequence(parameters or {}), None
         if action == "play_buzzer":
             return True, _play_buzzer(parameters or {}), None
         if action == "operate_dc_motors":
