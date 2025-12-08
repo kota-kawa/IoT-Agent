@@ -32,13 +32,6 @@ FACE_ROW_TOP = 0
 # =========================
 # デバイス提供関数
 # =========================
-def roll_dice():
-    """サイコロ(1-6)"""
-    v = random.randint(1, 6)
-    print("[dice] roll -> {}".format(v))
-    return v
-
-
 
 def read_temperature(samples: int = 16, sample_interval_sec: float = 0.01):
     """内蔵温度センサ(ADC4)の平均推定温度(℃)"""
@@ -272,36 +265,36 @@ def brake_motor():
     _motor_pwm.duty_u16(0)
 
 
-def motor_drive(direction: str = "forward", speed: int = _MOTOR_DEFAULT_SPEED, duration_ms: int = 1500, brake: bool = False):
+def activate_propeller(direction: str = "forward", wind_power: int = _MOTOR_DEFAULT_SPEED, duration_ms: int = 1500, brake: bool = False):
     """
-    モーターを一定時間回す。direction: forward/reverse, speed:0..4095。
+    プロペラを回転させて風を送る。direction: forward/reverse, wind_power:0..4095。
     duration_ms<=0 の場合は即座に停止（またはブレーキ）のみ行う。
     """
-    print("[motor_debug] received: dir={}, speed={}, duration_ms={}".format(direction, speed, duration_ms))
+    print("[propeller_debug] received: dir={}, wind_power={}, duration_ms={}".format(direction, wind_power, duration_ms))
     direction = (direction or "").lower().strip()
     if direction not in ("forward", "reverse"):
         raise ValueError("direction must be 'forward' or 'reverse'")
-    speed_int = int(speed)
-    if speed_int < 0:
-        speed_int = 0
-    elif speed_int > _PWM_RANGE_MAX:
-        speed_int = _PWM_RANGE_MAX
-    # トルク不足で回らないケースを避けるため、0でないのに小さすぎる速度は底上げする
-    if speed_int > 0 and speed_int < _MOTOR_MIN_START_SPEED:
-        print("[motor] requested speed {} too low; raising to {}".format(speed, _MOTOR_MIN_START_SPEED))
-        speed_int = _MOTOR_MIN_START_SPEED
+    power_int = int(wind_power)
+    if power_int < 0:
+        power_int = 0
+    elif power_int > _PWM_RANGE_MAX:
+        power_int = _PWM_RANGE_MAX
+    # トルク不足で回らないケースを避けるため、0でないのに小さすぎる出力は底上げする
+    if power_int > 0 and power_int < _MOTOR_MIN_START_SPEED:
+        print("[propeller] requested power {} too low; raising to {}".format(wind_power, _MOTOR_MIN_START_SPEED))
+        power_int = _MOTOR_MIN_START_SPEED
     duration_ms_int = int(duration_ms)
-    SetMotorSpeed(direction == "forward", speed_int)
+    SetMotorSpeed(direction == "forward", power_int)
     if duration_ms_int > 0:
         time.sleep_ms(duration_ms_int)
     if brake:
         brake_motor()
     else:
         stop_motor()
-    print("[motor] dir={} speed={} duration={}ms brake={}".format(direction, speed_int, duration_ms_int, brake))
+    print("[propeller] dir={} power={} duration={}ms brake={}".format(direction, power_int, duration_ms_int, brake))
     return {
         "direction": direction,
-        "speed": speed_int,
+        "wind_power": power_int,
         "duration_ms": duration_ms_int,
         "brake": bool(brake),
     }
@@ -808,29 +801,25 @@ def lcd_face(mode: str = "blink_cycle", contrast_percent: int = CONTRAST_PERCENT
 
 # 関数ディスパッチテーブル
 FUNCTIONS = {
-    "dice": {
-        "callable": roll_dice,
-        "description": "Roll a 6-sided dice and return result.",
-        "params": [],  # no args
-    },
+
     "led0_on": {
         "callable": led0_on,
-        "description": "Turn on LED 0 (GPIO0).",
+        "description": "Turn on LED 0 (GPIO0, green, left).",
         "params": [],
     },
     "led0_off": {
         "callable": led0_off,
-        "description": "Turn off LED 0 (GPIO0).",
+        "description": "Turn off LED 0 (GPIO0, green, left).",
         "params": [],
     },
     "led1_on": {
         "callable": led1_on,
-        "description": "Turn on LED 1 (GPIO1).",
+        "description": "Turn on LED 1 (GPIO1, yellow/orange, right).",
         "params": [],
     },
     "led1_off": {
         "callable": led1_off,
-        "description": "Turn off LED 1 (GPIO1).",
+        "description": "Turn off LED 1 (GPIO1, yellow/orange, right).",
         "params": [],
     },
     "temp": {
@@ -863,12 +852,12 @@ FUNCTIONS = {
             {"name": "duty", "type": "float", "default": 0.4, "required": False},
         ],
     },
-    "motor_drive": {
-        "callable": motor_drive,
-        "description": "Drive the motor via PWM enable (GPIO13) and IN1/IN2 (GPIO14/15).",
+    "activate_propeller": {
+        "callable": activate_propeller,
+        "description": "Spin the propeller to generate wind via PWM enable (GPIO13) and IN1/IN2 (GPIO14/15).",
         "params": [
             {"name": "direction", "type": "str", "default": "forward", "required": False},
-            {"name": "speed", "type": "int", "default": _MOTOR_DEFAULT_SPEED, "required": False},
+            {"name": "wind_power", "type": "int", "default": _MOTOR_DEFAULT_SPEED, "required": False},
             {"name": "duration_ms", "type": "int", "default": 1500, "required": False},
             {"name": "brake", "type": "bool", "default": False, "required": False},
         ],
@@ -928,7 +917,6 @@ def get_action_catalog():
 __all__ = [
     "FUNCTIONS",
     "CONTRAST_PERCENT_DEFAULT",
-    "roll_dice",
     "read_temperature",
     "led0_on",
     "led0_off",
@@ -937,7 +925,7 @@ __all__ = [
     "buzzer_tone",
     "buzzer_demo",
     "buzzer_pattern",
-    "motor_drive",
+    "activate_propeller",
     "lcd_text",
     "lcd_face",
     "get_capabilities",
