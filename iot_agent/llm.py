@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import time
 import traceback
 import asyncio
 from datetime import datetime
@@ -8,6 +9,10 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 from types import SimpleNamespace
 
 from openai import OpenAI, APIError
+try:
+    from openai import APIConnectionError, APITimeoutError, BadRequestError, RateLimitError
+except Exception:  # pragma: no cover - fallback for older SDKs
+    APIConnectionError = APITimeoutError = BadRequestError = RateLimitError = APIError
 try:
     from anthropic import Anthropic
 except ImportError:
@@ -375,6 +380,126 @@ def _current_datetime_line() -> str:
     return datetime.now().strftime("現在の日時ー%Y年%m月%d日%H時%M分")
 
 
+def _classify_provider_error(exc: Exception) -> Tuple[bool, bool, str]:
+    """
+    Return (retryable, drop_tools, message) flags for provider errors.
+    retryable: transient issues worth retrying
+    drop_tools: hints the provider rejected tool schemas; retry without them
+    """
+    message = str(exc).strip() if exc else ""
+    lowered = message.lower()
+    status = getattr(exc, "status", None) or getattr(exc, "status_code", None)
+    if status is None:
+        response_obj = getattr(exc, "response", None)
+        status = getattr(response_obj, "status_code", None)
+
+    retryable = False
+    drop_tools = False
+
+    if isinstance(exc, (APITimeoutError, APIConnectionError, RateLimitError)):
+        retryable = True
+    elif isinstance(exc, APIError) and status:
+        try:
+            retryable = int(status) >= 500
+        except Exception:
+            retryable = False
+
+    if isinstance(exc, BadRequestError):
+        if "tool" in lowered or "function" in lowered:
+            if any(keyword in lowered for keyword in ("unsupported", "not available", "disable", "unavailable")):
+                drop_tools = True
+
+    if "tools" in lowered and "support" in lowered and "not" in lowered:
+        drop_tools = True
+
+    return retryable, drop_tools, message or "Unknown provider error"
+
+
+def _provider_error_message(exc: Optional[Exception]) -> str:
+    """Return a user-facing fallback message with a short provider error summary."""
+
+    base = "AIプロバイダへのリクエストが連続で失敗しました。時間をおいて再実行してください。"
+    if not exc:
+        return base
+
+    detail = str(exc).strip().split("\n")[0]
+    if len(detail) > 160:
+        detail = detail[:160] + "..."
+    return f"{base}\n詳細: {detail}"
+
+
+async def _chat_completion_with_retries_async(
+    client: "UnifiedClient",
+    *,
+    max_attempts: int = 3,
+    **kwargs: Any,
+) -> Tuple[Optional[Any], Optional[Exception]]:
+    """Call chat.completions with bounded retries and optional tool fallback."""
+
+    attempts = max(1, max_attempts)
+    delay = 1.0
+    last_error: Optional[Exception] = None
+    call_kwargs = dict(kwargs)
+
+    for attempt in range(1, attempts + 1):
+        try:
+            return client.chat.completions.create(**call_kwargs), None
+        except Exception as exc:
+            last_error = exc
+            retryable, drop_tools, message = _classify_provider_error(exc)
+            print(f"[LLM Retry] attempt {attempt}/{attempts} failed: {message}")
+
+            if drop_tools and call_kwargs.get("tools"):
+                call_kwargs["tools"] = None
+                call_kwargs["tool_choice"] = None
+                print("[LLM Retry] Retrying without tool payload due to provider rejection.")
+                continue
+
+            if retryable and attempt < attempts:
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, 8)
+                continue
+            break
+
+    return None, last_error
+
+
+def _chat_completion_with_retries_sync(
+    client: "UnifiedClient",
+    *,
+    max_attempts: int = 3,
+    **kwargs: Any,
+) -> Tuple[Optional[Any], Optional[Exception]]:
+    """Synchronous variant for retrying chat completions."""
+
+    attempts = max(1, max_attempts)
+    delay = 1.0
+    last_error: Optional[Exception] = None
+    call_kwargs = dict(kwargs)
+
+    for attempt in range(1, attempts + 1):
+        try:
+            return client.chat.completions.create(**call_kwargs), None
+        except Exception as exc:
+            last_error = exc
+            retryable, drop_tools, message = _classify_provider_error(exc)
+            print(f"[LLM Retry] attempt {attempt}/{attempts} failed: {message}")
+
+            if drop_tools and call_kwargs.get("tools"):
+                call_kwargs["tools"] = None
+                call_kwargs["tool_choice"] = None
+                print("[LLM Retry] Retrying without tool payload due to provider rejection.")
+                continue
+
+            if retryable and attempt < attempts:
+                time.sleep(delay)
+                delay = min(delay * 2, 8)
+                continue
+            break
+
+    return None, last_error
+
+
 class UnifiedClient:
     def __init__(self):
         self.provider, self.model_name, self.base_url, self.api_key = apply_model_selection("iot")
@@ -525,7 +650,8 @@ async def _process_chat_with_tools(client: UnifiedClient, messages: List[Dict[st
         "応答やアクションを生成する際は、ユーザーのプロファイル、実際に利用可能なコマンド、周囲の環境を慎重に考慮してください。"
         "依頼が曖昧な場合は、その場の状況を読み取り（read the room）、ユーザーの意図を推測して最適なアクションを選択してください。"
         "**過度な質問を避けること**: ユーザーは細かい設定（音の種類、表示行、色、速度、回数など）を聞かれることを嫌います。これらが指定されていない場合は、質問せずに**最も一般的で標準的な設定**を勝手に選択して実行してください。"
-        "特に**移動やモーター制御（「前に進んで」「右を向いて」など）**の場合、時間や距離が未指定なら**黙って5秒間（duration=5.0）実行**してください。「どのくらい？」と聞くのは厳禁です。"
+        "特に**移動やモーター制御（「前に進んで」「右を向いて」「サーボを動かして」など）**の場合、時間や角度が未指定なら**黙って標準値（duration=5.0, angle=90, または action='sweep'）で実行**してください。「どのくらい？」「どの角度？」と聞くのは厳禁です。"
+        "「全部動かして」など、対象が複数の場合で、もし技術的に全同時実行が難しくても、ユーザーに聞き返さず、代表的なデバイス（例: サーボ1と2）を勝手に選んで実行してください。\n"
         "依頼が曖昧な場合でも、実行可能な部分を特定し、可能であれば実行してください。"
         "実行不可能なアクションは生成しないでください。"
         "自分の出力やアクションの結果を予測し、その予測を応答に反映させてください。\n"
@@ -534,6 +660,7 @@ async def _process_chat_with_tools(client: UnifiedClient, messages: List[Dict[st
         "- **デバイスが1つだけ登録されている場合**: ユーザーがデバイスを指定しなくても、その唯一のデバイスを対象として即座に実行してください。「どのデバイスですか？」と聞き返さないでください。\n"
         "- **コマンドが明確な場合**: 「ブザーを鳴らして」「LEDを点灯して」「モーターを動かして」など、実行すべき機能が明らかな場合は確認せずに実行してください。\n"
         "- **パラメータが省略されている場合**: デフォルト値を使用し、さらに細かいオプションも勝手に決めて実行してください。例: ブザーなら melody='alert'、LEDなら pattern='demo'、移動なら duration=5.0 を使用。「どのような音にしますか？」や「どのくらい動かしますか？」と聞くのは禁止です。\n"
+        "- **サーボ・モーター操作**: 「サーボを動かして」と言われたら、'servo_1'と'servo_2'（または利用可能なもの）を対象に、angle=90 または action='sweep' で即座に実行してください。「どのサーボですか？」「角度は？」と聞くのは禁止です。\n"
         "常に自然的で温かみがあり、わかりやすい日本語で応答してください。"
         "可能な限り専門用語は避け、親しみやすい会話調のトーンを心がけてください。\n"
         "\n"
@@ -592,16 +719,15 @@ async def _process_chat_with_tools(client: UnifiedClient, messages: List[Dict[st
     while turn < max_turns:
         # LLM呼び出し
         # 注意: UnifiedClient.create は同期メソッド
-        try:
-            response = client.chat.completions.create(
-                model=client.model_name,
-                messages=current_messages,
-                tools=openai_tools if openai_tools else None,
-                tool_choice="auto" if openai_tools else None
-            )
-        except Exception as e:
-            print(f"LLM Call Error: {e}")
-            final_reply = "申し訳ありません、AIプロバイダとの通信でエラーが発生しました。"
+        response, llm_error = await _chat_completion_with_retries_async(
+            client,
+            model=client.model_name,
+            messages=current_messages,
+            tools=openai_tools if openai_tools else None,
+            tool_choice="auto" if openai_tools else None,
+        )
+        if response is None:
+            final_reply = _provider_error_message(llm_error)
             break
         
         choice = response.choices[0]
@@ -883,25 +1009,35 @@ def _call_llm_for_conversation_review(
     if provider in ["openai", "groq", "gemini"]:
         extra_args["response_format"] = {"type": "json_object"}
 
-    try:
-        response = client.chat.completions.create(**kwargs, **extra_args)
-        choice = response.choices[0] if response and response.choices else None
-        message = choice.message if choice else None
-        parsed_payload = getattr(message, "parsed", None) if message else None
-        if parsed_payload is None and isinstance(message, dict):
-            parsed_payload = message.get("parsed")
-        content = getattr(message, "content", None) if message else None
-        reply_text = _content_to_text(content)
-    except Exception as e:
-        print(f"[{datetime.now()}] LLM Conversation Review Error: {str(e)}")
-        if hasattr(e, 'response') and e.response:
-                print(f"HTTP Status: {e.response.status_code}")
-                try:
-                     print(f"Response Body: {e.response.text}")
-                except:
-                     pass
-        traceback.print_exc()
-        reply_text = ""
+    call_kwargs = dict(kwargs)
+    call_kwargs.update(extra_args)
+
+    response, llm_error = _chat_completion_with_retries_sync(
+        client,
+        max_attempts=2,
+        **call_kwargs,
+    )
+
+    if response is None:
+        fail_reason = _provider_error_message(llm_error)
+        return {
+            "action_required": False,
+            "reason": fail_reason,
+            "device_commands": [],
+            "notes": None,
+            "should_reply": True,
+            "reply": fail_reason,
+            "addressed_agents": [],
+            "raw": fail_reason,
+        }
+
+    choice = response.choices[0] if response and response.choices else None
+    message = choice.message if choice else None
+    parsed_payload = getattr(message, "parsed", None) if message else None
+    if parsed_payload is None and isinstance(message, dict):
+        parsed_payload = message.get("parsed")
+    content = getattr(message, "content", None) if message else None
+    reply_text = _content_to_text(content)
 
 
     parsed_obj = parsed_payload
@@ -987,17 +1123,25 @@ def _call_llm_text(client: UnifiedClient, payload: Dict[str, Any]) -> str:
             print(f"[{datetime.now()}] Responses API Text Error: {str(e)}")
             traceback.print_exc()
 
-    try:
-        response = client.chat.completions.create(model=model, messages=messages)
+    response, llm_error = _chat_completion_with_retries_sync(
+        client,
+        model=model,
+        messages=messages,
+        max_attempts=2,
+    )
+
+    if response:
         choice = response.choices[0] if response and response.choices else None
         message = choice.message if choice else None
         content = getattr(message, "content", None) if message else None
         text = _content_to_text(content)
         return text.strip()
-    except Exception as e:
-        print(f"[{datetime.now()}] LLM Text Error: {str(e)}")
+
+    if llm_error:
+        print(f"[{datetime.now()}] LLM Text Error: {str(llm_error)}")
         traceback.print_exc()
-        return ""
+
+    return ""
 
 
 def _structured_agent_instruction_prompt(
