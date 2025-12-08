@@ -23,17 +23,6 @@ import edge_config as config
 
 # Pi がネイティブにサポートするアクション定義
 SUPPORTED_ACTIONS: Dict[str, Dict[str, Any]] = {
-    "play_rock_paper_scissors": {
-        "description": "Play a round of rock-paper-scissors against the agent.",
-        "params": [
-            {
-                "name": "player_move",
-                "type": "string",
-                "required": False,
-                "description": "Player's move: rock, paper, or scissors",
-            }
-        ],
-    },
     "get_current_time": {
         "description": "Return the current local time in ISO 8601 format.",
         "params": [],
@@ -248,6 +237,64 @@ SUPPORTED_ACTIONS: Dict[str, Dict[str, Any]] = {
             },
         ],
     },
+    "control_specific_led": {
+        "description": "Control a specific LED (1, 2, or 3) individually.",
+        "params": [
+            {
+                "name": "led_id",
+                "type": "integer",
+                "required": True,
+                "description": "ID of the LED to control (1, 2, or 3).",
+            },
+            {
+                "name": "command",
+                "type": "string",
+                "required": False,
+                "description": "Command: 'on', 'off', or 'blink' (default 'on').",
+            },
+            {
+                "name": "duration",
+                "type": "number",
+                "required": False,
+                "description": "Duration in seconds to keep the state (default 5.0).",
+            },
+             {
+                "name": "blink_rate",
+                "type": "number",
+                "required": False,
+                "description": "Blinks per second if command is 'blink'.",
+            },
+        ],
+    },
+    "control_specific_dc_motor": {
+        "description": "Control a specific DC motor (1 or 2) individually.",
+        "params": [
+             {
+                "name": "motor_id",
+                "type": "integer",
+                "required": True,
+                "description": "ID of the motor to control (1 or 2).",
+            },
+            {
+                "name": "command",
+                "type": "string",
+                "required": False,
+                "description": "Command: 'forward', 'backward', or 'stop' (default 'forward').",
+            },
+            {
+                "name": "speed",
+                "type": "number",
+                "required": False,
+                "description": "Speed from 0.0 to 1.0 (default 1.0).",
+            },
+            {
+                "name": "duration",
+                "type": "number",
+                "required": False,
+                "description": "Duration in seconds (default 5.0).",
+            },
+        ],
+    },
     "control_dual_servos": {
         "description": "Control two servo motors simultaneously.",
         "params": [
@@ -348,68 +395,6 @@ _DIGIT_NORMALIZATION = str.maketrans("０１２３４５６７８９", "01234567
 
 def _normalize_digits(text: str) -> str:
     return text.translate(_DIGIT_NORMALIZATION)
-
-
-_MOVE_ALIASES = {
-    "rock": "rock",
-    "stone": "rock",
-    "gu": "rock",
-    "goo": "rock",
-    "paper": "paper",
-    "paa": "paper",
-    "pa": "paper",
-    "hand": "paper",
-    "scissors": "scissors",
-    "choki": "scissors",
-    "scissor": "scissors",
-}
-
-_VALID_MOVES = ("rock", "paper", "scissors")
-
-_WIN_MAP = {
-    "rock": "scissors",
-    "scissors": "paper",
-    "paper": "rock",
-}
-
-
-def _normalize_move(value: str) -> Optional[str]:
-    key = value.strip().lower()
-    return _MOVE_ALIASES.get(key)
-
-
-def _play_rock_paper_scissors(params: Dict[str, Any]) -> Dict[str, Any]:
-    move_value = params.get("player_move") if isinstance(params, dict) else None
-    if isinstance(move_value, str) and move_value.strip():
-        player_move = _normalize_move(move_value)
-        if not player_move:
-            raise ValueError("player_move must be rock, paper, scissors")
-        provided = True
-    else:
-        player_move = random.choice(_VALID_MOVES)
-        provided = False
-
-    agent_move = random.choice(_VALID_MOVES)
-    if player_move == agent_move:
-        outcome = "draw"
-    elif _WIN_MAP[player_move] == agent_move:
-        outcome = "win"
-    else:
-        outcome = "lose"
-
-    result_message = {
-        "win": "You win!",
-        "lose": "You lose!",
-        "draw": "It's a draw!",
-    }[outcome]
-
-    return {
-        "player_move": player_move,
-        "agent_move": agent_move,
-        "outcome": outcome,
-        "message": result_message,
-        "player_move_was_random": not provided,
-    }
 
 
 _DEFAULT_MOTOR_TEST_TIMEOUT = 30.0
@@ -1438,6 +1423,175 @@ def _run_motor_test(parameters: Any) -> Dict[str, Any]:
         in2_2.close()
 
 
+def _control_specific_led(parameters: Any) -> Dict[str, Any]:
+    timeout = _parse_timeout_parameter(parameters, _DEFAULT_LED_TIMEOUT)
+    context = _ActionExecutionContext(timeout)
+
+    led_id = 1
+    command = "on"
+    duration = 5.0
+    blink_on_time = 0.5
+    blink_off_time = 0.5
+
+    if isinstance(parameters, dict):
+        if "led_id" in parameters:
+            try:
+                led_id = int(parameters["led_id"])
+            except (ValueError, TypeError):
+                pass
+        
+        if "command" in parameters and isinstance(parameters["command"], str):
+            command = parameters["command"].strip().lower()
+
+        if "duration" in parameters:
+            try:
+                duration = float(parameters["duration"])
+            except (ValueError, TypeError):
+                pass
+        
+        if "blink_rate" in parameters:
+             try:
+                rate = float(parameters["blink_rate"])
+                if rate > 0:
+                    blink_on_time = blink_off_time = 0.5 / rate # Approx
+             except (ValueError, TypeError):
+                pass
+
+    if led_id not in (1, 2, 3):
+        raise ValueError("led_id must be 1, 2, or 3.")
+
+    led_key = f"led{led_id}"
+    pin = _LED_PINS[led_key]
+
+    try:
+        from gpiozero import PWMLED
+    except ImportError as exc:
+        raise RuntimeError(
+            "gpiozero is required to drive the LEDs."
+        ) from exc
+
+    led = PWMLED(pin)
+    
+    context.log("Specific LED control start", led_id=led_id, pin=pin, command=command, duration=duration)
+
+    try:
+        if command == "on":
+            led.on()
+            context.sleep(duration)
+        elif command == "off":
+            led.off()
+        elif command == "blink":
+            led.blink(on_time=blink_on_time, off_time=blink_off_time, n=None, background=True)
+            context.sleep(duration)
+            led.off()
+        else:
+            context.log(f"Unknown command '{command}'")
+    
+    finally:
+        if command != "on": # If just 'on', maybe we want to leave it on? 
+            # For now, let's turn it off at the end unless we want state persistence which this agent doesn't fully support yet.
+            # But usually 'turn on' implies staying on. 
+            # However, the context has a timeout.
+            # Let's respect the duration for 'on' as well, then turn off.
+            pass
+        led.off() # Always cleanup for now
+        led.close()
+
+    return {
+        "events": context.events,
+        "led_id": led_id,
+        "command": command,
+        "duration_seconds": context.elapsed()
+    }
+
+
+def _control_specific_dc_motor(parameters: Any) -> Dict[str, Any]:
+    timeout = _parse_timeout_parameter(parameters, _DEFAULT_MOTOR_TEST_TIMEOUT)
+    context = _ActionExecutionContext(timeout)
+
+    motor_id = 1
+    command = "forward"
+    speed = 1.0
+    duration = 5.0
+
+    if isinstance(parameters, dict):
+        if "motor_id" in parameters:
+            try:
+                motor_id = int(parameters["motor_id"])
+            except (ValueError, TypeError):
+                pass
+        
+        if "command" in parameters and isinstance(parameters["command"], str):
+            command = parameters["command"].strip().lower()
+
+        if "speed" in parameters:
+             try:
+                speed = float(parameters["speed"])
+                speed = max(0.0, min(1.0, speed))
+             except (ValueError, TypeError):
+                pass
+
+        if "duration" in parameters:
+            try:
+                duration = float(parameters["duration"])
+            except (ValueError, TypeError):
+                pass
+
+    if motor_id not in (1, 2):
+        raise ValueError("motor_id must be 1 or 2.")
+
+    # Pin definitions (Same as _run_motor_test)
+    motor_pins = {
+        1: {"EN": 25, "IN1": 24, "IN2": 23},
+        2: {"EN": 17, "IN1": 27, "IN2": 22}
+    }
+    pins = motor_pins[motor_id]
+
+    try:
+        from gpiozero import OutputDevice, PWMOutputDevice
+    except ImportError as exc:
+        raise RuntimeError("gpiozero is required.") from exc
+
+    en = PWMOutputDevice(pins["EN"], active_high=True, initial_value=0)
+    in1 = OutputDevice(pins["IN1"])
+    in2 = OutputDevice(pins["IN2"])
+
+    context.log("Specific DC Motor control", motor_id=motor_id, command=command, speed=speed, duration=duration)
+
+    try:
+        if command == "forward":
+            en.value = speed
+            in1.on()
+            in2.off()
+            context.sleep(duration)
+        elif command == "backward":
+            en.value = speed
+            in1.off()
+            in2.on()
+            context.sleep(duration)
+        elif command == "stop":
+            en.off()
+            in1.off()
+            in2.off()
+        else:
+             context.log(f"Unknown command '{command}'")
+
+    finally:
+        en.off()
+        in1.off()
+        in2.off()
+        en.close()
+        in1.close()
+        in2.close()
+
+    return {
+        "events": context.events,
+        "motor_id": motor_id,
+        "command": command,
+        "duration_seconds": context.elapsed()
+    }
+
+
 def _run_oled_robot_demo(parameters: Any) -> Dict[str, Any]:
     timeout = _parse_timeout_parameter(parameters, _DEFAULT_OLED_DEMO_TIMEOUT)
     context = _ActionExecutionContext(timeout)
@@ -2372,8 +2526,6 @@ def _execute_action(action: str, parameters: Dict[str, Any]) -> Tuple[bool, Any,
         config._format_for_log(parameters or {}),
     )
     try:
-        if action == "play_rock_paper_scissors":
-            return True, _play_rock_paper_scissors(parameters or {}), None
         if action == "get_current_time":
             now = datetime.now(timezone.utc).astimezone()
             return True, {"current_time": now.isoformat()}, None
@@ -2389,6 +2541,10 @@ def _execute_action(action: str, parameters: Dict[str, Any]) -> Tuple[bool, Any,
             return True, _capture_camera_photo(parameters or {}), None
         if action == "operate_led_pattern":
             return True, _run_led_demo(parameters or {}), None
+        if action == "control_specific_led":
+            return True, _control_specific_led(parameters or {}), None
+        if action == "control_specific_dc_motor":
+            return True, _control_specific_dc_motor(parameters or {}), None
         if action == "control_dual_servos":
             return True, _run_dual_servo_demo(parameters or {}), None
         if action == "no_action":
