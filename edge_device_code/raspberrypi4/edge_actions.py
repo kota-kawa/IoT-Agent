@@ -360,6 +360,29 @@ SUPPORTED_ACTIONS: Dict[str, Dict[str, Any]] = {
             },
         ],
     },
+    "control_all_leds": {
+        "description": "Control all LEDs together (on/off/blink).",
+        "params": [
+            {
+                "name": "command",
+                "type": "string",
+                "required": False,
+                "description": "Command: 'on', 'off', or 'blink' (default 'off').",
+            },
+            {
+                "name": "duration",
+                "type": "number",
+                "required": False,
+                "description": "Duration in seconds to hold the state (0 or negative keeps state until another command).",
+            },
+            {
+                "name": "blink_rate",
+                "type": "number",
+                "required": False,
+                "description": "Blinks per second if command is 'blink'.",
+            },
+        ],
+    },
     "control_specific_dc_motor": {
         "description": "Control a specific DC motor (1 or 2) individually.",
         "params": [
@@ -534,6 +557,54 @@ SUPPORTED_ACTIONS: Dict[str, Dict[str, Any]] = {
     },
     "dc_motor2_control": {
         "description": "Control DC motor 2 with forward/backward/stop commands.",
+        "params": [
+            {"name": "command", "type": "string", "required": False, "description": "forward/backward/stop"},
+            {"name": "speed", "type": "number", "required": False},
+            {"name": "duration", "type": "number", "required": False},
+            {"name": "timeout", "type": "number", "required": False},
+        ],
+    },
+    "move_right_hand": {
+        "description": "Control the Right Hand (Servo 1).",
+        "params": [
+            {"name": "mode", "type": "string", "required": False, "description": "set/center/off/sweep/info"},
+            {"name": "angle", "type": "number", "required": False, "description": "Angle (0-180)"},
+            {"name": "start", "type": "number", "required": False},
+            {"name": "end", "type": "number", "required": False},
+            {"name": "step", "type": "number", "required": False},
+            {"name": "delay", "type": "number", "required": False},
+            {"name": "cycles", "type": "integer", "required": False},
+            {"name": "pigpio", "type": "boolean", "required": False},
+            {"name": "hold", "type": "number", "required": False},
+            {"name": "timeout", "type": "number", "required": False},
+        ],
+    },
+    "move_left_hand": {
+        "description": "Control the Left Hand (Servo 2).",
+        "params": [
+            {"name": "mode", "type": "string", "required": False, "description": "set/center/off/sweep/info"},
+            {"name": "angle", "type": "number", "required": False, "description": "Angle (0-180)"},
+            {"name": "start", "type": "number", "required": False},
+            {"name": "end", "type": "number", "required": False},
+            {"name": "step", "type": "number", "required": False},
+            {"name": "delay", "type": "number", "required": False},
+            {"name": "cycles", "type": "integer", "required": False},
+            {"name": "pigpio", "type": "boolean", "required": False},
+            {"name": "hold", "type": "number", "required": False},
+            {"name": "timeout", "type": "number", "required": False},
+        ],
+    },
+    "move_left_leg": {
+        "description": "Control the Left Leg (DC Motor 1).",
+        "params": [
+            {"name": "command", "type": "string", "required": False, "description": "forward/backward/stop"},
+            {"name": "speed", "type": "number", "required": False},
+            {"name": "duration", "type": "number", "required": False},
+            {"name": "timeout", "type": "number", "required": False},
+        ],
+    },
+    "move_right_leg": {
+        "description": "Control the Right Leg (DC Motor 2).",
         "params": [
             {"name": "command", "type": "string", "required": False, "description": "forward/backward/stop"},
             {"name": "speed", "type": "number", "required": False},
@@ -1740,6 +1811,7 @@ def _control_specific_led(parameters: Any) -> Dict[str, Any]:
     led_id = 1
     command = "on"
     duration = 5.0
+    duration_provided = False
     blink_on_time = 0.5
     blink_off_time = 0.5
 
@@ -1756,6 +1828,7 @@ def _control_specific_led(parameters: Any) -> Dict[str, Any]:
         if "duration" in parameters:
             try:
                 duration = float(parameters["duration"])
+                duration_provided = True
             except (ValueError, TypeError):
                 pass
         
@@ -1787,7 +1860,10 @@ def _control_specific_led(parameters: Any) -> Dict[str, Any]:
     try:
         if command == "on":
             led.on()
-            context.sleep(duration)
+            if duration_provided and duration <= 0:
+                pass  # Leave on until another command
+            else:
+                context.sleep(duration)
         elif command == "off":
             led.off()
         elif command == "blink":
@@ -1798,13 +1874,9 @@ def _control_specific_led(parameters: Any) -> Dict[str, Any]:
             context.log(f"Unknown command '{command}'")
     
     finally:
-        if command != "on": # If just 'on', maybe we want to leave it on? 
-            # For now, let's turn it off at the end unless we want state persistence which this agent doesn't fully support yet.
-            # But usually 'turn on' implies staying on. 
-            # However, the context has a timeout.
-            # Let's respect the duration for 'on' as well, then turn off.
-            pass
-        led.off() # Always cleanup for now
+        keep_on = command == "on" and duration_provided and duration <= 0
+        if not keep_on:
+            led.off()
         led.close()
 
     return {
@@ -1812,6 +1884,86 @@ def _control_specific_led(parameters: Any) -> Dict[str, Any]:
         "led_id": led_id,
         "command": command,
         "duration_seconds": context.elapsed()
+    }
+
+
+def _control_all_leds(parameters: Any) -> Dict[str, Any]:
+    timeout = _parse_timeout_parameter(parameters, _DEFAULT_LED_TIMEOUT)
+    context = _ActionExecutionContext(timeout)
+
+    command = "off"
+    duration: Optional[float] = None
+    duration_provided = False
+    blink_on_time = 0.5
+    blink_off_time = 0.5
+
+    if isinstance(parameters, dict):
+        if "command" in parameters and isinstance(parameters["command"], str):
+            command = parameters["command"].strip().lower()
+
+        if "duration" in parameters:
+            try:
+                duration = float(parameters["duration"])
+                duration_provided = True
+            except (ValueError, TypeError):
+                pass
+
+        if "blink_rate" in parameters:
+            try:
+                rate = float(parameters["blink_rate"])
+                if rate > 0:
+                    blink_on_time = blink_off_time = 0.5 / rate
+            except (ValueError, TypeError):
+                pass
+
+    try:
+        from gpiozero import PWMLED
+    except ImportError as exc:
+        raise RuntimeError(
+            "gpiozero is required to drive the LEDs."
+        ) from exc
+
+    leds = [PWMLED(pin) for pin in _LED_PINS.values()]
+
+    context.log(
+        "All LED control start",
+        pins=_LED_PINS,
+        command=command,
+        duration=duration,
+    )
+
+    try:
+        if command == "on":
+            for led in leds:
+                led.on()
+            hold_seconds = duration if duration_provided else 5.0
+            if hold_seconds and hold_seconds > 0:
+                context.sleep(hold_seconds)
+        elif command == "off":
+            for led in leds:
+                led.off()
+        elif command == "blink":
+            hold_seconds = duration if duration_provided else 5.0
+            for led in leds:
+                led.blink(on_time=blink_on_time, off_time=blink_off_time, n=None, background=True)
+            if hold_seconds and hold_seconds > 0:
+                context.sleep(hold_seconds)
+        else:
+            context.log(f"Unknown command '{command}' for all LEDs.")
+    finally:
+        keep_on = command == "on" and duration_provided and duration is not None and duration <= 0
+        if not keep_on:
+            for led in leds:
+                led.off()
+        for led in leds:
+            led.close()
+
+    return {
+        "events": context.events,
+        "command": command,
+        "timed_out": context.timed_out,
+        "duration_seconds": context.elapsed(),
+        "pins": _LED_PINS,
     }
 
 
@@ -2861,6 +3013,8 @@ def _execute_action(action: str, parameters: Dict[str, Any]) -> Tuple[bool, Any,
             return True, _run_led_demo(parameters or {}), None
         if action == "control_specific_led":
             return True, _control_specific_led(parameters or {}), None
+        if action == "control_all_leds":
+            return True, _control_all_leds(parameters or {}), None
         if action in ("led1_on", "led1_off", "led2_on", "led2_off", "led3_on", "led3_off"):
             command = "on" if action.endswith("_on") else "off"
             led_id = int(action[3])  # led1_on -> 1
@@ -2870,11 +3024,19 @@ def _execute_action(action: str, parameters: Dict[str, Any]) -> Tuple[bool, Any,
         if action in ("dc_motor1_control", "dc_motor2_control"):
             motor_id = 1 if "motor1" in action else 2
             return True, _run_named_dc_motor(motor_id, parameters or {}), None
+        if action == "move_left_leg":
+            return True, _run_named_dc_motor(1, parameters or {}), None
+        if action == "move_right_leg":
+            return True, _run_named_dc_motor(2, parameters or {}), None
         if action == "control_dual_servos":
             return True, _run_dual_servo_demo(parameters or {}), None
         if action in ("servo1_control", "servo2_control"):
             servo_id = int(action.replace("servo", "").replace("_control", ""))
             return True, _run_named_servo(servo_id, parameters or {}), None
+        if action == "move_right_hand":
+            return True, _run_named_servo(1, parameters or {}), None
+        if action == "move_left_hand":
+            return True, _run_named_servo(2, parameters or {}), None
         if action == "no_action":
             message = parameters.get("message") if isinstance(parameters, dict) else None
             return True, {"message": message or "No action executed."}, None
