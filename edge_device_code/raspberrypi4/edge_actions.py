@@ -1847,37 +1847,47 @@ def _control_specific_led(parameters: Any) -> Dict[str, Any]:
     pin = _LED_PINS[led_key]
 
     try:
-        from gpiozero import PWMLED
+        from gpiozero import LED
     except ImportError as exc:
         raise RuntimeError(
             "gpiozero is required to drive the LEDs."
         ) from exc
 
-    led = PWMLED(pin)
+    led = LED(pin)
     
     context.log("Specific LED control start", led_id=led_id, pin=pin, command=command, duration=duration)
 
     try:
         if command == "on":
             led.on()
-            if duration_provided and duration <= 0:
-                pass  # Leave on until another command
-            else:
+            context.log("LED turned ON", led_id=led_id, pin=pin)
+            if duration_provided and duration > 0:
                 context.sleep(duration)
+                led.off()
+                context.log("LED turned OFF after duration", led_id=led_id, duration=duration)
+            # If duration not provided or duration <= 0, leave LED on (no close)
+            elif not duration_provided:
+                # Default behavior: leave LED on indefinitely
+                pass
         elif command == "off":
             led.off()
+            context.log("LED turned OFF", led_id=led_id, pin=pin)
+            led.close()
         elif command == "blink":
             led.blink(on_time=blink_on_time, off_time=blink_off_time, n=None, background=True)
             context.sleep(duration)
             led.off()
+            led.close()
         else:
             context.log(f"Unknown command '{command}'")
-    
-    finally:
-        keep_on = command == "on" and duration_provided and duration <= 0
-        if not keep_on:
-            led.off()
-        led.close()
+            led.close()
+    except Exception as exc:
+        context.log(f"LED control error: {exc}", led_id=led_id)
+        try:
+            led.close()
+        except Exception:
+            pass
+        raise
 
     return {
         "events": context.events,
@@ -1917,13 +1927,13 @@ def _control_all_leds(parameters: Any) -> Dict[str, Any]:
                 pass
 
     try:
-        from gpiozero import PWMLED
+        from gpiozero import LED
     except ImportError as exc:
         raise RuntimeError(
             "gpiozero is required to drive the LEDs."
         ) from exc
 
-    leds = [PWMLED(pin) for pin in _LED_PINS.values()]
+    leds = [LED(pin) for pin in _LED_PINS.values()]
 
     context.log(
         "All LED control start",
@@ -1936,27 +1946,43 @@ def _control_all_leds(parameters: Any) -> Dict[str, Any]:
         if command == "on":
             for led in leds:
                 led.on()
-            hold_seconds = duration if duration_provided else 5.0
-            if hold_seconds and hold_seconds > 0:
-                context.sleep(hold_seconds)
+            context.log("All LEDs turned ON", pins=_LED_PINS)
+            if duration_provided and duration is not None and duration > 0:
+                context.sleep(duration)
+                for led in leds:
+                    led.off()
+                for led in leds:
+                    led.close()
+                context.log("All LEDs turned OFF after duration", duration=duration)
+            # If duration not provided, leave LEDs on (no close)
         elif command == "off":
             for led in leds:
                 led.off()
+            context.log("All LEDs turned OFF", pins=_LED_PINS)
+            for led in leds:
+                led.close()
         elif command == "blink":
-            hold_seconds = duration if duration_provided else 5.0
+            hold_seconds = duration if duration_provided and duration is not None else 5.0
             for led in leds:
                 led.blink(on_time=blink_on_time, off_time=blink_off_time, n=None, background=True)
-            if hold_seconds and hold_seconds > 0:
+            if hold_seconds > 0:
                 context.sleep(hold_seconds)
-        else:
-            context.log(f"Unknown command '{command}' for all LEDs.")
-    finally:
-        keep_on = command == "on" and duration_provided and duration is not None and duration <= 0
-        if not keep_on:
             for led in leds:
                 led.off()
+            for led in leds:
+                led.close()
+        else:
+            context.log(f"Unknown command '{command}' for all LEDs.")
+            for led in leds:
+                led.close()
+    except Exception as exc:
+        context.log(f"All LED control error: {exc}")
         for led in leds:
-            led.close()
+            try:
+                led.close()
+            except Exception:
+                pass
+        raise
 
     return {
         "events": context.events,
