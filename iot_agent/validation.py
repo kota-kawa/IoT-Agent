@@ -9,6 +9,15 @@ def _validate_device_command(command: Dict[str, Any]) -> Tuple[Optional[Dict[str
     if not isinstance(command, dict):
         return None, "device_command の形式が不正なため処理を中止しました。"
 
+    def _coerce_sequence_group(raw_value: Any) -> Optional[int]:
+        if isinstance(raw_value, int) and raw_value > 0:
+            return raw_value
+        if isinstance(raw_value, str) and raw_value.strip().isdigit():
+            candidate = int(raw_value.strip())
+            if candidate > 0:
+                return candidate
+        return None
+
     raw_device_id = command.get("device_id")
     device_id: Optional[str] = None
     if isinstance(raw_device_id, str) and raw_device_id.strip():
@@ -41,6 +50,7 @@ def _validate_device_command(command: Dict[str, Any]) -> Tuple[Optional[Dict[str
         for cap in (device.capabilities if device else [])
         if isinstance(cap, dict) and cap.get("name")
     }
+    sequence_group = _coerce_sequence_group(command.get("sequence_group"))
     if capability_names and validated_name not in capability_names:
         return (
             None,
@@ -52,6 +62,8 @@ def _validate_device_command(command: Dict[str, Any]) -> Tuple[Optional[Dict[str
         "name": validated_name,
         "args": args,
     }
+    if sequence_group:
+        validated["sequence_group"] = sequence_group
     return validated, None
 
 
@@ -81,4 +93,3 @@ def _validate_device_command_sequence(
         errors.append(f"ステップ{index}: {message}")
 
     return validated_commands, errors
-

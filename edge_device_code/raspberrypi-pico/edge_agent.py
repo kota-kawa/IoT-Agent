@@ -384,7 +384,9 @@ def agent_loop():
                     pending_result = None
                     pending_attempt = 0
                     gc.collect()
-                    time.sleep(POLL_INTERVAL_SEC)
+                    # Immediately poll again to reduce latency between back-to-back jobs
+                    # (keeping a very short breather to avoid tight spinning).
+                    time.sleep(0.05)
                     continue
                 else:
                     pending_attempt += 1
