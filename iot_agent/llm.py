@@ -609,6 +609,11 @@ def _structured_conversation_review_prompt(messages: List[Dict[str, str]]) -> Di
         "- コマンドが明確な場合（「ブザーを鳴らして」「LEDを点灯」など）: 確認なしに device_commands を生成してください。\n"
         "- パラメータが省略されている場合: 音の種類や表示位置などの詳細が不明でも、勝手に標準的なデフォルト値（例: melody='alert'、textは自動中心揃え）を補完して device_commands を生成してください。質問は不要です。\n\n"
         
+        "【実行順序と同時実行の指定方法】\n"
+        "- 同時に動かしても安全な場合（例: ブザーを鳴らしながらモーターを回す）は、各コマンドに同じ `sequence_group` (1以上の整数) を付けて並列に実行させてください。デバイスが異なっても（Pico W / Jetson / Raspberry Pi 4など）同じ番号なら同時に動かします。\n"
+        "- 明確に順番が必要な場合（例: 先にLED点灯を確認してからモーターを回す）は、`sequence_group` を 1, 2, 3... と段階的に上げてください。同じ番号同士は同時実行、番号が小さいものから順番に処理されます。\n"
+        "- `sequence_group` が指定されない場合は 1 とみなし、同じ番号のコマンドはまとめて即時実行します。不要な待ち時間を避けるため、できるだけ並列実行できるものは同じ番号にまとめてください。\n\n"
+        
         "【発言してはいけない場合】\n"
         "- Web検索・ブラウザ操作の話題 → Browser Agentの専門\n"
         "- 料理・洗濯・家庭科の知識 → Life-Style Agentの専門\n"
@@ -635,7 +640,7 @@ def _structured_conversation_review_prompt(messages: List[Dict[str, str]]) -> Di
         "常に以下のフィールドを含む厳密なJSONオブジェクトで応答してください: "
         "'action_required' (boolean), "
         "'reason' (あなたの判断を説明する文字列), "
-        "'device_commands' (null または 'device_id', 'name', 'args' を持つコマンドオブジェクトの配列), "
+        "'device_commands' (null または 'device_id', 'name', 'args' を持つコマンドオブジェクトの配列; 並列・順次を切り替える場合は各コマンドに任意で 'sequence_group' (1以上の整数) を付ける), "
         "'notes' (任意), "
         "'should_reply' (boolean), "
         "'reply' (短く役立つメッセージ), "

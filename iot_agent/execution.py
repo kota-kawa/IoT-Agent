@@ -286,13 +286,22 @@ def _execute_device_command_sequence(
     initial_reply: str,
     commands: List[Dict[str, Any]],
 ) -> Tuple[str, int, List[Dict[str, Any]]]:
-    # 連続コマンドをできるだけ同時に処理し、レスポンス文と言語コードを返す
+    # 連続コマンドを sequence_group ごとに並列実行し、グループ間は順次処理する
 
     if not commands:
         return initial_reply, 200, []
 
     summaries: List[Optional[_CommandExecutionSummary]] = [None] * len(commands)
-    threads: List[threading.Thread] = []
+
+    def _sequence_group_for_command(command: Dict[str, Any]) -> int:
+        raw_value = command.get("sequence_group")
+        if isinstance(raw_value, int) and raw_value > 0:
+            return raw_value
+        if isinstance(raw_value, str) and raw_value.strip().isdigit():
+            candidate = int(raw_value.strip())
+            if candidate > 0:
+                return candidate
+        return 1
 
     def _run_command(index: int, command: Dict[str, Any]) -> None:
         device_id = command.get("device_id")
@@ -329,14 +338,21 @@ def _execute_device_command_sequence(
 
         summaries[index] = summary
 
+    grouped_commands: Dict[int, List[Tuple[int, Dict[str, Any]]]] = {}
     for index, command in enumerate(commands):
-        worker = threading.Thread(target=_run_command, args=(index, command))
-        worker.daemon = True
-        threads.append(worker)
-        worker.start()
+        group_no = _sequence_group_for_command(command)
+        grouped_commands.setdefault(group_no, []).append((index, command))
 
-    for worker in threads:
-        worker.join()
+    for _, grouped in sorted(grouped_commands.items(), key=lambda item: item[0]):
+        threads: List[threading.Thread] = []
+        for index, command in grouped:
+            worker = threading.Thread(target=_run_command, args=(index, command))
+            worker.daemon = True
+            threads.append(worker)
+            worker.start()
+
+        for worker in threads:
+            worker.join()
 
     completed_summaries: List[_CommandExecutionSummary] = [
         summary for summary in summaries if isinstance(summary, _CommandExecutionSummary)
