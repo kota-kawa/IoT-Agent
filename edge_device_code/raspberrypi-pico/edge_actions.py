@@ -799,8 +799,135 @@ def lcd_face(mode: str = "blink_cycle", contrast_percent: int = CONTRAST_PERCENT
     return {"mode": mode, "contrast_percent": contrast_percent}
 
 
+def _run_parallel(commands):
+    print("[sequence] running in parallel mode (limited support)")
+    # Extract motor/buzzer tasks
+    motor_cmd = None
+    buzzer_cmd = None
+    others = []
+    
+    for cmd in commands:
+        name = cmd.get("name")
+        if name == "activate_propeller":
+            motor_cmd = cmd
+        elif name == "buzzer_tone":
+            buzzer_cmd = cmd
+        else:
+            others.append(cmd)
+            
+    results = []
+    
+    # Run simple tasks first (LEDs etc)
+    for cmd in others:
+        name = cmd.get("name")
+        args = cmd.get("args", {})
+        if name in FUNCTIONS:
+            func = FUNCTIONS[name]["callable"]
+            try:
+                res = func(**args)
+                results.append({"name": name, "ok": True, "result": res})
+            except Exception as e:
+                results.append({"name": name, "ok": False, "error": str(e)})
+        else:
+            results.append({"name": name, "ok": False, "error": "unknown function"})
+
+    # Prepare duration
+    durations = []
+    
+    # Start Motor
+    if motor_cmd:
+        args = motor_cmd.get("args", {})
+        direction = args.get("direction", "forward")
+        power = args.get("wind_power", _MOTOR_DEFAULT_SPEED)
+        ms = args.get("duration_ms", 1500)
+        durations.append(int(ms))
+        
+        direction_forward = (str(direction).lower() == "forward")
+        SetMotorSpeed(direction_forward, int(power))
+        results.append({"name": "activate_propeller", "ok": True, "status": "started"})
+        
+    # Start Buzzer
+    buzzer = None
+    if buzzer_cmd:
+        args = buzzer_cmd.get("args", {})
+        freq = int(args.get("freq_hz", 2000))
+        ms = int(args.get("duration_ms", 300))
+        duty = float(args.get("duty", 0.5))
+        durations.append(ms)
+        
+        try:
+            buzzer = PassiveBuzzer(BUZZER_PIN)
+            duty_u16 = int(65535 * duty)
+            buzzer.pwm.freq(freq)
+            buzzer.pwm.duty_u16(duty_u16)
+            results.append({"name": "buzzer_tone", "ok": True, "status": "started"})
+        except Exception as e:
+            results.append({"name": "buzzer_tone", "ok": False, "error": str(e)})
+        
+    # Wait
+    max_ms = max(durations) if durations else 0
+    if max_ms > 0:
+        time.sleep_ms(max_ms)
+        
+    # Stop Motor
+    if motor_cmd:
+        brake = bool(motor_cmd.get("args", {}).get("brake", False))
+        if brake:
+            brake_motor()
+        else:
+            stop_motor()
+            
+    # Stop Buzzer
+    if buzzer:
+        buzzer.stop()
+        
+    return results
+
+
+def run_sequence(commands: list = None, mode: str = "sequential"):
+    """
+    Run multiple commands. 
+    commands: list of {"name": "func_name", "args": {..}}
+    mode: 'sequential' or 'parallel'
+    """
+    if not commands:
+        return []
+        
+    if mode == "parallel":
+        return _run_parallel(commands)
+
+    results = []
+    for cmd in commands:
+        name = cmd.get("name")
+        args = cmd.get("args", {})
+        
+        if name not in FUNCTIONS:
+            results.append({"name": name, "ok": False, "error": "unknown function"})
+            continue
+            
+        spec = FUNCTIONS[name]
+        func = spec["callable"]
+        
+        try:
+            res = func(**args)
+            results.append({"name": name, "ok": True, "result": res})
+        except Exception as e:
+            print("Error running {}: {}".format(name, e))
+            results.append({"name": name, "ok": False, "error": str(e)})
+            
+    return results
+
+
 # 関数ディスパッチテーブル
 FUNCTIONS = {
+    "run_sequence": {
+        "callable": run_sequence,
+        "description": "Run multiple commands in sequence or parallel.",
+        "params": [
+            {"name": "commands", "type": "list", "required": True},
+            {"name": "mode", "type": "str", "default": "sequential", "required": False},
+        ],
+    },
 
     "led0_on": {
         "callable": led0_on,
