@@ -23,6 +23,7 @@ LLM_SYSTEM_PROMPT = (
     "- play_buzzer: melody ('success'/'error'/'alert'/'startup'/'mario') or note/duration for single tone\n"
     "- display_robot_animation: text (string to display), motion ('default'/'calm'/'alert'/'scout'/'sleeping'/'hyper'/'scanning'), duration (seconds)\n"
     "- operate_led_pattern: pattern ('chase'/'blink_all'/'all_on'/'random'/'breathing'/'police'/'demo'), cycles (integer), timeout (seconds)\n"
+    "- control_all_leds: command ('on'/'off'/'blink'), duration (seconds), blink_rate (Hz)\n"
     "- control_specific_led: led_id (1, 2, 3), command ('on'/'off'/'blink'), duration (seconds), blink_rate (Hz)\n"
     "- control_specific_dc_motor: motor_id (1, 2), command ('forward'/'backward'/'stop'), speed (0.0-1.0), duration (seconds)\n"
     "- control_dual_servos: action ('nod'/'shake'/'happy'/'synced_sweep'/'demo'), or command ('set'/'off'/'info') with angle1/angle2, cycles, step, delay\n"
@@ -42,6 +43,8 @@ LLM_SYSTEM_PROMPT = (
     '{"action": "display_robot_animation", "parameters": {"text": "Hello World", "motion": "alert"}}\n\n'
     "Instruction: Run the police light pattern 5 times\n"
     '{"action": "operate_led_pattern", "parameters": {"pattern": "police", "cycles": 5}}\n\n'
+    "Instruction: Turn off all the LEDs\n"
+    '{"action": "control_all_leds", "parameters": {"command": "off"}}\n\n'
     "Instruction: Turn on LED 1 for 10 seconds\n"
     '{"action": "control_specific_led", "parameters": {"led_id": 1, "command": "on", "duration": 10}}\n\n'
     "Instruction: Move motor 2 backward at full speed\n"
@@ -353,9 +356,23 @@ def _heuristic_multi_plan(instruction: str) -> List[Dict[str, Any]]:
         ) and "servo" not in lowered:
             _add("operate_dc_motors", {})
 
-    # Specific LED
+    # LEDs
     led_id_match = re.search(r"(?:led|ＬＥＤ)\s*([123])", text, re.IGNORECASE)
-    if led_id_match:
+    led_mentions_all = bool(
+        re.search(r"\ball\s+(?:leds?|lights?)\b", lowered)
+        or "every led" in lowered
+        or ("leds" in lowered and ("off" in lowered or "on" in lowered or "blink" in lowered))
+        or (
+            any(token in text for token in ["全部", "全て", "すべて"])
+            and ("LED" in text.upper() or "ライト" in text)
+        )
+    )
+    if led_mentions_all:
+        command = "on"
+        if "blink" in lowered or "点滅" in text: command = "blink"
+        elif "off" in lowered or "消" in text: command = "off"
+        _add("control_all_leds", {"command": command})
+    elif led_id_match:
         led_id = int(led_id_match.group(1))
         command = "on"
         if "off" in lowered or "消" in text: command = "off"
