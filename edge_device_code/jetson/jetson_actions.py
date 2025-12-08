@@ -1,6 +1,7 @@
 """Hardware action implementations for the Jetson edge agent."""
 
 import logging
+import threading
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -173,6 +174,30 @@ def _control_motor(parameters: Dict[str, Any]) -> Dict[str, Any]:
             # Spin Right: Left Fwd, Right Rev
             GPIO.output(IN1, GPIO.LOW)
             GPIO.output(IN2, GPIO.HIGH)
+            GPIO.output(IN3, GPIO.HIGH)
+            GPIO.output(IN4, GPIO.LOW)
+        elif direction == "left_forward":
+            # Left Fwd, Right Stop
+            GPIO.output(IN1, GPIO.LOW)
+            GPIO.output(IN2, GPIO.HIGH)
+            GPIO.output(IN3, GPIO.LOW)
+            GPIO.output(IN4, GPIO.LOW)
+        elif direction == "left_backward":
+            # Left Rev, Right Stop
+            GPIO.output(IN1, GPIO.HIGH)
+            GPIO.output(IN2, GPIO.LOW)
+            GPIO.output(IN3, GPIO.LOW)
+            GPIO.output(IN4, GPIO.LOW)
+        elif direction == "right_forward":
+            # Left Stop, Right Fwd
+            GPIO.output(IN1, GPIO.LOW)
+            GPIO.output(IN2, GPIO.LOW)
+            GPIO.output(IN3, GPIO.LOW)
+            GPIO.output(IN4, GPIO.HIGH)
+        elif direction == "right_backward":
+            # Left Stop, Right Rev
+            GPIO.output(IN1, GPIO.LOW)
+            GPIO.output(IN2, GPIO.LOW)
             GPIO.output(IN3, GPIO.HIGH)
             GPIO.output(IN4, GPIO.LOW)
         else:
@@ -420,12 +445,122 @@ def _monitor_motion(parameters: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _run_sequence(parameters: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Run multiple actions sequentially or (limited) in parallel.
+    Parallel mode is allowed only when at most one GPIO-heavy action is present
+    to avoid pin conflicts, mirroring the Pico's ability to overlap simple tasks.
+    """
+    context = _ActionContext()
+
+    requested_mode = "sequential"
+    commands_raw = []
+    if isinstance(parameters, dict):
+        mode_value = parameters.get("mode")
+        if isinstance(mode_value, str) and mode_value.strip():
+            requested_mode = mode_value.strip().lower()
+        commands_value = parameters.get("commands")
+        if isinstance(commands_value, list):
+            commands_raw = [cmd for cmd in commands_value if isinstance(cmd, dict)]
+
+    if not commands_raw:
+        raise ValueError("commands must be a non-empty list of command dictionaries.")
+
+    gpio_exclusive_actions = {"control_motor", "run_motor_test", "measure_distance_cm", "monitor_motion"}
+    gpio_action_count = sum(
+        1
+        for cmd in commands_raw
+        if isinstance(cmd.get("name"), str)
+        and cmd.get("name").strip() in gpio_exclusive_actions
+    )
+
+    executed_mode = "sequential"
+    if requested_mode == "parallel" and gpio_action_count <= 1:
+        executed_mode = "parallel"
+    elif requested_mode == "parallel":
+        context.log(
+            "Parallel requested but multiple GPIO actions detected; falling back to sequential",
+            gpio_actions=gpio_action_count,
+        )
+    elif requested_mode not in ("sequential", "parallel"):
+        context.log("Unsupported sequence mode requested; using sequential", requested_mode=requested_mode)
+
+    context.log(
+        "Starting sequence",
+        command_count=len(commands_raw),
+        requested_mode=requested_mode,
+        executed_mode=executed_mode,
+    )
+
+    def _build_entry(index: int, name: Optional[str], args: Dict[str, Any]) -> Dict[str, Any]:
+        if not name:
+            return {"index": index, "ok": False, "error": "command name is required"}
+        if name == "run_sequence":
+            return {
+                "index": index,
+                "name": name,
+                "ok": False,
+                "error": "nested run_sequence is not supported on this device",
+            }
+        try:
+            ok, result, error = _execute_action(name, args)
+            entry: Dict[str, Any] = {"index": index, "name": name, "ok": bool(ok), "result": result}
+            if error:
+                entry["error"] = error
+            return entry
+        except Exception as exc:  # pragma: no cover - defensive
+            logging.exception("Sub-action '%s' failed inside sequence", name)
+            return {"index": index, "name": name, "ok": False, "error": str(exc)}
+
+    results: List[Dict[str, Any]] = []
+
+    if executed_mode == "sequential":
+        for idx, cmd in enumerate(commands_raw, start=1):
+            name_value = cmd.get("name")
+            name = name_value.strip() if isinstance(name_value, str) and name_value.strip() else None
+            args = cmd.get("args") if isinstance(cmd.get("args"), dict) else {}
+            context.log("Executing sub-action", index=idx, name=name)
+            results.append(_build_entry(idx, name, args))
+    else:
+        # Limited parallel mode (single GPIO-heavy action + lightweight tasks)
+        slots: List[Optional[Dict[str, Any]]] = [None] * len(commands_raw)
+        threads: List[threading.Thread] = []
+
+        def _worker(slot_index: int, cmd: Dict[str, Any]) -> None:
+            name_value = cmd.get("name")
+            name = name_value.strip() if isinstance(name_value, str) and name_value.strip() else None
+            args = cmd.get("args") if isinstance(cmd.get("args"), dict) else {}
+            slots[slot_index] = _build_entry(slot_index + 1, name, args)
+
+        for slot, cmd in enumerate(commands_raw):
+            thread = threading.Thread(target=_worker, args=(slot, cmd), daemon=True)
+            threads.append(thread)
+            thread.start()
+
+        for thread in threads:
+            thread.join()
+
+        results = [entry for entry in slots if entry is not None]
+
+    context.log("Sequence finished", executed=len(results), executed_mode=executed_mode)
+
+    return {
+        "results": results,
+        "requested_mode": requested_mode,
+        "executed_mode": executed_mode,
+        "duration_seconds": round(time.monotonic() - context.started, 3),
+        "timed_out": context.timed_out,
+    }
+
+
 def _execute_action(action: str, parameters: Dict[str, Any]) -> Tuple[bool, Any, Optional[str]]:
     logging.info("Executing action '%s' with parameters=%s", action, parameters)
     try:
         if action == "get_current_time":
             now = datetime.now(timezone.utc).astimezone()
             return True, {"current_time": now.isoformat()}, None
+        if action == "run_sequence":
+            return True, _run_sequence(parameters or {}), None
         if action == "run_motor_test":
             return True, _run_motor_test(parameters or {}), None
         if action == "control_motor":

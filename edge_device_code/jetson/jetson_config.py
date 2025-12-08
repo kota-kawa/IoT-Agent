@@ -55,6 +55,23 @@ SUPPORTED_ACTIONS: Dict[str, Dict[str, Any]] = {
         "description": "Return the current local time in ISO 8601 format.",
         "params": [],
     },
+    "run_sequence": {
+        "description": "Execute multiple actions sequentially or with limited parallelism (one GPIO-heavy task at a time).",
+        "params": [
+            {
+                "name": "commands",
+                "type": "array",
+                "required": True,
+                "description": "List of commands to run. Each item should include 'name' and optional 'args' dict.",
+            },
+            {
+                "name": "mode",
+                "type": "string",
+                "required": False,
+                "description": "Execution mode: 'sequential' or 'parallel' (parallel supports one GPIO-heavy action plus lightweight tasks).",
+            },
+        ],
+    },
     "run_motor_test": {
         "description": "Use the L293D wiring on BCM24/23/27/22 to drive both motors forward and reverse.",
         "params": [
@@ -85,7 +102,7 @@ SUPPORTED_ACTIONS: Dict[str, Dict[str, Any]] = {
                 "name": "direction",
                 "type": "string",
                 "required": True,
-                "description": "Movement direction: 'forward', 'backward', 'left', 'right'.",
+                "description": "Movement direction: 'forward', 'backward', 'left', 'right', 'left_forward', 'left_backward', 'right_forward', 'right_backward'. Supports 'right leg' (right motor) and 'left leg' (left motor) commands.",
             },
             {
                 "name": "duration",
@@ -163,8 +180,12 @@ LLM_SYSTEM_PROMPT = (
     "JSONのみを出力し、説明やコードフェンスは含めないでください。\n\n"
     "【利用可能なアクション】\n"
     "- get_current_time: 現在時刻を取得（パラメータなし）\n"
+    "- run_sequence: 複数アクションを順番または簡易並列で実行\n"
+    "  - commands (必須): {name, args} のリスト\n"
+    "  - mode (任意): 'sequential' または 'parallel'\n"
     "- control_motor: モーター制御\n"
-    "  - direction (必須): 'forward', 'backward', 'left', 'right'\n"
+    "  - direction (必須): 'forward', 'backward', 'left', 'right', 'left_forward', 'left_backward', 'right_forward', 'right_backward'\n"
+    "    ※「右足」は右モーター、「左足」は左モーターとして解釈してください。\n"
     "  - duration (任意): 秒数（デフォルト: 1.0）\n"
     "- run_motor_test: モーターテスト（前進→ブレーキ→後退）\n"
     "  - forward_seconds (任意): 前進秒数（デフォルト: 3）\n"
@@ -182,6 +203,12 @@ LLM_SYSTEM_PROMPT = (
     '{"action": "get_current_time", "parameters": {}}\n'
     "指示: 前に2秒進んで\n"
     '{"action": "control_motor", "parameters": {"direction": "forward", "duration": 2.0}}\n'
+    "指示: 右足を前に出して（右モーター前進）\n"
+    '{"action": "control_motor", "parameters": {"direction": "right_forward", "duration": 1.0}}\n'
+    "指示: 画面にhiを出しつつ前に2秒進んで\n"
+    '{"action": "run_sequence", "parameters": {"mode": "parallel", "commands": ['
+    '{"name": "show_text_on_oled", "args": {"text": "hi", "duration": 10}}, '
+    '{"name": "control_motor", "args": {"direction": "forward", "duration": 2.0}}]}}\n'
     "指示: 画面にこんにちはと表示して\n"
     '{"action": "show_text_on_oled", "parameters": {"text": "こんにちは"}}\n'
     "指示: 距離を測って\n"
