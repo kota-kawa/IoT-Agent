@@ -22,9 +22,10 @@ LLM_SYSTEM_PROMPT = (
     "- play_buzzer: melody ('success'/'error'/'alert'/'startup'/'mario') or note/duration for single tone\n"
     "- display_robot_animation: text (string to display), motion ('default'/'calm'/'alert'/'scout'/'sleeping'/'hyper'/'scanning'), duration (seconds)\n"
     "- operate_led_pattern: pattern ('chase'/'blink_all'/'all_on'/'random'/'breathing'/'police'/'demo'), cycles (integer), timeout (seconds)\n"
+    "- control_specific_led: led_id (1, 2, 3), command ('on'/'off'/'blink'), duration (seconds), blink_rate (Hz)\n"
+    "- control_specific_dc_motor: motor_id (1, 2), command ('forward'/'backward'/'stop'), speed (0.0-1.0), duration (seconds)\n"
     "- control_dual_servos: action ('nod'/'shake'/'happy'/'synced_sweep'/'demo'), or command ('set'/'off'/'info') with angle1/angle2, cycles, step, delay\n"
     "- capture_camera_photo: filename (JPEG, optional), directory (optional), warmup (seconds)\n"
-    "- play_rock_paper_scissors: player_move ('rock'/'paper'/'scissors')\n"
     "- get_current_time: no parameters needed\n"
     "- no_action: Use ONLY when request is completely unrelated to hardware control. Include message explaining why.\n\n"
     "Examples:\n"
@@ -38,10 +39,12 @@ LLM_SYSTEM_PROMPT = (
     '{"action": "display_robot_animation", "parameters": {"text": "Hello World", "motion": "alert"}}\n\n'
     "Instruction: Run the police light pattern 5 times\n"
     '{"action": "operate_led_pattern", "parameters": {"pattern": "police", "cycles": 5}}\n\n'
+    "Instruction: Turn on LED 1 for 10 seconds\n"
+    '{"action": "control_specific_led", "parameters": {"led_id": 1, "command": "on", "duration": 10}}\n\n'
+    "Instruction: Move motor 2 backward at full speed\n"
+    '{"action": "control_specific_dc_motor", "parameters": {"motor_id": 2, "command": "backward", "speed": 1.0}}\n\n'
     "Instruction: Make the robot nod\n"
     '{"action": "control_dual_servos", "parameters": {"action": "nod"}}\n\n'
-    "Instruction: Let's play rock paper scissors, I choose rock\n"
-    '{"action": "play_rock_paper_scissors", "parameters": {"player_move": "rock"}}\n\n'
     "Instruction: What time is it?\n"
     '{"action": "get_current_time", "parameters": {}}\n\n'
     "Instruction: Take a photo\n"
@@ -300,14 +303,6 @@ def _heuristic_multi_plan(instruction: str) -> List[Dict[str, Any]]:
             entry["message"] = message
         plans.append(entry)
 
-    if (
-        "rock paper scissors" in lowered
-        or "janken" in lowered
-        or "じゃんけん" in text
-        or "グー" in text
-    ):
-        _add("play_rock_paper_scissors", {})
-
     if any(
         keyword in lowered
         for keyword in ["what time", "current time", "time is it", "clock", "時刻", "今何時"]
@@ -320,16 +315,34 @@ def _heuristic_multi_plan(instruction: str) -> List[Dict[str, Any]]:
     ) or "カメラ" in text or "写真" in text or "撮影" in text:
         _add("capture_camera_photo", {})
 
-    motor_keywords = ["motor test", "motor demo", "l293d", "dc motor"]
-    if (
-        any(keyword in lowered for keyword in motor_keywords)
-        or ("モーター" in text and "サーボ" not in text)
-    ) and "servo" not in lowered:
-        _add("run_motor_test", {})
+    # Specific DC Motor
+    motor_id_match = re.search(r"(?:motor|モーター)\s*([12])", text, re.IGNORECASE)
+    if motor_id_match and "servo" not in lowered:
+         motor_id = int(motor_id_match.group(1))
+         command = "forward"
+         if "back" in lowered or "後" in text: command = "backward"
+         if "stop" in lowered or "止" in text: command = "stop"
+         _add("control_specific_dc_motor", {"motor_id": motor_id, "command": command})
+    else:
+        motor_keywords = ["motor test", "motor demo", "l293d", "dc motor"]
+        if (
+            any(keyword in lowered for keyword in motor_keywords)
+            or ("モーター" in text and "サーボ" not in text)
+        ) and "servo" not in lowered:
+            _add("operate_dc_motors", {})
 
-    led_keywords = ["led", "blink", "blinking", "light show"]
-    if any(keyword in lowered for keyword in led_keywords) or "ライト" in text or "点滅" in text:
-        _add("run_led_demo", {})
+    # Specific LED
+    led_id_match = re.search(r"(?:led|ＬＥＤ)\s*([123])", text, re.IGNORECASE)
+    if led_id_match:
+        led_id = int(led_id_match.group(1))
+        command = "on"
+        if "off" in lowered or "消" in text: command = "off"
+        if "blink" in lowered or "点滅" in text: command = "blink"
+        _add("control_specific_led", {"led_id": led_id, "command": command})
+    else:
+        led_keywords = ["led", "blink", "blinking", "light show"]
+        if any(keyword in lowered for keyword in led_keywords) or "ライト" in text or "点滅" in text:
+            _add("operate_led_pattern", {})
 
     buzzer_keywords = ["buzzer", "beep", "tone", "melody"]
     if (
@@ -347,15 +360,15 @@ def _heuristic_multi_plan(instruction: str) -> List[Dict[str, Any]]:
         or "ザク" in text
         or "液晶" in text
     ):
-        _add("run_oled_robot_demo", {})
+        _add("display_robot_animation", {})
 
     if "servo" in lowered or "サーボ" in text:
         dual_servos = _is_dual_servo_request(text, lowered)
         if dual_servos:
-            _add("run_dual_servo_demo", {})
+            _add("control_dual_servos", {})
         else:
             servo_params = _build_servo_parameters_from_instruction(text, lowered)
-            _add("run_servo_demo", servo_params)
+            _add("control_single_servo", servo_params)
 
     return plans
 
