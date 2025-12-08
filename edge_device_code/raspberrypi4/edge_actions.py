@@ -1689,6 +1689,9 @@ def _run_led_demo(parameters: Any) -> Dict[str, Any]:
         _clear()
         for led in leds:
             led.close()
+        # Ensure LEDs are forced off in digital mode to prevent ghosting on GPIO 2/3
+        for key in _LED_PINS:
+            _get_led_singleton(key).off()
         context.log("LED action finished", cycles_executed=executed_cycles, timed_out=context.timed_out)
 
     return {
@@ -1895,31 +1898,23 @@ def _control_specific_led(parameters: Any) -> Dict[str, Any]:
                 context.sleep(duration)
                 led.off()
                 context.log("LED turned OFF after duration", led_id=led_id, duration=duration)
-                _close_led_singleton(led_key)
             else:
                 context.log("LED left ON until further instruction", led_id=led_id, duration_parameter=duration if duration_overridden else None)
         elif command == "off":
             led.off()
             context.log("LED turned OFF", led_id=led_id, pin=pin)
-            _close_led_singleton(led_key)
         elif command == "blink":
             led.blink(on_time=blink_on_time, off_time=blink_off_time, n=None, background=True)
             hold_seconds = duration if duration is not None else 5.0
             if hold_seconds > 0:
                 context.sleep(hold_seconds)
                 led.off()
-                _close_led_singleton(led_key)
             else:
                 context.log("LED blinking until stopped", led_id=led_id, blink_rate=1.0 / blink_on_time if blink_on_time else None)
         else:
             context.log(f"Unknown command '{command}'")
-            _close_led_singleton(led_key)
     except Exception as exc:
         context.log(f"LED control error: {exc}", led_id=led_id)
-        try:
-            _close_led_singleton(led_key)
-        except Exception:
-            pass
         raise
 
     return {
@@ -1977,7 +1972,6 @@ def _control_all_leds(parameters: Any) -> Dict[str, Any]:
                 context.sleep(duration)
                 for led in leds:
                     led.off()
-                _close_all_led_singletons()
                 context.log("All LEDs turned OFF after duration", duration=duration)
             else:
                 context.log(
@@ -1988,7 +1982,6 @@ def _control_all_leds(parameters: Any) -> Dict[str, Any]:
             for led in leds:
                 led.off()
             context.log("All LEDs turned OFF", pins=_LED_PINS)
-            _close_all_led_singletons()
         elif command == "blink":
             hold_seconds = duration if duration is not None else 5.0
             for led in leds:
@@ -1997,9 +1990,8 @@ def _control_all_leds(parameters: Any) -> Dict[str, Any]:
                 context.sleep(hold_seconds)
             for led in leds:
                 led.off()
-            if hold_seconds > 0:
-                _close_all_led_singletons()
-            else:
+            
+            if hold_seconds <= 0:
                 context.log(
                     "LEDs blinking until stopped",
                     blink_rate=1.0 / blink_on_time if blink_on_time else None,
@@ -2007,10 +1999,8 @@ def _control_all_leds(parameters: Any) -> Dict[str, Any]:
                 )
         else:
             context.log(f"Unknown command '{command}' for all LEDs.")
-            _close_all_led_singletons()
     except Exception as exc:
         context.log(f"All LED control error: {exc}")
-        _close_all_led_singletons()
         raise
 
     return {
