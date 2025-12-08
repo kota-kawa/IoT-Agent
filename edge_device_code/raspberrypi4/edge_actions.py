@@ -309,7 +309,7 @@ SUPPORTED_ACTIONS: Dict[str, Dict[str, Any]] = {
         ],
     },
     "operate_led_pattern": {
-        "description": "Run a predefined light pattern on the three LEDs connected to GPIO pins.",
+        "description": "Run a predefined light pattern on the three LEDs (Red=LED1, Yellow=LED2, Green=LED3).",
         "params": [
             {
                 "name": "pattern",
@@ -332,13 +332,13 @@ SUPPORTED_ACTIONS: Dict[str, Dict[str, Any]] = {
         ],
     },
     "control_specific_led": {
-        "description": "Control a specific LED (1, 2, or 3) individually.",
+        "description": "Control a specific LED individually. Color mapping: LED1=Red, LED2=Yellow/Orange, LED3=Green.",
         "params": [
             {
                 "name": "led_id",
                 "type": "integer",
                 "required": True,
-                "description": "ID of the LED to control (1, 2, or 3).",
+                "description": "ID of the LED to control (1=Red, 2=Yellow/Orange, 3=Green).",
             },
             {
                 "name": "command",
@@ -361,7 +361,7 @@ SUPPORTED_ACTIONS: Dict[str, Dict[str, Any]] = {
         ],
     },
     "control_all_leds": {
-        "description": "Control all LEDs together (on/off/blink).",
+        "description": "Control all three LEDs (Red, Yellow, Green) together.",
         "params": [
             {
                 "name": "command",
@@ -478,40 +478,40 @@ SUPPORTED_ACTIONS: Dict[str, Dict[str, Any]] = {
         ],
     },
     "led1_on": {
-        "description": "Turn LED1 on for a duration (default 5s).",
+        "description": "Turn Red LED (LED1) on for a duration (default 5s).",
         "params": [
             {"name": "duration", "type": "number", "required": False, "description": "Seconds to keep LED1 on."},
             {"name": "timeout", "type": "number", "required": False},
         ],
     },
     "led1_off": {
-        "description": "Turn LED1 off immediately.",
+        "description": "Turn Red LED (LED1) off immediately.",
         "params": [
             {"name": "timeout", "type": "number", "required": False},
         ],
     },
     "led2_on": {
-        "description": "Turn LED2 on for a duration (default 5s).",
+        "description": "Turn Yellow/Orange LED (LED2) on for a duration (default 5s).",
         "params": [
             {"name": "duration", "type": "number", "required": False, "description": "Seconds to keep LED2 on."},
             {"name": "timeout", "type": "number", "required": False},
         ],
     },
     "led2_off": {
-        "description": "Turn LED2 off immediately.",
+        "description": "Turn Yellow/Orange LED (LED2) off immediately.",
         "params": [
             {"name": "timeout", "type": "number", "required": False},
         ],
     },
     "led3_on": {
-        "description": "Turn LED3 on for a duration (default 5s).",
+        "description": "Turn Green LED (LED3) on for a duration (default 5s).",
         "params": [
             {"name": "duration", "type": "number", "required": False, "description": "Seconds to keep LED3 on."},
             {"name": "timeout", "type": "number", "required": False},
         ],
     },
     "led3_off": {
-        "description": "Turn LED3 off immediately.",
+        "description": "Turn Green LED (LED3) off immediately.",
         "params": [
             {"name": "timeout", "type": "number", "required": False},
         ],
