@@ -454,6 +454,123 @@ SUPPORTED_ACTIONS: Dict[str, Dict[str, Any]] = {
             },
         ],
     },
+    "led1_on": {
+        "description": "Turn LED1 on for a duration (default 5s).",
+        "params": [
+            {"name": "duration", "type": "number", "required": False, "description": "Seconds to keep LED1 on."},
+            {"name": "timeout", "type": "number", "required": False},
+        ],
+    },
+    "led1_off": {
+        "description": "Turn LED1 off immediately.",
+        "params": [
+            {"name": "timeout", "type": "number", "required": False},
+        ],
+    },
+    "led2_on": {
+        "description": "Turn LED2 on for a duration (default 5s).",
+        "params": [
+            {"name": "duration", "type": "number", "required": False, "description": "Seconds to keep LED2 on."},
+            {"name": "timeout", "type": "number", "required": False},
+        ],
+    },
+    "led2_off": {
+        "description": "Turn LED2 off immediately.",
+        "params": [
+            {"name": "timeout", "type": "number", "required": False},
+        ],
+    },
+    "led3_on": {
+        "description": "Turn LED3 on for a duration (default 5s).",
+        "params": [
+            {"name": "duration", "type": "number", "required": False, "description": "Seconds to keep LED3 on."},
+            {"name": "timeout", "type": "number", "required": False},
+        ],
+    },
+    "led3_off": {
+        "description": "Turn LED3 off immediately.",
+        "params": [
+            {"name": "timeout", "type": "number", "required": False},
+        ],
+    },
+    "servo1_control": {
+        "description": "Control servo channel 1 with the same options as control_specific_servo.",
+        "params": [
+            {"name": "mode", "type": "string", "required": False, "description": "set/center/off/sweep/info"},
+            {"name": "angle", "type": "number", "required": False},
+            {"name": "start", "type": "number", "required": False},
+            {"name": "end", "type": "number", "required": False},
+            {"name": "step", "type": "number", "required": False},
+            {"name": "delay", "type": "number", "required": False},
+            {"name": "cycles", "type": "integer", "required": False},
+            {"name": "pigpio", "type": "boolean", "required": False},
+            {"name": "hold", "type": "number", "required": False},
+            {"name": "timeout", "type": "number", "required": False},
+        ],
+    },
+    "servo2_control": {
+        "description": "Control servo channel 2 with the same options as control_specific_servo.",
+        "params": [
+            {"name": "mode", "type": "string", "required": False, "description": "set/center/off/sweep/info"},
+            {"name": "angle", "type": "number", "required": False},
+            {"name": "start", "type": "number", "required": False},
+            {"name": "end", "type": "number", "required": False},
+            {"name": "step", "type": "number", "required": False},
+            {"name": "delay", "type": "number", "required": False},
+            {"name": "cycles", "type": "integer", "required": False},
+            {"name": "pigpio", "type": "boolean", "required": False},
+            {"name": "hold", "type": "number", "required": False},
+            {"name": "timeout", "type": "number", "required": False},
+        ],
+    },
+    "servo3_control": {
+        "description": "Control servo channel 3 with the same options as control_specific_servo.",
+        "params": [
+            {"name": "mode", "type": "string", "required": False, "description": "set/center/off/sweep/info"},
+            {"name": "angle", "type": "number", "required": False},
+            {"name": "start", "type": "number", "required": False},
+            {"name": "end", "type": "number", "required": False},
+            {"name": "step", "type": "number", "required": False},
+            {"name": "delay", "type": "number", "required": False},
+            {"name": "cycles", "type": "integer", "required": False},
+            {"name": "pigpio", "type": "boolean", "required": False},
+            {"name": "hold", "type": "number", "required": False},
+            {"name": "timeout", "type": "number", "required": False},
+        ],
+    },
+    "servo4_control": {
+        "description": "Control servo channel 4 with the same options as control_specific_servo.",
+        "params": [
+            {"name": "mode", "type": "string", "required": False, "description": "set/center/off/sweep/info"},
+            {"name": "angle", "type": "number", "required": False},
+            {"name": "start", "type": "number", "required": False},
+            {"name": "end", "type": "number", "required": False},
+            {"name": "step", "type": "number", "required": False},
+            {"name": "delay", "type": "number", "required": False},
+            {"name": "cycles", "type": "integer", "required": False},
+            {"name": "pigpio", "type": "boolean", "required": False},
+            {"name": "hold", "type": "number", "required": False},
+            {"name": "timeout", "type": "number", "required": False},
+        ],
+    },
+    "dc_motor1_control": {
+        "description": "Control DC motor 1 with forward/backward/stop commands.",
+        "params": [
+            {"name": "command", "type": "string", "required": False, "description": "forward/backward/stop"},
+            {"name": "speed", "type": "number", "required": False},
+            {"name": "duration", "type": "number", "required": False},
+            {"name": "timeout", "type": "number", "required": False},
+        ],
+    },
+    "dc_motor2_control": {
+        "description": "Control DC motor 2 with forward/backward/stop commands.",
+        "params": [
+            {"name": "command", "type": "string", "required": False, "description": "forward/backward/stop"},
+            {"name": "speed", "type": "number", "required": False},
+            {"name": "duration", "type": "number", "required": False},
+            {"name": "timeout", "type": "number", "required": False},
+        ],
+    },
     "no_action": {
         "description": "Used when the request should not trigger a device operation.",
         "params": [
@@ -534,6 +651,15 @@ _OLED_TEXT_PADDING = 18
 _OLED_BACKLIGHT_STEPS = (20, 40, 60, 80, 100)
 _OLED_TEXT_DURATION_LIMIT = 60.0
 _OLED_TEXT_MIN_DURATION = 1.5
+_OLED_MOTION_ALIASES: Dict[str, List[str]] = {
+    "default": ["default", "normal", "通常"],
+    "alert": ["alert", "警戒", "warning", "tense", "alertmode", "きびきび", "キビキビ"],
+    "calm": ["calm", "relax", "ゆっくり", "落ち着"],
+    "sleeping": ["sleep", "sleeping", "sleepy", "zzz", "おやすみ", "スリープ", "眠", "まぶた", "ウトウト"],
+    "hyper": ["hyper", "高速", "fast", "ハイテンション", "テンション"],
+    "scout": ["scout", "巡回", "きょろきょろ", "見回", "watch"],
+    "scanning": ["scan", "scanning", "スキャン", "探索", "search", "サーチ"],
+}
 
 _oled_backlight_singleton: Optional[Any] = None
 _oled_backlight_lock = threading.Lock()
@@ -564,6 +690,39 @@ def _parse_timeout_parameter(parameters: Any, default: float) -> float:
         raise ValueError("timeout must be greater than zero.")
 
     return timeout_value
+
+
+def _normalize_motion_mode(value: Any) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+
+    raw = value.strip()
+    if not raw:
+        return None
+
+    lowered = raw.lower()
+    collapsed = re.sub(r"[\s_]+", "", lowered)
+    ascii_only = re.sub(r"[^a-z]", "", collapsed)
+
+    for candidate in (lowered, collapsed, ascii_only):
+        if candidate in _OLED_MOTION_PRESETS:
+            return candidate
+
+    for mode_key, keywords in _OLED_MOTION_ALIASES.items():
+        if any(keyword in lowered for keyword in keywords):
+            return mode_key
+        if any(keyword in collapsed for keyword in keywords):
+            return mode_key
+        if any(keyword in ascii_only for keyword in keywords):
+            return mode_key
+
+    return None
+
+
+def _infer_motion_from_text(text: Optional[str]) -> Optional[str]:
+    if not isinstance(text, str):
+        return None
+    return _normalize_motion_mode(text)
 
 
 def _oled_ensure_spidev_exists() -> None:
@@ -876,8 +1035,8 @@ class _MonoEyeDisplayManager:
         }
 
     def set_motion_mode(self, mode: str, duration_seconds: float) -> Dict[str, Any]:
-        mode_key = (mode or "").strip().lower() or "default"
-        if mode_key not in _OLED_MOTION_PRESETS:
+        mode_key = _normalize_motion_mode(mode)
+        if mode_key is None or mode_key not in _OLED_MOTION_PRESETS:
             return {
                 "ok": False,
                 "error": f"Unsupported mono-eye mode '{mode_key}'. Available: {', '.join(sorted(_OLED_MOTION_PRESETS))}",
@@ -1602,6 +1761,13 @@ def _run_motor_test(parameters: Any) -> Dict[str, Any]:
         in2_1.close()
         in2_2.close()
 
+def _run_named_led(led_id: int, command: str, parameters: Any) -> Dict[str, Any]:
+    merged: Dict[str, Any] = {}
+    if isinstance(parameters, dict):
+        merged = dict(parameters)
+    merged.update({"led_id": led_id, "command": command})
+    return _control_specific_led(merged)
+
 
 def _control_specific_led(parameters: Any) -> Dict[str, Any]:
     timeout = _parse_timeout_parameter(parameters, _DEFAULT_LED_TIMEOUT)
@@ -1772,11 +1938,20 @@ def _control_specific_dc_motor(parameters: Any) -> Dict[str, Any]:
     }
 
 
+def _run_named_dc_motor(motor_id: int, parameters: Any) -> Dict[str, Any]:
+    merged: Dict[str, Any] = {}
+    if isinstance(parameters, dict):
+        merged = dict(parameters)
+    merged["motor_id"] = motor_id
+    return _control_specific_dc_motor(merged)
+
+
 def _run_oled_robot_demo(parameters: Any) -> Dict[str, Any]:
     timeout = _parse_timeout_parameter(parameters, _DEFAULT_OLED_DEMO_TIMEOUT)
     context = _ActionExecutionContext(timeout)
     text_override: Optional[str] = None
     motion_mode: Optional[str] = None
+    requested_motion: Optional[str] = None
     requested_duration: Optional[float] = None
     burst_default = 5.0
 
@@ -1788,7 +1963,7 @@ def _run_oled_robot_demo(parameters: Any) -> Dict[str, Any]:
             text_override = " ".join(candidate_text.split())
         candidate_motion = parameters.get("motion") or parameters.get("mode")
         if isinstance(candidate_motion, str) and candidate_motion.strip():
-            motion_mode = candidate_motion.strip()
+            requested_motion = candidate_motion.strip()
         candidate_duration = parameters.get("duration") or parameters.get("seconds") or parameters.get("display_seconds")
         if isinstance(candidate_duration, (int, float)) and float(candidate_duration) > 0:
             requested_duration = float(candidate_duration)
@@ -1797,6 +1972,15 @@ def _run_oled_robot_demo(parameters: Any) -> Dict[str, Any]:
                 requested_duration = float(candidate_duration.strip())
             except ValueError:
                 context.log("Ignoring non-numeric duration parameter", raw_value=candidate_duration)
+
+    motion_mode = _normalize_motion_mode(requested_motion) or None
+    if not motion_mode and requested_motion:
+        context.log("Unsupported mono-eye motion requested; using default", requested=requested_motion)
+    if not motion_mode:
+        inferred_motion = _infer_motion_from_text(text_override or "")
+        if inferred_motion:
+            motion_mode = inferred_motion
+            context.log("Inferred mono-eye motion from text payload", motion=motion_mode)
 
     manager = _get_or_start_oled_manager()
     if manager and manager.is_running:
@@ -1863,7 +2047,10 @@ def _run_oled_robot_demo(parameters: Any) -> Dict[str, Any]:
     motion_key = (motion_mode or "default").lower()
     motion_profile = _OLED_MOTION_PRESETS.get(motion_key, _OLED_MOTION_PRESETS["default"])
     if motion_key not in _OLED_MOTION_PRESETS:
-        context.log("Unsupported mono-eye motion requested; using default", requested=motion_mode)
+        context.log(
+            "Unsupported mono-eye motion requested; using default",
+            requested=motion_mode or requested_motion or "default",
+        )
         motion_key = "default"
 
     _oled_ensure_spidev_exists()
@@ -2413,6 +2600,14 @@ def _control_specific_servo(parameters: Any) -> Dict[str, Any]:
     return result
 
 
+def _run_named_servo(servo_id: int, parameters: Any) -> Dict[str, Any]:
+    merged: Dict[str, Any] = {}
+    if isinstance(parameters, dict):
+        merged = dict(parameters)
+    merged["servo_id"] = servo_id
+    return _control_specific_servo(merged)
+
+
 _DUAL_SERVO_PINS = {"servo1": 12, "servo2": 19}
 _DUAL_SERVO_MIN_ANGLE = 0.0
 _DUAL_SERVO_MAX_ANGLE = 180.0
@@ -2752,10 +2947,20 @@ def _execute_action(action: str, parameters: Dict[str, Any]) -> Tuple[bool, Any,
             return True, _run_led_demo(parameters or {}), None
         if action == "control_specific_led":
             return True, _control_specific_led(parameters or {}), None
+        if action in ("led1_on", "led1_off", "led2_on", "led2_off", "led3_on", "led3_off"):
+            command = "on" if action.endswith("_on") else "off"
+            led_id = int(action[3])  # led1_on -> 1
+            return True, _run_named_led(led_id, command, parameters or {}), None
         if action == "control_specific_dc_motor":
             return True, _control_specific_dc_motor(parameters or {}), None
+        if action in ("dc_motor1_control", "dc_motor2_control"):
+            motor_id = 1 if "motor1" in action else 2
+            return True, _run_named_dc_motor(motor_id, parameters or {}), None
         if action == "control_dual_servos":
             return True, _run_dual_servo_demo(parameters or {}), None
+        if action in ("servo1_control", "servo2_control", "servo3_control", "servo4_control"):
+            servo_id = int(action.replace("servo", "").replace("_control", ""))
+            return True, _run_named_servo(servo_id, parameters or {}), None
         if action == "no_action":
             message = parameters.get("message") if isinstance(parameters, dict) else None
             return True, {"message": message or "No action executed."}, None
