@@ -30,7 +30,7 @@ OpenAI API を利用したチャット型オーケストレーションでデバ
    - `GROQ_API_KEY` — Groq (Llama) モデルを選択する場合に使用。
    - `FLASK_SECRET_KEY` — Flask セッション暗号化キー (未設定時は "change-this-secret")。
    - `MAX_COMPLETED_JOBS` — 完了ジョブの保持数 (デフォルト 200)。
-   - `DEVICE_RESULT_TIMEOUT` — エッジ結果待機の秒数 (デフォルト 60 秒)。
+   - `DEVICE_RESULT_TIMEOUT` — エッジ結果待機の秒数 (デフォルト 180 秒)。
    - `APP_PASSWORD` はコード上で `kkawagoe` に固定されています。運用時は `app.py` の定数を変更してください。
 
 ## 起動方法
