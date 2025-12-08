@@ -58,7 +58,7 @@ async def list_tools() -> list[Tool]:
     # Generic control tool with dynamic device_id enum
     tools.append(Tool(
         name="control_device",
-        description="IoTデバイスを制御します。電源のオン/オフ、色の設定、写真撮影などのアクションを実行するために使用します。",
+        description="IoTデバイスを制御します。単一のコマンド、または複数のコマンドを（順次または同時）実行できます。",
         inputSchema={
             "type": "object",
             "properties": {
@@ -67,10 +67,28 @@ async def list_tools() -> list[Tool]:
                     "description": "制御対象のデバイスID",
                     "enum": device_ids if device_ids else ["no_devices_available"]
                 },
-                "command": {"type": "string", "description": "機能/コマンド名（例: 'turn_on', 'set_color', 'set_brightness', 'capture_camera_photo'）"},
-                "args": {"type": "object", "description": "コマンドの引数（例: {'duration': 5}）"}
+                "command": {"type": "string", "description": "単一実行時のコマンド名（commandsを指定しない場合は必須）"},
+                "args": {"type": "object", "description": "単一実行時の引数"},
+                "commands": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "args": {"type": "object"}
+                        },
+                        "required": ["name"]
+                    },
+                    "description": "複数コマンドのリスト（例: [{'name': 'led0_on', 'args': {}}, {'name': 'buzzer_tone', 'args': {'freq_hz': 1000}}]）"
+                },
+                "mode": {
+                    "type": "string",
+                    "enum": ["sequential", "parallel"],
+                    "default": "sequential",
+                    "description": "複数コマンドの実行モード。sequential: 順番に実行, parallel: 同時実行（可能な場合、特にブザーとモーターの同時実行に使用）"
+                }
             },
-            "required": ["device_id", "command"]
+            "required": ["device_id"]
         }
     ))
     
@@ -95,20 +113,31 @@ async def call_tool(name: str, arguments: Any) -> list[types.TextContent | types
         device_id = arguments.get("device_id")
         command = arguments.get("command")
         args = arguments.get("args", {})
+        commands = arguments.get("commands")
+        mode = arguments.get("mode", "sequential")
         
-        if not device_id or not command:
-             return [TextContent(type="text", text="エラー: device_id と command は必須です")]
+        if not device_id:
+             return [TextContent(type="text", text="エラー: device_id は必須です")]
         
         device = _DEVICES.get(device_id)
         if not device:
              return [TextContent(type="text", text=f"エラー: デバイス '{device_id}' が見つかりません")]
              
-        # Use internal validation helper? Or just _device_supports_capability
-        if not _device_supports_capability(device, command):
-             return [TextContent(type="text", text=f"エラー: デバイス {device_id} は '{command}' をサポートしていません")]
-             
+        job_payload = None
+        if commands and isinstance(commands, list) and len(commands) > 0:
+            job_payload = {
+                "name": "run_sequence",
+                "args": {"commands": commands, "mode": mode}
+            }
+        elif command:
+            if not _device_supports_capability(device, command):
+                 return [TextContent(type="text", text=f"エラー: デバイス {device_id} は '{command}' をサポートしていません")]
+            job_payload = {"name": command, "args": args}
+        else:
+             return [TextContent(type="text", text="エラー: command または commands の指定が必要です")]
+
         # Enqueue job
-        job_id = _enqueue_device_command(device_id, {"name": command, "args": args}, source="mcp")
+        job_id = _enqueue_device_command(device_id, job_payload, source="mcp")
         if not job_id:
              return [TextContent(type="text", text="エラー: コマンドをキューに追加できませんでした（デバイスが切断されている可能性があります）")]
 
