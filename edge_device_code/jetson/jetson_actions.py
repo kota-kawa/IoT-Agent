@@ -101,10 +101,10 @@ def _run_motor_test(parameters: Dict[str, Any]) -> Dict[str, Any]:
 
     try:
         context.log("Motor forward start")
-        GPIO.output(IN1, GPIO.HIGH)
-        GPIO.output(IN2, GPIO.LOW)
-        GPIO.output(IN3, GPIO.HIGH)
-        GPIO.output(IN4, GPIO.LOW)
+        GPIO.output(IN1, GPIO.LOW)
+        GPIO.output(IN2, GPIO.HIGH)
+        GPIO.output(IN3, GPIO.LOW)
+        GPIO.output(IN4, GPIO.HIGH)
         time.sleep(forward_seconds)
 
         context.log("Brake hold")
@@ -115,10 +115,10 @@ def _run_motor_test(parameters: Dict[str, Any]) -> Dict[str, Any]:
         time.sleep(brake_seconds)
 
         context.log("Motor reverse start")
-        GPIO.output(IN1, GPIO.LOW)
-        GPIO.output(IN2, GPIO.HIGH)
-        GPIO.output(IN3, GPIO.LOW)
-        GPIO.output(IN4, GPIO.HIGH)
+        GPIO.output(IN1, GPIO.HIGH)
+        GPIO.output(IN2, GPIO.LOW)
+        GPIO.output(IN3, GPIO.HIGH)
+        GPIO.output(IN4, GPIO.LOW)
         time.sleep(reverse_seconds)
 
         context.log("Coast stop")
@@ -153,28 +153,28 @@ def _control_motor(parameters: Dict[str, Any]) -> Dict[str, Any]:
         
         if direction == "forward":
             # Left Fwd, Right Fwd
-            GPIO.output(IN1, GPIO.HIGH)
-            GPIO.output(IN2, GPIO.LOW)
-            GPIO.output(IN3, GPIO.HIGH)
-            GPIO.output(IN4, GPIO.LOW)
+            GPIO.output(IN1, GPIO.LOW)
+            GPIO.output(IN2, GPIO.HIGH)
+            GPIO.output(IN3, GPIO.LOW)
+            GPIO.output(IN4, GPIO.HIGH)
         elif direction == "backward":
             # Left Rev, Right Rev
-            GPIO.output(IN1, GPIO.LOW)
-            GPIO.output(IN2, GPIO.HIGH)
-            GPIO.output(IN3, GPIO.LOW)
-            GPIO.output(IN4, GPIO.HIGH)
-        elif direction == "left":
-            # Spin Left: Left Rev, Right Fwd
-            GPIO.output(IN1, GPIO.LOW)
-            GPIO.output(IN2, GPIO.HIGH)
+            GPIO.output(IN1, GPIO.HIGH)
+            GPIO.output(IN2, GPIO.LOW)
             GPIO.output(IN3, GPIO.HIGH)
             GPIO.output(IN4, GPIO.LOW)
-        elif direction == "right":
-            # Spin Right: Left Fwd, Right Rev
+        elif direction == "left":
+            # Spin Left: Left Rev, Right Fwd
             GPIO.output(IN1, GPIO.HIGH)
             GPIO.output(IN2, GPIO.LOW)
             GPIO.output(IN3, GPIO.LOW)
             GPIO.output(IN4, GPIO.HIGH)
+        elif direction == "right":
+            # Spin Right: Left Fwd, Right Rev
+            GPIO.output(IN1, GPIO.LOW)
+            GPIO.output(IN2, GPIO.HIGH)
+            GPIO.output(IN3, GPIO.HIGH)
+            GPIO.output(IN4, GPIO.LOW)
         else:
             context.log("Unknown direction, defaulting to stop", direction=direction)
 
