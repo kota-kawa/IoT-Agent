@@ -18,8 +18,8 @@ LLM_SYSTEM_PROMPT = (
     "Available actions: " + ", ".join(sorted(actions.SUPPORTED_ACTIONS.keys())) + "\n\n"
     "Action Parameters:\n"
     "- operate_dc_motors: command ('forward'/'backward'/'left'/'right'/'stop'/'demo'), speed (0.0-1.0), duration (seconds), timeout (seconds)\n"
-    "- control_single_servo: mode ('set'/'center'/'off'/'sweep'/'info'), angle (0-180 for set), channel (1-4), start/end/step/delay/cycles (for sweep)\n"
-    "- control_specific_servo: servo_id (1-4), mode ('set'/'center'/'off'/'sweep'/'info'), angle/start/end/step/delay/cycles, pigpio, hold, timeout\n"
+    "- control_single_servo: mode ('set'/'center'/'off'/'sweep'/'info'), angle (0-180 for set), channel (1-2), start/end/step/delay/cycles (for sweep)\n"
+    "- control_specific_servo: servo_id (1-2), mode ('set'/'center'/'off'/'sweep'/'info'), angle/start/end/step/delay/cycles, pigpio, hold, timeout\n"
     "- play_buzzer: melody ('success'/'error'/'alert'/'startup'/'mario') or note/duration for single tone\n"
     "- display_robot_animation: text (string to display), motion ('default'/'calm'/'alert'/'scout'/'sleeping'/'hyper'/'scanning'), duration (seconds)\n"
     "- operate_led_pattern: pattern ('chase'/'blink_all'/'all_on'/'random'/'breathing'/'police'/'demo'), cycles (integer), timeout (seconds)\n"
@@ -56,7 +56,7 @@ LLM_SYSTEM_PROMPT = (
     '{"action": "no_action", "parameters": {}, "message": "Request unrelated to hardware control."}\n\n'
     "Rules:\n"
     "- Always choose the most appropriate action for the instruction\n"
-    "- When a request names a specific servo channel (CH1-4 or 'servo 1'), use 'control_specific_servo'; if it mentions two servos, use 'control_dual_servos'\n"
+    "- When a request names a specific servo channel (CH1-2 or 'servo 1'), use 'control_specific_servo'; if it mentions two servos, use 'control_dual_servos'\n"
     "- Include all relevant parameters from the instruction\n"
     "- If ambiguous but hardware-related, make a reasonable assumption and execute\n"
     "- Use 'no_action' ONLY for requests completely unrelated to hardware"
@@ -172,7 +172,7 @@ def _extract_servo_channel(instruction: str) -> Optional[int]:
             channel = int(match.group(1))
         except ValueError:
             continue
-        if 1 <= channel <= 4:
+        if 1 <= channel <= 2:
             return channel
     return None
 
@@ -194,7 +194,7 @@ def _build_servo_parameters_from_instruction(
                 candidate = int(match.group(1))
             except ValueError:
                 continue
-            if 1 <= candidate <= 4:
+            if 1 <= candidate <= 2:
                 channel = candidate
                 break
 

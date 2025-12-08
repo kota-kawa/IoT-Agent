@@ -133,7 +133,7 @@ SUPPORTED_ACTIONS: Dict[str, Dict[str, Any]] = {
                 "name": "motion",
                 "type": "string",
                 "required": False,
-                "description": "Mono-eye motion preset: 'default', 'calm', 'alert', 'scout', 'sleeping', 'hyper', 'scanning'.",
+                "description": "Mono-eye motion preset: 'default' (only option available).",
             }
         ],
     },
@@ -192,7 +192,7 @@ SUPPORTED_ACTIONS: Dict[str, Dict[str, Any]] = {
                 "name": "channel",
                 "type": "integer",
                 "required": False,
-                "description": "Servo channel (1-4).",
+                "description": "Servo channel (1-2).",
             },
             {
                 "name": "pigpio",
@@ -215,13 +215,13 @@ SUPPORTED_ACTIONS: Dict[str, Dict[str, Any]] = {
         ],
     },
     "control_specific_servo": {
-        "description": "Control an individual servo channel (1-4) with the same options as control_single_servo.",
+        "description": "Control an individual servo channel (1-2) with the same options as control_single_servo.",
         "params": [
             {
                 "name": "servo_id",
                 "type": "integer",
                 "required": True,
-                "description": "Servo channel number (1-4).",
+                "description": "Servo channel number (1-2).",
             },
             {
                 "name": "mode",
@@ -523,36 +523,6 @@ SUPPORTED_ACTIONS: Dict[str, Dict[str, Any]] = {
             {"name": "timeout", "type": "number", "required": False},
         ],
     },
-    "servo3_control": {
-        "description": "Control servo channel 3 with the same options as control_specific_servo.",
-        "params": [
-            {"name": "mode", "type": "string", "required": False, "description": "set/center/off/sweep/info"},
-            {"name": "angle", "type": "number", "required": False},
-            {"name": "start", "type": "number", "required": False},
-            {"name": "end", "type": "number", "required": False},
-            {"name": "step", "type": "number", "required": False},
-            {"name": "delay", "type": "number", "required": False},
-            {"name": "cycles", "type": "integer", "required": False},
-            {"name": "pigpio", "type": "boolean", "required": False},
-            {"name": "hold", "type": "number", "required": False},
-            {"name": "timeout", "type": "number", "required": False},
-        ],
-    },
-    "servo4_control": {
-        "description": "Control servo channel 4 with the same options as control_specific_servo.",
-        "params": [
-            {"name": "mode", "type": "string", "required": False, "description": "set/center/off/sweep/info"},
-            {"name": "angle", "type": "number", "required": False},
-            {"name": "start", "type": "number", "required": False},
-            {"name": "end", "type": "number", "required": False},
-            {"name": "step", "type": "number", "required": False},
-            {"name": "delay", "type": "number", "required": False},
-            {"name": "cycles", "type": "integer", "required": False},
-            {"name": "pigpio", "type": "boolean", "required": False},
-            {"name": "hold", "type": "number", "required": False},
-            {"name": "timeout", "type": "number", "required": False},
-        ],
-    },
     "dc_motor1_control": {
         "description": "Control DC motor 1 with forward/backward/stop commands.",
         "params": [
@@ -653,12 +623,6 @@ _OLED_TEXT_DURATION_LIMIT = 60.0
 _OLED_TEXT_MIN_DURATION = 1.5
 _OLED_MOTION_ALIASES: Dict[str, List[str]] = {
     "default": ["default", "normal", "通常"],
-    "alert": ["alert", "警戒", "warning", "tense", "alertmode", "きびきび", "キビキビ"],
-    "calm": ["calm", "relax", "ゆっくり", "落ち着"],
-    "sleeping": ["sleep", "sleeping", "sleepy", "zzz", "おやすみ", "スリープ", "眠", "まぶた", "ウトウト"],
-    "hyper": ["hyper", "高速", "fast", "ハイテンション", "テンション"],
-    "scout": ["scout", "巡回", "きょろきょろ", "見回", "watch"],
-    "scanning": ["scan", "scanning", "スキャン", "探索", "search", "サーチ"],
 }
 
 _oled_backlight_singleton: Optional[Any] = None
@@ -1677,11 +1641,11 @@ def _run_motor_test(parameters: Any) -> Dict[str, Any]:
         duty = abs(val)
         en.value = duty
         if val > 0:
-            in1.on()
-            in2.off()
-        elif val < 0:
             in1.off()
             in2.on()
+        elif val < 0:
+            in1.on()
+            in2.off()
         else:
             # Stop/Coast
             en.off()
@@ -1907,13 +1871,13 @@ def _control_specific_dc_motor(parameters: Any) -> Dict[str, Any]:
     try:
         if command == "forward":
             en.value = speed
-            in1.on()
-            in2.off()
+            in1.off()
+            in2.on()
             context.sleep(duration)
         elif command == "backward":
             en.value = speed
-            in1.off()
-            in2.on()
+            in1.on()
+            in2.off()
             context.sleep(duration)
         elif command == "stop":
             en.off()
@@ -2143,54 +2107,6 @@ _OLED_MOTION_PRESETS: Dict[str, Dict[str, float]] = {
         "bob_amplitude": 3.0,
         "eye_scale": 3.0,
     },
-    "calm": {
-        "speed": 0.55,
-        "sweep": 0.26,
-        "beam_speed": 36.0,
-        "bob_speed": 0.45,
-        "bob_amplitude": 2.0,
-        "eye_scale": 3.0,
-    },
-    "alert": {
-        "speed": 1.8,
-        "sweep": 0.62,
-        "beam_speed": 120.0,
-        "bob_speed": 1.2,
-        "bob_amplitude": 5.0,
-        "eye_scale": 3.2,
-    },
-    "scout": {
-        "speed": 1.1,
-        "sweep": 0.78,
-        "beam_speed": 80.0,
-        "bob_speed": 0.9,
-        "bob_amplitude": 4.0,
-        "eye_scale": 3.0,
-    },
-    "sleeping": {
-        "speed": 0.15,
-        "sweep": 0.15,
-        "beam_speed": 10.0,
-        "bob_speed": 0.2,
-        "bob_amplitude": 1.0,
-        "eye_scale": 2.2,
-    },
-    "hyper": {
-        "speed": 3.0,
-        "sweep": 0.85,
-        "beam_speed": 200.0,
-        "bob_speed": 4.0,
-        "bob_amplitude": 8.0,
-        "eye_scale": 3.5,
-    },
-    "scanning": {
-        "speed": 0.6,
-        "sweep": 0.92,
-        "beam_speed": 40.0,
-        "bob_speed": 0.1,
-        "bob_amplitude": 0.0,
-        "eye_scale": 2.8,
-    },
 }
 
 
@@ -2244,8 +2160,6 @@ _SERVO_USED_BCM: Set[int] = {17, 22, 23, 24, 25, 27, 20, 21, 18, 26, 6, 13}
 _SERVO_DEFAULT_CHANNEL_PINS: Dict[int, int] = {
     1: 12,
     2: 19,
-    3: 5,
-    4: 4,
 }
 
 
@@ -2307,7 +2221,7 @@ def _servo_log_wiring(context: _ActionExecutionContext) -> None:
     context.log(" ⚫ GND（黒/茶） : Raspberry Pi の GND（物理 6/9/14/20/25/30/34/39）")
     context.log(" 🔴 +5V（赤）   : 外部5V推奨（Piの 2/4 でも小型1個なら動作例あり）")
     context.log(
-        " 🟠 信号（橙/黄/白）: CH1->GPIO12(物理32), CH2->GPIO19(物理35), CH3->GPIO5(物理29), CH4->GPIO4(物理7)"
+        " 🟠 信号（橙/黄/白）: CH1->GPIO12(物理32), CH2->GPIO19(物理35)"
     )
     context.log(" ※ 使用済GPIO: 17, 22, 23, 24, 25, 27, 20, 21, 18, 26, 6, 13 は回避済み。")
 
@@ -2582,15 +2496,15 @@ def _control_specific_servo(parameters: Any) -> Dict[str, Any]:
     merged: Dict[str, Any] = dict(parameters)
     servo_raw = merged.get("servo_id", merged.get("channel"))
     if servo_raw is None:
-        raise ValueError("servo_id (1-4) is required.")
+        raise ValueError("servo_id (1-2) is required.")
 
     try:
         servo_id = int(str(servo_raw).strip())
     except (ValueError, TypeError) as exc:
-        raise ValueError("servo_id must be an integer between 1 and 4.") from exc
+        raise ValueError("servo_id must be an integer between 1 and 2.") from exc
 
-    if servo_id not in (1, 2, 3, 4):
-        raise ValueError("servo_id must be between 1 and 4.")
+    if servo_id not in (1, 2):
+        raise ValueError("servo_id must be between 1 and 2.")
 
     merged["channel"] = servo_id
     merged.pop("servo_id", None)
@@ -2958,7 +2872,7 @@ def _execute_action(action: str, parameters: Dict[str, Any]) -> Tuple[bool, Any,
             return True, _run_named_dc_motor(motor_id, parameters or {}), None
         if action == "control_dual_servos":
             return True, _run_dual_servo_demo(parameters or {}), None
-        if action in ("servo1_control", "servo2_control", "servo3_control", "servo4_control"):
+        if action in ("servo1_control", "servo2_control"):
             servo_id = int(action.replace("servo", "").replace("_control", ""))
             return True, _run_named_servo(servo_id, parameters or {}), None
         if action == "no_action":
