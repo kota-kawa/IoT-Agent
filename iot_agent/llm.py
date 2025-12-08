@@ -164,6 +164,137 @@ def _messages_include_images(messages: Any) -> bool:
     return False
 
 
+def _strip_function_call_block(text: Any) -> str:
+    """Remove inline <function_calls>...</function_calls> markup from a string."""
+
+    if not isinstance(text, str):
+        return _content_to_text(text)
+
+    return re.sub(r"<function_calls>.*?</function_calls>", "", text, flags=re.IGNORECASE | re.DOTALL).strip()
+
+
+def _normalise_tool_calls(raw_tool_calls: Any) -> List[Dict[str, Any]]:
+    """Convert provider-specific tool call objects into plain dicts for reuse."""
+
+    if not raw_tool_calls:
+        return []
+
+    normalised: List[Dict[str, Any]] = []
+
+    for index, call in enumerate(raw_tool_calls):
+        call_id = ""
+        function_name = ""
+        arguments: Any = {}
+
+        if isinstance(call, dict):
+            call_id = call.get("id") or call.get("tool_call_id") or call.get("call_id") or ""
+            function = call.get("function") or {}
+            if isinstance(function, dict):
+                function_name = function.get("name") or function.get("tool_name") or ""
+                arguments = function.get("arguments", {})
+            else:
+                function_name = call.get("name") or ""
+                arguments = call.get("arguments", {})
+        else:
+            call_id = getattr(call, "id", None) or getattr(call, "tool_call_id", None) or ""
+            function = getattr(call, "function", None)
+            if isinstance(function, dict):
+                function_name = function.get("name") or function.get("tool_name") or ""
+                arguments = function.get("arguments", {})
+            else:
+                function_name = getattr(function, "name", "") if function else ""
+                arguments = getattr(function, "arguments", {}) if function else {}
+
+        if not function_name:
+            continue
+
+        if not isinstance(arguments, str):
+            try:
+                arguments = json.dumps(arguments or {})
+            except Exception:
+                arguments = "{}"
+
+        normalised.append(
+            {
+                "id": call_id or f"call_{index + 1}",
+                "type": "function",
+                "function": {"name": function_name, "arguments": arguments},
+            }
+        )
+
+    return normalised
+
+
+def _extract_embedded_tool_calls(text: Any) -> List[Dict[str, Any]]:
+    """
+    Some providers or prompt styles return tool calls as inline text like:
+    <function_calls>[{"tool_name": "...", "parameters": {...}}]</function_calls>
+    Extract them so execution can still proceed.
+    """
+
+    if not isinstance(text, str):
+        return []
+
+    lowered = text.lower()
+    start = lowered.find("<function_calls>")
+    end = lowered.find("</function_calls>")
+    snippet = ""
+
+    if start != -1 and end != -1 and end > start:
+        snippet = text[start + len("<function_calls>") : end]
+    else:
+        snippet = text
+
+    # Try to isolate a JSON array within the snippet
+    content = snippet.strip().strip("`").strip()
+    if "[" not in content or "]" not in content:
+        return []
+
+    try:
+        prefix_index = content.index("[")
+        suffix_index = content.rindex("]") + 1
+        json_fragment = content[prefix_index:suffix_index]
+        parsed = json.loads(json_fragment)
+    except Exception:
+        return []
+
+    if not isinstance(parsed, list):
+        return []
+
+    tool_like_calls: List[Dict[str, Any]] = []
+    for index, entry in enumerate(parsed):
+        if not isinstance(entry, dict):
+            continue
+        name = (
+            entry.get("tool_name")
+            or entry.get("name")
+            or (entry.get("function") or {}).get("name")
+            or ""
+        )
+        params = (
+            entry.get("parameters")
+            or entry.get("args")
+            or (entry.get("function") or {}).get("arguments")
+            or {}
+        )
+        if not name:
+            continue
+        try:
+            arguments = params if isinstance(params, str) else json.dumps(params or {})
+        except Exception:
+            arguments = "{}"
+
+        tool_like_calls.append(
+            {
+                "id": entry.get("id") or entry.get("tool_call_id") or f"embedded_call_{index + 1}",
+                "type": "function",
+                "function": {"name": name, "arguments": arguments},
+            }
+        )
+
+    return tool_like_calls
+
+
 def _convert_messages_to_responses_input(messages: Any) -> List[Dict[str, Any]]:
     """Convert Chat Completions style messages to Responses API input format."""
 
@@ -474,26 +605,38 @@ async def _process_chat_with_tools(client: UnifiedClient, messages: List[Dict[st
         
         choice = response.choices[0]
         message = choice.message
-        
+
+        # Normalise tool calls, including cases where the model inlines them in text
+        tool_calls = _normalise_tool_calls(getattr(message, "tool_calls", None))
+        embedded_calls = _extract_embedded_tool_calls(message.content)
+        if not tool_calls and embedded_calls:
+            tool_calls = embedded_calls
+
+        cleaned_content = _strip_function_call_block(message.content)
+
         # メッセージを履歴に追加（ツール呼び出しを含む可能性があるため）
         # OpenAI SDKのMessageオブジェクトを辞書に変換するか、そのまま使うか
         # ここでは辞書形式に正規化して追加する
-        assistant_msg = {"role": "assistant", "content": message.content}
-        if message.tool_calls:
-            assistant_msg["tool_calls"] = message.tool_calls
+        assistant_msg = {"role": "assistant", "content": cleaned_content}
+        if tool_calls:
+            assistant_msg["tool_calls"] = tool_calls
         current_messages.append(assistant_msg)
-        
-        if message.tool_calls:
+
+        if tool_calls:
             # ツール呼び出しの処理
-            for tool_call in message.tool_calls:
-                function_name = tool_call.function.name
+            for tool_call in tool_calls:
+                function = tool_call.get("function") or {}
+                function_name = function.get("name", "")
                 try:
-                    arguments = json.loads(tool_call.function.arguments)
+                    arguments_raw = function.get("arguments")
+                    arguments = json.loads(arguments_raw) if isinstance(arguments_raw, str) else arguments_raw
                 except json.JSONDecodeError:
                     arguments = {}
-                
+                except Exception:
+                    arguments = {}
+
                 print(f"Executing Tool: {function_name} with args {arguments}")
-                
+
                 try:
                     # MCPツール実行
                     result_content = await call_tool(function_name, arguments)
@@ -512,28 +655,28 @@ async def _process_chat_with_tools(client: UnifiedClient, messages: List[Dict[st
                             tool_result_text += "[Image Captured]\n"
                         elif content.type == "embedded_resource":
                              tool_result_text += "[Resource Embedded]\n"
-                            
+
                     current_messages.append({
                         "role": "tool",
-                        "tool_call_id": tool_call.id,
+                        "tool_call_id": tool_call.get("id", ""),
                         "content": tool_result_text.strip() or "Success"
                     })
-                    
+
                 except Exception as e:
                     error_msg = f"Tool Execution Error: {str(e)}"
                     print(error_msg)
                     current_messages.append({
                         "role": "tool",
-                        "tool_call_id": tool_call.id,
+                        "tool_call_id": tool_call.get("id", ""),
                         "content": error_msg
                     })
-            
+
             turn += 1
         else:
             # ツール呼び出しがない場合、それが最終回答
-            final_reply = message.content
+            final_reply = cleaned_content
             break
-            
+
     return {
         "reply": final_reply,
         "device_commands": [], # 実行済みのため空リスト
