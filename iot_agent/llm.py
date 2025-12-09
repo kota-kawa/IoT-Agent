@@ -546,68 +546,129 @@ class UnifiedClient:
         filtered_messages = []
 
         for msg in messages:
-            if msg.get("role") == "system":
-                system_prompt += msg.get("content", "") + "\n"
-            else:
-                # Anthropic 用にメッセージコンテンツを変換
-                content = msg.get("content")
-                if isinstance(content, list):
-                    new_content = []
-                    for part in content:
-                        if isinstance(part, dict):
-                            if part.get("type") == "image_url":
-                                image_url = part.get("image_url", {}).get("url", "")
-                                if image_url.startswith("data:"):
-                                    try:
-                                        header, data = image_url.split(",", 1)
-                                        media_type = header.split(":")[1].split(";")[0]
-                                        new_content.append({
-                                            "type": "image",
-                                            "source": {
-                                                "type": "base64",
-                                                "media_type": media_type,
-                                                "data": data
-                                            }
-                                        })
-                                    except (ValueError, IndexError):
-                                        pass
-                                else:
+            role = msg.get("role")
+            content = msg.get("content")
+
+            if role == "system":
+                system_prompt += (content or "") + "\n"
+                continue
+
+            if role == "tool":
+                # Convert OpenAI 'tool' role to Anthropic 'tool_result' block in 'user' message
+                tool_call_id = msg.get("tool_call_id")
+                filtered_messages.append({
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": tool_call_id,
+                            "content": content or ""
+                        }
+                    ]
+                })
+                continue
+
+            if role == "assistant" and msg.get("tool_calls"):
+                # Convert OpenAI 'tool_calls' to Anthropic 'tool_use' blocks
+                anthropic_content = []
+                if content:
+                    anthropic_content.append({"type": "text", "text": content})
+                
+                for tc in msg["tool_calls"]:
+                    func = tc.get("function", {})
+                    args = func.get("arguments", "{}")
+                    if isinstance(args, str):
+                        try:
+                            args = json.loads(args)
+                        except json.JSONDecodeError:
+                            args = {}
+                    
+                    anthropic_content.append({
+                        "type": "tool_use",
+                        "id": tc.get("id"),
+                        "name": func.get("name"),
+                        "input": args
+                    })
+                
+                filtered_messages.append({"role": "assistant", "content": anthropic_content})
+                continue
+
+            # Standard message handling (User / Assistant text)
+            if isinstance(content, list):
+                new_content = []
+                for part in content:
+                    if isinstance(part, dict):
+                        if part.get("type") == "image_url":
+                            image_url = part.get("image_url", {}).get("url", "")
+                            if image_url.startswith("data:"):
+                                try:
+                                    header, data = image_url.split(",", 1)
+                                    media_type = header.split(":")[1].split(";")[0]
+                                    new_content.append({
+                                        "type": "image",
+                                        "source": {
+                                            "type": "base64",
+                                            "media_type": media_type,
+                                            "data": data
+                                        }
+                                    })
+                                except (ValueError, IndexError):
                                     pass
                             else:
-                                new_content.append(part)
+                                pass
                         else:
                             new_content.append(part)
-                    filtered_messages.append({"role": msg.get("role"), "content": new_content})
-                else:
-                    filtered_messages.append(msg)
+                    else:
+                        new_content.append(part)
+                filtered_messages.append({"role": role, "content": new_content})
+            else:
+                filtered_messages.append(msg)
 
         max_tokens = kwargs.get("max_tokens", 4096)
         temperature = kwargs.get("temperature", 0.7)
 
-        # Note: Basic Anthropic tool support wrapper is not fully implemented here 
-        # as it requires converting OpenAI 'tools' schema to Anthropic 'tools' schema.
-        # For this implementation, we assume standard OpenAI client usage or compatible shim.
-        # If provider is Claude, we might need a better adapter.
-        
-        # Since we are using MCP standardisation, ensuring the underlying client supports tools is key.
-        # Currently UnifiedClient manually wraps Anthropic. We should ideally use LangChain or similar adapter,
-        # but for now let's assume we use OpenAI compatible endpoints (Gemini/OpenAI).
-        # If the user selects Claude via Anthropic SDK, this wrapper needs to handle tools.
-        
-        # For brevity/safety in this refactor, if tools are present and we are using Anthropic SDK,
-        # we might need to skip tools or implement conversion. 
-        # Given the prompt's focus on Gemini/OpenAI usually, I'll proceed.
-        
-        response = self.client.messages.create(
-            model=model,
-            system=system_prompt.strip(),
-            messages=filtered_messages,
-            max_tokens=max_tokens,
-            temperature=temperature
-        )
+        # Convert OpenAI tools schema to Anthropic tools schema if present
+        anthropic_tools = []
+        if tools:
+            for t in tools:
+                if t.get("type") == "function":
+                    func = t.get("function", {})
+                    anthropic_tools.append({
+                        "name": func.get("name"),
+                        "description": func.get("description"),
+                        "input_schema": func.get("parameters")
+                    })
 
-        content = response.content[0].text if response.content else ""
-        message = SimpleNamespace(content=content, parsed=None, tool_calls=None)
+        create_kwargs = {
+            "model": model,
+            "system": system_prompt.strip(),
+            "messages": filtered_messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+        }
+        if anthropic_tools:
+            create_kwargs["tools"] = anthropic_tools
+
+        response = self.client.messages.create(**create_kwargs)
+
+        # Convert Anthropic response back to OpenAI-like format for uniformity
+        content_text = ""
+        tool_calls = []
+        
+        for block in response.content:
+            if block.type == "text":
+                content_text += block.text
+            elif block.type == "tool_use":
+                tool_calls.append({
+                    "id": block.id,
+                    "type": "function",
+                    "function": {
+                        "name": block.name,
+                        "arguments": json.dumps(block.input)
+                    }
+                })
+
+        message = SimpleNamespace(content=content_text, parsed=None, tool_calls=tool_calls if tool_calls else None)
         choice = SimpleNamespace(message=message)
         return SimpleNamespace(choices=[choice])
 
@@ -657,7 +718,7 @@ async def _process_chat_with_tools(client: UnifiedClient, messages: List[Dict[st
         "自分の出力やアクションの結果を予測し、その予測を応答に反映させてください。\n"
         "\n"
         "【重要: 確認を求めずに即座に実行すべきケース】:\n"
-        "- **デバイスが1つだけ登録されている場合**: ユーザーがデバイスを指定しなくても、その唯一のデバイスを対象として即座に実行してください。「どのデバイスですか？」と聞き返さないでください。\n"
+        "- **デバイスが1つだけ登録されている場合**: ユーザーの発言が**デバイスの操作や状態確認を意図していると判断できる場合**に限り、その唯一のデバイスを対象として即座に実行してください。ただし、**日常会話、感想、質問、挨拶など、物理的なデバイス操作を伴わない発言に対しては、絶対にコマンドを生成せず、会話のみで返答してください**。\n"
         "- **コマンドが明確な場合**: 「ブザーを鳴らして」「LEDを点灯して」「モーターを動かして」など、実行すべき機能が明らかな場合は確認せずに実行してください。\n"
         "- **パラメータが省略されている場合**: デフォルト値を使用し、さらに細かいオプションも勝手に決めて実行してください。例: ブザーなら melody='alert'、LEDなら pattern='demo'、移動なら duration=5.0 を使用。「どのような音にしますか？」や「どのくらい動かしますか？」と聞くのは禁止です。\n"
         "- **サーボ・モーター操作**: 「サーボを動かして」と言われたら、'servo_1'と'servo_2'（または利用可能なもの）を対象に、angle=90 または action='sweep' で即座に実行してください。「どのサーボですか？」「角度は？」と聞くのは禁止です。\n"
@@ -733,25 +794,42 @@ async def _process_chat_with_tools(client: UnifiedClient, messages: List[Dict[st
         choice = response.choices[0]
         message = choice.message
 
-        # Normalise tool calls, including cases where the model inlines them in text
-        tool_calls = _normalise_tool_calls(getattr(message, "tool_calls", None))
+        # Execution logic needs normalised calls
+        raw_tool_calls = getattr(message, "tool_calls", None)
+        tool_calls_for_execution = _normalise_tool_calls(raw_tool_calls)
+        
         embedded_calls = _extract_embedded_tool_calls(message.content)
-        if not tool_calls and embedded_calls:
-            tool_calls = embedded_calls
+        if not tool_calls_for_execution and embedded_calls:
+            tool_calls_for_execution = embedded_calls
 
         cleaned_content = _strip_function_call_block(message.content)
 
-        # メッセージを履歴に追加（ツール呼び出しを含む可能性があるため）
-        # OpenAI SDKのMessageオブジェクトを辞書に変換するか、そのまま使うか
-        # ここでは辞書形式に正規化して追加する
+        # History: Prefer raw tool calls to preserve provider-specific fields (e.g. Gemini thought_signature)
         assistant_msg = {"role": "assistant", "content": cleaned_content}
-        if tool_calls:
-            assistant_msg["tool_calls"] = tool_calls
+        
+        if raw_tool_calls:
+            # Convert Pydantic/object list to dict list if needed
+            history_tool_calls = []
+            for tc in raw_tool_calls:
+                if hasattr(tc, "model_dump"):
+                    history_tool_calls.append(tc.model_dump())
+                elif hasattr(tc, "to_dict"):
+                    history_tool_calls.append(tc.to_dict())
+                elif isinstance(tc, dict):
+                    history_tool_calls.append(tc)
+                else:
+                    # Fallback if we can't serialize easily
+                    history_tool_calls = tool_calls_for_execution
+                    break
+            assistant_msg["tool_calls"] = history_tool_calls
+        elif tool_calls_for_execution:
+            assistant_msg["tool_calls"] = tool_calls_for_execution
+            
         current_messages.append(assistant_msg)
 
-        if tool_calls:
+        if tool_calls_for_execution:
             # ツール呼び出しの処理
-            for tool_call in tool_calls:
+            for tool_call in tool_calls_for_execution:
                 function = tool_call.get("function") or {}
                 function_name = function.get("name", "")
                 try:
@@ -875,7 +953,7 @@ def _structured_conversation_review_prompt(messages: List[Dict[str, str]]) -> Di
         "- 自動化ルールの提案: デバイス連携、スケジュール実行\n\n"
         
         "【重要: 即座に実行すべきケース】\n"
-        "- デバイスが1つだけ登録されている場合: デバイス指定がなくても、その唯一のデバイスを自動的に選択してください。「どのデバイスですか？」と質問を返さないでください。\n"
+        "- デバイスが1つだけ登録されている場合: ユーザーの発言が**明確にデバイスの操作や状態確認を意図している場合**に限り、自動的に選択してください。**日常会話や一般的な質問など、デバイスへの介入が不要な場合は、操作不要（action_required: false）としてください**。\n"
         "- コマンドが明確な場合（「ブザーを鳴らして」「LEDを点灯」など）: 確認なしに device_commands を生成してください。\n"
         "- パラメータが省略されている場合: 音の種類や表示位置、移動時間などの詳細が不明でも、勝手に標準的なデフォルト値（例: melody='alert'、textは自動中心揃え、移動ならduration=5.0）を補完して device_commands を生成してください。質問は不要です。\n\n"
         
