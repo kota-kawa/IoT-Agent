@@ -4,6 +4,7 @@
 
 import argparse
 import base64
+import concurrent.futures
 import json
 import logging
 import math
@@ -28,7 +29,7 @@ SUPPORTED_ACTIONS: Dict[str, Dict[str, Any]] = {
         "params": [],
     },
     "run_sequence": {
-        "description": "Execute multiple actions sequentially (parallel requests fall back to sequential for safety).",
+        "description": "Execute multiple actions either sequentially or in parallel.",
         "params": [
             {
                 "name": "commands",
@@ -40,7 +41,7 @@ SUPPORTED_ACTIONS: Dict[str, Dict[str, Any]] = {
                 "name": "mode",
                 "type": "string",
                 "required": False,
-                "description": "Requested execution mode: 'sequential' or 'parallel' (parallel currently runs sequentially).",
+                "description": "Requested execution mode: 'sequential' (default) or 'parallel'.",
             },
             {
                 "name": "timeout",
@@ -1474,10 +1475,10 @@ def _run_sequence(parameters: Any) -> Dict[str, Any]:
         raise ValueError("commands must be a non-empty list of command dictionaries.")
 
     executed_mode = "sequential"
-    if requested_mode not in ("sequential", "parallel"):
+    if requested_mode == "parallel":
+        executed_mode = "parallel"
+    elif requested_mode != "sequential":
         context.log("Unsupported sequence mode requested; falling back to sequential", requested_mode=requested_mode)
-    elif requested_mode == "parallel":
-        context.log("Parallel mode requested; executing sequentially for safety")
 
     context.log(
         "Starting action sequence",
@@ -1488,41 +1489,114 @@ def _run_sequence(parameters: Any) -> Dict[str, Any]:
     )
 
     results: List[Dict[str, Any]] = []
-    for index, command in enumerate(commands, start=1):
-        if context.timed_out or (context.remaining() is not None and context.remaining() <= 0):
-            context.timed_out = True
-            break
 
-        name = command.get("name") if isinstance(command, dict) else None
-        args = command.get("args") if isinstance(command, dict) and isinstance(command.get("args"), dict) else {}
+    def _exec_wrapper(index: int, cmd_name: str, cmd_args: Dict[str, Any]) -> Dict[str, Any]:
+        try:
+            ok, result, error = _execute_action(cmd_name, cmd_args)
+            entry = {
+                "index": index,
+                "name": cmd_name,
+                "ok": bool(ok),
+                "result": result,
+            }
+            if error:
+                entry["error"] = error
+            return entry
+        except Exception as exc:
+            return {
+                "index": index,
+                "name": cmd_name,
+                "ok": False,
+                "error": str(exc),
+            }
 
-        if not isinstance(name, str) or not name.strip():
-            results.append({"index": index, "ok": False, "error": "command name is required"})
-            continue
+    if executed_mode == "parallel":
+        future_map = {}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(commands)) as executor:
+            for index, command in enumerate(commands, start=1):
+                name = command.get("name") if isinstance(command, dict) else None
+                args = command.get("args") if isinstance(command, dict) and isinstance(command.get("args"), dict) else {}
 
-        normalized_name = name.strip()
-        if normalized_name == "run_sequence":
-            results.append(
-                {
-                    "index": index,
-                    "name": normalized_name,
-                    "ok": False,
-                    "error": "nested run_sequence is not supported on this device",
-                }
+                if not isinstance(name, str) or not name.strip():
+                    results.append({"index": index, "ok": False, "error": "command name is required"})
+                    continue
+
+                normalized_name = name.strip()
+                if normalized_name == "run_sequence":
+                    results.append(
+                        {
+                            "index": index,
+                            "name": normalized_name,
+                            "ok": False,
+                            "error": "nested run_sequence is not supported inside parallel execution",
+                        }
+                    )
+                    continue
+
+                context.log("Scheduling parallel sub-action", index=index, name=normalized_name)
+                future = executor.submit(_exec_wrapper, index, normalized_name, args)
+                future_map[future] = index
+
+            remaining = context.remaining()
+            done, not_done = concurrent.futures.wait(
+                future_map.keys(),
+                timeout=remaining if remaining is not None else None
             )
-            continue
 
-        context.log("Executing sub-action", index=index, name=normalized_name)
-        ok, result, error = _execute_action(normalized_name, args)
-        entry: Dict[str, Any] = {
-            "index": index,
-            "name": normalized_name,
-            "ok": bool(ok),
-            "result": result,
-        }
-        if error:
-            entry["error"] = error
-        results.append(entry)
+            for f in done:
+                try:
+                    results.append(f.result())
+                except Exception as exc:
+                    idx = future_map.get(f, -1)
+                    results.append({"index": idx, "ok": False, "error": f"Execution exception: {exc}"})
+
+            for f in not_done:
+                idx = future_map[f]
+                results.append({
+                    "index": idx,
+                    "ok": False,
+                    "error": "Timed out waiting for parallel execution",
+                })
+                context.timed_out = True
+
+    else:
+        for index, command in enumerate(commands, start=1):
+            if context.timed_out or (context.remaining() is not None and context.remaining() <= 0):
+                context.timed_out = True
+                break
+
+            name = command.get("name") if isinstance(command, dict) else None
+            args = command.get("args") if isinstance(command, dict) and isinstance(command.get("args"), dict) else {}
+
+            if not isinstance(name, str) or not name.strip():
+                results.append({"index": index, "ok": False, "error": "command name is required"})
+                continue
+
+            normalized_name = name.strip()
+            if normalized_name == "run_sequence":
+                results.append(
+                    {
+                        "index": index,
+                        "name": normalized_name,
+                        "ok": False,
+                        "error": "nested run_sequence is not supported on this device",
+                    }
+                )
+                continue
+
+            context.log("Executing sub-action", index=index, name=normalized_name)
+            ok, result, error = _execute_action(normalized_name, args)
+            entry = {
+                "index": index,
+                "name": normalized_name,
+                "ok": bool(ok),
+                "result": result,
+            }
+            if error:
+                entry["error"] = error
+            results.append(entry)
+
+    results.sort(key=lambda x: x.get("index", 0))
 
     context.log(
         "Sequence finished",
