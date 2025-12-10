@@ -118,7 +118,7 @@ def _content_to_text(content: Any) -> str:
     if content is None:
         return ""
     if isinstance(content, str):
-        return content
+        return _strip_internal_thoughts(content)
 
     if hasattr(content, "text") and isinstance(content.text, str):
         return content.text
@@ -169,13 +169,18 @@ def _messages_include_images(messages: Any) -> bool:
     return False
 
 
-def _strip_function_call_block(text: Any) -> str:
-    """Remove inline <function_calls>...</function_calls> markup from a string."""
+def _strip_internal_thoughts(text: Any) -> str:
+    """Remove inline <function_calls>...</function_calls> and <think>...</think> markup from a string."""
 
     if not isinstance(text, str):
         return _content_to_text(text)
 
-    return re.sub(r"<function_calls>.*?</function_calls>", "", text, flags=re.IGNORECASE | re.DOTALL).strip()
+    # Remove <function_calls>...</function_calls>
+    cleaned_text = re.sub(r"<function_calls>.*?</function_calls>", "", text, flags=re.IGNORECASE | re.DOTALL)
+    # Remove <think>...</think>
+    cleaned_text = re.sub(r"<think>.*?</think>", "", cleaned_text, flags=re.IGNORECASE | re.DOTALL)
+
+    return cleaned_text.strip()
 
 
 def _normalise_tool_calls(raw_tool_calls: Any) -> List[Dict[str, Any]]:
@@ -802,7 +807,7 @@ async def _process_chat_with_tools(client: UnifiedClient, messages: List[Dict[st
         if not tool_calls_for_execution and embedded_calls:
             tool_calls_for_execution = embedded_calls
 
-        cleaned_content = _strip_function_call_block(message.content)
+        cleaned_content = _strip_internal_thoughts(message.content)
 
         # History: Prefer raw tool calls to preserve provider-specific fields (e.g. Gemini thought_signature)
         assistant_msg = {"role": "assistant", "content": cleaned_content}
