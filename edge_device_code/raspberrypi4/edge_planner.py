@@ -526,6 +526,8 @@ def _build_multi_action_plan(llm: Any, instruction: str) -> List[Dict[str, Any]]
     return []
 
 
+import concurrent.futures
+
 def _execute_plan_sequence(
     plans: List[Dict[str, Any]]
 ) -> Tuple[bool, Any, Optional[str], Optional[str], str, Dict[str, Any]]:
@@ -533,20 +535,8 @@ def _execute_plan_sequence(
         message = "No executable actions resolved from instruction."
         return False, None, message, message, "no_action", {}
 
-    if len(plans) == 1:
-        plan = plans[0]
-        action = str(plan.get("action") or "no_action")
-        parameters = dict(plan.get("parameters") or {})
-        message = plan.get("message") if isinstance(plan.get("message"), str) else None
-        ok, result, error = actions._execute_action(action, parameters)
-        return ok, result, message, error, action, parameters
-
-    executed_steps: List[Dict[str, Any]] = []
-    status_parts: List[str] = []
-    plan_messages: List[str] = []
-    error_messages: List[str] = []
-
-    for index, plan in enumerate(plans, start=1):
+    # Helper function to execute a single plan step
+    def _execute_step(index: int, plan: Dict[str, Any]) -> Dict[str, Any]:
         action = str(plan.get("action") or "no_action")
         parameters = dict(plan.get("parameters") or {})
         message = plan.get("message") if isinstance(plan.get("message"), str) else None
@@ -559,21 +549,55 @@ def _execute_plan_sequence(
             "ok": ok,
             "parameters": parameters,
         }
-
         if result is not None:
             step_record["result"] = result
-
         if message:
-            plan_messages.append(message)
             step_record["plan_message"] = message
-
         if error:
-            error_entry = f"{action}: {error}"
-            error_messages.append(error_entry)
             step_record["error"] = error
+        
+        return step_record
 
+    executed_steps: List[Dict[str, Any]] = []
+    
+    # Execute all plans in parallel using a thread pool
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        future_to_index = {
+            executor.submit(_execute_step, index, plan): index
+            for index, plan in enumerate(plans, start=1)
+        }
+        
+        for future in concurrent.futures.as_completed(future_to_index):
+            try:
+                step_result = future.result()
+                executed_steps.append(step_result)
+            except Exception as exc:
+                index = future_to_index[future]
+                logging.error("Step %d execution raised exception: %s", index, exc)
+                executed_steps.append({
+                    "step": index,
+                    "action": "unknown",
+                    "ok": False,
+                    "error": str(exc)
+                })
+
+    # Sort steps by their original index to maintain logical order in reports
+    executed_steps.sort(key=lambda x: x["step"])
+
+    status_parts: List[str] = []
+    plan_messages: List[str] = []
+    error_messages: List[str] = []
+
+    for step in executed_steps:
+        action = step["action"]
+        ok = step["ok"]
         status_parts.append(f"{action}: {'成功' if ok else '失敗'}")
-        executed_steps.append(step_record)
+        
+        if "plan_message" in step:
+            plan_messages.append(step["plan_message"])
+        
+        if not ok and "error" in step:
+            error_messages.append(f"{action}: {step['error']}")
 
     overall_ok = all(step["ok"] for step in executed_steps)
 
