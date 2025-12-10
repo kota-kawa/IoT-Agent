@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List
 
-MODEL_PATH = os.getenv("LLAMA_MODEL_PATH", "TinySwallow-1.5B-Instruct-Q5_K_S.gguf")
+MODEL_PATH = os.getenv("LLAMA_MODEL_PATH", "Qwen3-1.7B-Q4_K_S.gguf")
 LLAMA_THREADS = int(os.getenv("LLAMA_THREADS", "4"))
 LLAMA_CONTEXT = int(os.getenv("LLAMA_CONTEXT", "1024"))
 LLAMA_BATCH = int(os.getenv("LLAMA_BATCH", "32"))
