@@ -112,6 +112,22 @@ def _strip_images_from_messages(messages: List[Dict[str, Any]]) -> List[Dict[str
     return stripped
 
 
+def _latest_user_turn(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    会話履歴を参照せず、直近のユーザー発話のみを返す。
+    期待外の型が混ざっていても安全に空リストを返す。
+    """
+
+    if not isinstance(messages, list):
+        return []
+
+    for entry in reversed(messages):
+        if isinstance(entry, dict) and entry.get("role") == "user":
+            return [entry]
+
+    return []
+
+
 def _content_to_text(content: Any) -> str:
     """Normalise chat completion content into a plain string."""
 
@@ -943,7 +959,10 @@ def _normalise_conversation_messages(raw_messages: Any) -> List[Dict[str, str]]:
 def _structured_conversation_review_prompt(messages: List[Dict[str, str]]) -> Dict[str, Any]:
     # 会話履歴を監査し、IoT 操作が必要か判定するプロンプトを構築
     # 過去の会話履歴から画像データを除去してトークン数を削減
-    messages = _strip_images_from_messages(messages)
+    messages = _latest_user_turn(_strip_images_from_messages(messages))
+
+    if not messages:
+        raise RuntimeError("No user message available for review.")
 
     device_context = _build_device_context()
     timestamp_line = _current_datetime_line()
