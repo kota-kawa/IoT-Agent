@@ -287,7 +287,7 @@ SUPPORTED_ACTIONS: Dict[str, Dict[str, Any]] = {
         ],
     },
     "capture_camera_photo": {
-        "description": "Capture a still image using the attached Picamera2 module and return it as a base64 encoded string. The image is also saved to a local directory.",
+        "description": "When checking the surroundings, the camera captures images. Capture a still image using the attached Picamera2 module and return it as a base64 encoded string. The image is also saved to a local directory.",
         "params": [
             {
                 "name": "filename",
