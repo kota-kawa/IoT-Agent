@@ -635,7 +635,16 @@ class UnifiedClient:
             content = msg.get("content")
 
             if role == "system":
-                system_prompt += (content or "") + "\n"
+                if isinstance(content, list):
+                    text_parts = []
+                    for part in content:
+                        if isinstance(part, dict) and part.get("type") == "text":
+                            text_parts.append(part.get("text", ""))
+                        elif isinstance(part, str):
+                            text_parts.append(part)
+                    system_prompt += "\n".join(text_parts) + "\n"
+                else:
+                    system_prompt += (content or "") + "\n"
                 continue
 
             if role == "tool":
