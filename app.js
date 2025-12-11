@@ -8,6 +8,15 @@
 // デバイス一覧の更新を定期的に行うためのポーリング間隔（ミリ秒）
 const FETCH_DEVICES_INTERVAL_MS = 5000;
 
+// API ベース URL の決定（file: プロトコルで開いた場合のフォールバック）
+const API_BASE = (window.location.protocol === 'file:')
+  ? 'http://localhost:5006'
+  : '';
+
+if (window.location.protocol === 'file:') {
+  console.warn("注意: ファイルシステムから直接開いています。APIサーバー(http://localhost:5006)に接続を試みます。");
+}
+
 /** ---------- ユーティリティ ---------- */
 // DOM 要素を簡潔に取得するためのショートハンド関数
 const $ = (sel, parent = document) => parent.querySelector(sel);
@@ -56,7 +65,7 @@ async function loadModelOptions(){
   if(!modelSelectEl) return;
 
   try{
-    const res = await fetch("/api/models", { cache: "no-store" });
+    const res = await fetch(`${API_BASE}/api/models`, { cache: "no-store" });
     if(!res.ok){
       throw new Error(`HTTP ${res.status}`);
     }
@@ -94,7 +103,7 @@ async function handleModelChange(){
   currentModel = { provider, model, base_url: baseUrl };
 
   try{
-    const res = await fetch("/model_settings", {
+    const res = await fetch(`${API_BASE}/model_settings`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(currentModel),
@@ -493,7 +502,7 @@ async function fetchDevices({ silent = false } = {}){
   if(isFetchingDevices) return;
   isFetchingDevices = true;
   try{
-    const res = await fetch("/api/devices", { cache: "no-store" });
+    const res = await fetch(`${API_BASE}/api/devices`, { cache: "no-store" });
     if(!res.ok){
       throw new Error(`HTTP ${res.status}`);
     }
@@ -520,7 +529,7 @@ async function fetchDevices({ silent = false } = {}){
 // 指定 ID のデバイス表示名を PATCH API 経由で更新
 async function updateDeviceDisplayName(deviceId, displayName){
   const payload = { display_name: displayName || null };
-  const res = await fetch(`/api/devices/${encodeURIComponent(deviceId)}/name`, {
+  const res = await fetch(`${API_BASE}/api/devices/${encodeURIComponent(deviceId)}/name`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -546,7 +555,7 @@ async function updateDeviceDisplayName(deviceId, displayName){
 
 // デバイスを削除する REST API を呼び出しローカル状態を調整
 async function deleteDevice(deviceId){
-  const res = await fetch(`/api/devices/${encodeURIComponent(deviceId)}`, {
+  const res = await fetch(`${API_BASE}/api/devices/${encodeURIComponent(deviceId)}`, {
     method: "DELETE",
   });
 
@@ -570,7 +579,7 @@ async function deleteDevice(deviceId){
 
 // 指定デバイスの待機ジョブを全てクリアする
 async function clearDeviceJobs(deviceId){
-  const res = await fetch(`/api/devices/${encodeURIComponent(deviceId)}/jobs`, {
+  const res = await fetch(`${API_BASE}/api/devices/${encodeURIComponent(deviceId)}/jobs`, {
     method: "DELETE",
   });
 
@@ -697,7 +706,7 @@ async function handleRegisterSubmit(event){
       payload.meta.note = note;
     }
 
-    const res = await fetch("/api/devices/register", {
+    const res = await fetch(`${API_BASE}/api/devices/register`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -949,7 +958,7 @@ async function requestAssistantResponse(){
     messages: chatHistory.map(({ role, content }) => ({ role, content })),
   };
 
-  const res = await fetch("/api/chat", {
+  const res = await fetch(`${API_BASE}/api/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
