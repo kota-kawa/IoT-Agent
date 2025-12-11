@@ -203,15 +203,22 @@ def _content_to_text(content: Any) -> str:
             if isinstance(part, str):
                 parts.append(part)
                 continue
-            if hasattr(part, "text") and isinstance(part.text, str):
-                parts.append(part.text)
-                continue
+            
+            # Skip image/vision blocks to prevent leaking base64 into text logs/history
             if isinstance(part, dict):
+                p_type = part.get("type")
+                if p_type in {"image_url", "image", "input_image"}:
+                    continue
+                
+                # Check known text keys
                 for key in ("text", "data", "content"):
                     value = part.get(key)
                     if isinstance(value, str):
                         parts.append(value)
                         break
+            elif hasattr(part, "text") and isinstance(part.text, str):
+                parts.append(part.text)
+                
         joined = "\n".join(p.strip() for p in parts if isinstance(p, str) and p.strip())
         if joined:
             return joined
