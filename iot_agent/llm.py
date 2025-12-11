@@ -1312,7 +1312,8 @@ def _structured_agent_instruction_prompt(
     timestamp_line = _current_datetime_line()
     language = "English"
     if target_role == "jetson-agent":
-        language = "Japanese"
+        # language = "Japanese"
+        pass
     system_prompt = (
         f"{timestamp_line}\n"
         "あなたは運用アシスタントです。 "
