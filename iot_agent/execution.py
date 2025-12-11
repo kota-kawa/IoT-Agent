@@ -18,7 +18,7 @@ from .llm import (
     _call_llm_and_parse,
     _call_llm_text,
     _client,
-    _strip_images_from_messages,
+    _sanitize_messages,
     _structured_agent_instruction_prompt,
 )
 from .models import DeviceState, _CommandExecutionSummary
@@ -652,7 +652,7 @@ def _structured_multi_command_followup_prompt_with_images(
     # 画像付きの最終回答生成プロンプトを構築（視覚モデル向け）
     # 過去の会話履歴から画像データを除去してトークン数を削減
     # 注意: `images` パラメータは現在のリクエストで撮影した最新の画像なので除去しない
-    base_messages = _strip_images_from_messages(base_messages)
+    base_messages = _sanitize_messages(base_messages, allow_vision=False)
 
     device_context = _build_device_context()
 
@@ -776,7 +776,7 @@ def _structured_multi_command_followup_prompt(
 ) -> Dict[str, Any]:
     # マルチステップの実行結果を踏まえた最終回答生成プロンプトを構築
     # 過去の会話履歴から画像データを除去してトークン数を削減
-    base_messages = _strip_images_from_messages(base_messages)
+    base_messages = _sanitize_messages(base_messages, allow_vision=False)
 
     device_context = _build_device_context()
     step_descriptions: List[str] = []
