@@ -348,20 +348,20 @@ def _convert_messages_to_responses_input(messages: Any) -> List[Dict[str, Any]]:
                     elif part_type in {"image_url", "input_image"}:
                         image_url = part.get("image_url")
                         url = None
-                        detail = None
                         if isinstance(image_url, dict):
                             url = image_url.get("url")
-                            detail = image_url.get("detail")
                         elif isinstance(image_url, str):
                             url = image_url
+
                         if isinstance(url, str) and url.strip():
-                            image_part: Dict[str, Any] = {
-                                "type": "input_image",
-                                "image_url": {"url": url.strip()},
-                            }
-                            if isinstance(detail, str) and detail.strip():
-                                image_part["image_url"]["detail"] = detail.strip()
-                            parts.append(image_part)
+                            url = url.strip()
+
+                            # Responses API expects a bare URL string, not an object; data URLs can be huge.
+                            if url.startswith("data:"):
+                                # 長大な base64 はトークン上限を溢れさせるので、プレースホルダーに置換
+                                parts.append({"type": "input_text", "text": "[画像: 省略]"})
+                            else:
+                                parts.append({"type": "input_image", "image_url": url})
                 elif isinstance(part, str) and part.strip():
                     parts.append({"type": "input_text", "text": part})
 
