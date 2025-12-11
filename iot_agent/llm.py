@@ -45,7 +45,9 @@ def _split_text_and_images(text: str) -> List[Dict[str, Any]]:
             parts.append({"type": "text", "text": text[last_idx:start]})
 
         data_url = match.group(0)
-        parts.append({"type": "image_url", "image_url": {"url": data_url}})
+        # Ensure data URL is a single line for API compatibility
+        clean_url = data_url.replace("\n", "").replace("\r", "")
+        parts.append({"type": "image_url", "image_url": {"url": clean_url}})
         last_idx = end
 
     if last_idx < len(text):
@@ -678,19 +680,27 @@ class UnifiedClient:
                             image_url = part.get("image_url", {}).get("url", "")
                             if image_url.startswith("data:"):
                                 try:
+                                    # Split on the first comma to separate header and data
                                     header, data = image_url.split(",", 1)
+                                    # header example: data:image/jpeg;base64
                                     media_type = header.split(":")[1].split(";")[0]
+                                    
+                                    # Anthropic requires standard base64 without newlines
+                                    clean_data = data.replace("\n", "").replace("\r", "").strip()
+                                    
                                     new_content.append({
                                         "type": "image",
                                         "source": {
                                             "type": "base64",
                                             "media_type": media_type,
-                                            "data": data
+                                            "data": clean_data
                                         }
                                     })
-                                except (ValueError, IndexError):
-                                    pass
+                                except (ValueError, IndexError) as e:
+                                    print(f"Failed to process image data for Anthropic: {e}")
                             else:
+                                # Remote URLs are not supported by Anthropic API directly in this flow usually,
+                                # unless the SDK handles it. We'll leave it out to prevent errors.
                                 pass
                         else:
                             new_content.append(part)

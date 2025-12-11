@@ -316,7 +316,9 @@ def chat():
             continue
         role = msg.get("role")
         content = msg.get("content")
-        if role not in {"system", "user", "assistant"} or not isinstance(content, str):
+        if role not in {"system", "user", "assistant"}:
+            continue
+        if not isinstance(content, (str, list)):
             continue
         formatted_messages.append({"role": role, "content": content})
 
