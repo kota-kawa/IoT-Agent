@@ -35,6 +35,25 @@ _IMAGE_DATA_URL_RE = re.compile(
 )
 
 
+def _split_text_and_images(text: str) -> List[Dict[str, Any]]:
+    """Split text containing data URLs into a list of text/image_url content parts."""
+    parts = []
+    last_idx = 0
+    for match in _IMAGE_DATA_URL_RE.finditer(text):
+        start, end = match.span()
+        if start > last_idx:
+            parts.append({"type": "text", "text": text[last_idx:start]})
+
+        data_url = match.group(0)
+        parts.append({"type": "image_url", "image_url": {"url": data_url}})
+        last_idx = end
+
+    if last_idx < len(text):
+        parts.append({"type": "text", "text": text[last_idx:]})
+
+    return parts
+
+
 def _strip_image_data_from_text(text: str) -> str:
     """Remove inline data URLs to avoid leaking base64 image data into history."""
 
@@ -49,10 +68,13 @@ def _strip_image_data_from_text(text: str) -> str:
     return cleaned if count else text
 
 
-def _strip_images_from_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _sanitize_messages(
+    messages: List[Dict[str, Any]], allow_vision: bool = False
+) -> List[Dict[str, Any]]:
     """
-    メッセージリストから画像データを除去し、トークン数を削減する。
-    画像があった箇所には「[画像: 省略]」というプレースホルダーを挿入する。
+    メッセージリストから画像データを処理する。
+    allow_vision=True の場合、インライン画像URLをVision API用の形式(image_url)に変換して保持する。
+    allow_vision=False の場合、画像を除去してトークン数を削減する。
     """
     stripped = []
     for msg in messages:
@@ -67,41 +89,74 @@ def _strip_images_from_messages(messages: List[Dict[str, Any]]) -> List[Dict[str
         # Drop raw image payloads that may contain data URLs
         base_msg.pop("images", None)
 
-        # content が文字列の場合はそのまま
+        # content が文字列の場合
         if isinstance(content, str):
+            if allow_vision and "data:image" in content:
+                # Vision有効かつ画像データが含まれる場合、分割して保持
+                new_parts = _split_text_and_images(content)
+                if extra_image_count > 0:
+                    new_parts.append(
+                        {"type": "text", "text": f"\n[画像: {extra_image_count}枚省略]"}
+                    )
+                base_msg["content"] = new_parts
+                stripped.append(base_msg)
+                continue
+
+            # Vision無効、または画像なし -> テキスト除去/維持
             cleaned_text = _strip_image_data_from_text(content)
             if extra_image_count > 0:
                 placeholder = f"[画像: {extra_image_count}枚省略]"
-                cleaned_text = f"{cleaned_text}\n{placeholder}" if cleaned_text else placeholder
+                cleaned_text = (
+                    f"{cleaned_text}\n{placeholder}" if cleaned_text else placeholder
+                )
             base_msg["content"] = cleaned_text
             stripped.append(base_msg)
             continue
 
-        # content がリストの場合、image_url を除去
+        # content がリストの場合
         if isinstance(content, list):
             new_content = []
             image_count = 0
             for part in content:
                 if isinstance(part, dict) and part.get("type") == "image_url":
-                    image_count += 1
+                    if allow_vision:
+                        # Vision有効なら維持
+                        new_content.append(part)
+                    else:
+                        image_count += 1
                     continue
+
                 if isinstance(part, dict) and part.get("type") == "text":
                     text_value = part.get("text")
-                    part = dict(part)
-                    part["text"] = _strip_image_data_from_text(text_value) if isinstance(text_value, str) else text_value
+                    if isinstance(text_value, str):
+                        if allow_vision and "data:image" in text_value:
+                            new_content.extend(_split_text_and_images(text_value))
+                        else:
+                            part = dict(part)
+                            part["text"] = _strip_image_data_from_text(text_value)
+                            new_content.append(part)
+                    else:
+                        new_content.append(part)
                 elif isinstance(part, str):
-                    part = _strip_image_data_from_text(part)
-                new_content.append(part)
+                    if allow_vision and "data:image" in part:
+                        new_content.extend(_split_text_and_images(part))
+                    else:
+                        new_content.append(_strip_image_data_from_text(part))
+                else:
+                    new_content.append(part)
 
             total_images = image_count + extra_image_count
-            if total_images > 0:
-                new_content.append({
-                    "type": "text",
-                    "text": f"[画像: {total_images}枚省略]"
-                })
+            if total_images > 0 and not allow_vision:
+                new_content.append(
+                    {"type": "text", "text": f"[画像: {total_images}枚省略]"}
+                )
 
             new_msg = base_msg
-            new_msg["content"] = new_content if new_content else [{"type": "text", "text": "[画像のみのメッセージ]"}]
+            new_msg["content"] = (
+                new_content
+                if new_content
+                else [{"type": "text", "text": "[画像のみのメッセージ]"}]
+            )
             stripped.append(new_msg)
             continue
 
@@ -722,7 +777,9 @@ async def _process_chat_with_tools(client: UnifiedClient, messages: List[Dict[st
     
     # 2. システムプロンプトの構築
     # 画像除去などは事前に行われている前提だが、ここでも確認
-    messages = _strip_images_from_messages(messages)
+    # プロバイダがVision対応なら画像を維持する
+    vision_supported = provider_supports_vision(getattr(client, "provider", ""))
+    messages = _sanitize_messages(messages, allow_vision=vision_supported)
     
     device_context = _build_device_context()
     system_prompt = (
@@ -959,7 +1016,7 @@ def _normalise_conversation_messages(raw_messages: Any) -> List[Dict[str, str]]:
 def _structured_conversation_review_prompt(messages: List[Dict[str, str]]) -> Dict[str, Any]:
     # 会話履歴を監査し、IoT 操作が必要か判定するプロンプトを構築
     # 過去の会話履歴から画像データを除去してトークン数を削減
-    messages = _latest_user_turn(_strip_images_from_messages(messages))
+    messages = _latest_user_turn(_sanitize_messages(messages, allow_vision=False))
 
     if not messages:
         raise RuntimeError("No user message available for review.")
@@ -1250,7 +1307,7 @@ def _structured_agent_instruction_prompt(
     messages: List[Dict[str, str]], target_role: Optional[str] = None
 ) -> Dict[str, Any]:
     # Keep for execution.py backward compat if needed
-    messages = _strip_images_from_messages(messages)
+    messages = _sanitize_messages(messages, allow_vision=False)
     device_context = _build_device_context()
     timestamp_line = _current_datetime_line()
     language = "English"
