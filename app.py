@@ -32,6 +32,7 @@ from iot_agent.llm import (
     _call_llm_for_conversation_review,
     _client,
     _normalise_conversation_messages,
+    _latest_user_turn,
 )
 from model_selection import (
     apply_model_selection,
@@ -319,6 +320,12 @@ def chat():
             continue
         formatted_messages.append({"role": role, "content": content})
 
+    # 会話履歴を一切参照せず、直近のユーザー発話のみを送信する
+    formatted_messages = _latest_user_turn(formatted_messages)
+
+    if not formatted_messages:
+        return jsonify({"error": "no user message found"}), 400
+
     if not formatted_messages or formatted_messages[-1]["role"] != "user":
         return jsonify({"error": "last message must be from user"}), 400
 
@@ -414,6 +421,10 @@ def review_conversation():
         return jsonify({"error": "history must be a list"}), 400
 
     messages = _normalise_conversation_messages(raw_history)
+    messages = _latest_user_turn(messages)
+
+    if not messages:
+        return jsonify({"error": "no user message found"}), 400
 
     try:
         client = _client()
