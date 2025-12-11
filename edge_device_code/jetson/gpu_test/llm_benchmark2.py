@@ -1,3 +1,4 @@
+# /mnt/data/llm_benchmark.py
 
 import argparse
 import logging
@@ -99,6 +100,12 @@ def load_model(model_path: str, gpu_layers: int, args: argparse.Namespace):
 
 
 def run_inference(model_path: str, gpu_layers: int, prompt: str, stop: list[str], args: argparse.Namespace):
+    """
+    Load the model and run a single inference.
+
+    ※ この関数は 1 回のベンチマーク試行を表す。
+       （試行回数を増やしたい場合は main() 側でこの関数をループする）
+    """
     mode_name = "GPU" if gpu_layers else "CPU"
 
     try:
@@ -134,6 +141,7 @@ def run_inference(model_path: str, gpu_layers: int, prompt: str, stop: list[str]
             "gen_time": gen_time,
             "tokens": completion_tokens,
             "tps": tokens_per_sec,
+            "gpu_layers": gpu_layers,
         }
     except Exception as exc:  # noqa: BLE001
         logging.error("Failed to run %s test: %s", mode_name, exc)
@@ -165,11 +173,23 @@ def parse_args():
     parser.add_argument("--user-prompt", default="Hello, tell me a short joke.", help="User message for the test")
     parser.add_argument("--cpu-only", action="store_true", help="Skip GPU test")
     parser.add_argument("--gpu-only", action="store_true", help="Skip CPU test")
+
+    # ★ 追加: 試行回数オプション
+    parser.add_argument(
+        "--trials",
+        type=int,
+        default=1,
+        help="Number of times to repeat each benchmark (default: 1)",
+    )
+
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
+
+    # 念のため 1 未満を指定された場合は 1 に矯正
+    trials = max(1, args.trials)
 
     try:
         model_path = resolve_model_path(args.model)
@@ -181,30 +201,67 @@ def main():
 
     print("=== Jetson LLM GPU vs CPU Benchmark ===")
 
-    cpu_result = None
-    gpu_result = None
+    cpu_results = []
+    gpu_results = []
 
+    # --- CPU テスト ---
     if not args.gpu_only:
-        print("\n--- Running CPU Test ---")
-        cpu_result = run_inference(model_path, 0, prompt, stop, args)
+        for i in range(trials):
+            print(f"\n--- Running CPU Test (trial {i + 1}/{trials}) ---")
+            result = run_inference(model_path, 0, prompt, stop, args)
+            if result:
+                cpu_results.append(result)
 
+    # --- GPU テスト ---
     if not args.cpu_only:
-        print("\n--- Running GPU Test ---")
-        gpu_result = run_gpu_with_fallback(model_path, prompt, stop, args)
+        for i in range(trials):
+            print(f"\n--- Running GPU Test (trial {i + 1}/{trials}) ---")
+            result = run_gpu_with_fallback(model_path, prompt, stop, args)
+            if result:
+                gpu_results.append(result)
 
+    # --- 結果サマリ ---
     print("\n=== Results Summary ===")
-    if cpu_result:
-        print(f"CPU Speed: {cpu_result['tps']:.2f} tokens/sec")
+
+    # CPU 平均
+    cpu_result = None
+    if cpu_results:
+        avg_cpu_tps = sum(r["tps"] for r in cpu_results) / len(cpu_results)
+        cpu_result = {
+            "tps": avg_cpu_tps,
+        }
+        print(f"CPU Speed (avg over {len(cpu_results)} runs): {avg_cpu_tps:.2f} tokens/sec")
     elif not args.gpu_only:
         print("CPU Test Failed")
 
-    if gpu_result:
-        print(f"GPU Speed: {gpu_result['tps']:.2f} tokens/sec (gpu_layers tried: {args.gpu_layers})")
+    # GPU 平均
+    gpu_result = None
+    if gpu_results:
+        avg_gpu_tps = sum(r["tps"] for r in gpu_results) / len(gpu_results)
+        used_layers = {r.get("gpu_layers") for r in gpu_results}
+        gpu_result = {
+            "tps": avg_gpu_tps,
+        }
+
+        # 実際に使われた gpu_layers 情報を表示
+        if len(used_layers) == 1:
+            layers_info = next(iter(used_layers))
+            print(
+                f"GPU Speed (avg over {len(gpu_results)} runs): "
+                f"{avg_gpu_tps:.2f} tokens/sec (gpu_layers={layers_info})"
+            )
+        else:
+            layers_list = sorted(l for l in used_layers if l is not None)
+            print(
+                f"GPU Speed (avg over {len(gpu_results)} runs): "
+                f"{avg_gpu_tps:.2f} tokens/sec (gpu_layers used: {layers_list})"
+            )
     elif not args.cpu_only:
         print("GPU Test Failed")
 
-    if cpu_result and gpu_result and cpu_result['tps'] > 0:
-        speedup = gpu_result['tps'] / cpu_result['tps']
+    # Speedup 計算（CPU / GPU 両方成功した場合）
+    if cpu_result and gpu_result and cpu_result["tps"] > 0:
+        speedup = gpu_result["tps"] / cpu_result["tps"]
         print(f"\nSpeedup: {speedup:.2f}x")
 
 
