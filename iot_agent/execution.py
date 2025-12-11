@@ -250,6 +250,7 @@ def _execute_standard_device_command(
             args=args_dict,
             manual_reply=combined,
             error_text=notice,
+            status=404,
         )
 
     result = _await_device_result(device_id, job_id, timeout=DEVICE_RESULT_TIMEOUT)
@@ -277,6 +278,7 @@ def _execute_standard_device_command(
         args=args_dict,
         manual_reply=timeout_reply,
         error_text=timeout_reply,
+        status=504,
     )
 
 
@@ -360,6 +362,13 @@ def _execute_device_command_sequence(
 
     if not completed_summaries:
         return initial_reply, 200, []
+
+    # マルチデバイス時に一部が無応答でも成功と見なされないように補正する
+    for summary in completed_summaries:
+        if summary.result is None and summary.status == 200:
+            summary.status = 504
+            summary.error_text = summary.error_text or "デバイスから結果を受信できませんでした。"
+            summary.manual_reply = summary.manual_reply or summary.error_text
 
     failure_messages: List[str] = []
     failure_status: Optional[int] = None
@@ -459,6 +468,7 @@ def _execute_agent_device_command(
             instruction=english_instruction,
             is_agent=True,
             error_text=failure_message,
+            status=500,
         )
 
     result = _await_device_result(agent.device_id, job_id, timeout=DEVICE_RESULT_TIMEOUT)
@@ -497,6 +507,7 @@ def _execute_agent_device_command(
         instruction=english_instruction,
         is_agent=True,
         error_text=timeout_reply,
+        status=504,
     )
 
 
