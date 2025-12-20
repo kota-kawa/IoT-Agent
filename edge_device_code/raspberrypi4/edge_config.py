@@ -17,7 +17,7 @@ LLAMA_CONTEXT = int(os.getenv("LLAMA_CONTEXT", "1024"))
 LLAMA_TEMPERATURE = float(os.getenv("LLAMA_TEMPERATURE", "0.2"))
 
 SERVER_BASE_URL = os.getenv("IOT_SERVER_URL", "https://iot-agent.project-kk.com").rstrip("/")
-REQUEST_TIMEOUT = float(os.getenv("IOT_AGENT_HTTP_TIMEOUT", "60"))
+REQUEST_TIMEOUT = float(os.getenv("IOT_AGENT_HTTP_TIMEOUT", "300"))
 POLL_INTERVAL = float(os.getenv("IOT_AGENT_POLL_INTERVAL", "2.0"))
 
 _AUTO_REGISTER_RAW = os.getenv("IOT_AGENT_AUTO_REGISTER")
