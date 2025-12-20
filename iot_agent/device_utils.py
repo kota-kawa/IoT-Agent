@@ -347,7 +347,7 @@ def _enqueue_device_command(
     return job_id
 
 
-def _await_device_result(device_id: str, job_id: str, timeout: float = 60.0) -> Optional[Dict[str, Any]]:
+def _await_device_result(device_id: str, job_id: str, timeout: float = 300.0) -> Optional[Dict[str, Any]]:
     # デバイスから結果が返るまでポーリングし、タイムアウトしたら None
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -367,7 +367,7 @@ def _await_device_result(device_id: str, job_id: str, timeout: float = 60.0) -> 
     return None
 
 
-async def _await_device_result_async(device_id: str, job_id: str, timeout: float = 60.0) -> Optional[Dict[str, Any]]:
+async def _await_device_result_async(device_id: str, job_id: str, timeout: float = 300.0) -> Optional[Dict[str, Any]]:
     # デバイスから結果が返るまでポーリングし、タイムアウトしたら None (Async版)
     deadline = time.time() + timeout
     while time.time() < deadline:
