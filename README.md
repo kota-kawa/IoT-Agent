@@ -1,103 +1,163 @@
 # IoT Agent 管理システム
+IoT Agent Management System
 
 ## 概要
-このリポジトリは、Flask ベースの IoT 管理サーバーとフロントエンドダッシュボード、
-および主要なエッジデバイス向けのリファレンス実装をまとめたものです。
-単一の Python アプリケーション (`app.py`) がバックエンド API と Web UI 配信を担い、
-OpenAI API を利用したチャット型オーケストレーションでデバイス制御を支援します。
-セッション認証済みユーザーは、ブラウザ上のチャットから自然言語で指示を与え、
-登録済みデバイスの機能を呼び出せます。
+このプロジェクトは、Flask ベースの IoT 管理サーバー、シングルページ風ダッシュボード、Jetson / Raspberry Pi / Pico W 向けの参照クライアントをまとめ、自然言語チャットからデバイスジョブを配信できるようにします。バックエンドは `app.py` が担い、API・セッション認証・LLM 連携・静的ファイル配信を単一プロセスで実装しています。
+This project bundles a Flask IoT management server, a single-page style dashboard, and reference clients for Jetson, Raspberry Pi, and Pico W so that natural language chat can dispatch device jobs. The backend lives in `app.py`, which exposes the APIs, session auth, LLM integration, and static asset delivery from one process.
+
+## 主な特長
+- チャット駆動のデバイス制御 — OpenAI Responses API（既定は `gpt-5.1`）を中心に複数モデルへ切り替え可能で、自然言語からエージェントジョブを組み立てます。  
+  - Chat-driven device control — Uses the OpenAI Responses API (default `gpt-5.1`) with optional model switching to map natural language to agent jobs.
+- ブラウザダッシュボード — 左ペインでチャット、右ペインでデバイスカードや登録モーダルを表示し、数秒毎のポーリングで状態を同期します。  
+  - Browser dashboard — Chat on the left, device cards and registration modal on the right, refreshed via multi-second polling.
+- メモリ内ジョブ管理 — `DeviceState` と FIFO キューでジョブ投入、`wait_for_result` や結果要約をサポートし、最大 `MAX_COMPLETED_JOBS` 件までリングバッファに保持します。  
+  - In-memory job tracking — `DeviceState` objects keep FIFO queues, support `wait_for_result`, and rotate completed jobs up to `MAX_COMPLETED_JOBS`.
+- カメラ／マルチモーダル対応 — 画像撮影ジョブ (`capture_camera_photo`) やビジョンモデル連携、LLM 応答の多言語サポートを備えています。  
+  - Camera and multimodal support — Provides `capture_camera_photo`, forwards captures to vision models, and returns multilingual responses.
 
 ## リポジトリ構成
-- `app.py` — Flask アプリ本体。認証、チャット、ジョブ管理、デバイス登録 API を実装。
-- `index.html` / `app.js` / `styles.css` — ダッシュボード UI。チャットサイドバーとデバイスカードを描画。
-- `login.html` — シンプルなパスワード入力画面。
-- `edge_device_code/` — Jetson、Raspberry Pi 4、Raspberry Pi Pico W 向けの Python クライアント例。
-- `Dockerfile` — 本番運用向け Gunicorn コンテナイメージのビルド手順。
-- `docker-compose.yml` — 開発中にホットリロードで Flask サーバーを起動する docker-compose サービス。
-- `requirements.txt` — サーバーが必要とする Python パッケージ。
+- `app.py` — Flask アプリ本体。認証、チャット、ジョブ、デバイス API がここに集中しています。  
+  - `app.py` — Core Flask app hosting auth, chat, job, and device APIs.
+- `index.html` / `app.js` / `styles.css` — UI 全体、チャット、デバイスグリッド、モーダルの描画を担当。  
+  - `index.html` / `app.js` / `styles.css` — Render the UI, chat workflow, device grid, and modal dialogs.
+- `login.html` — パスワード入力画面を提供し、成功時はダッシュボードへ遷移させます。  
+  - `login.html` — Password prompt that routes to the dashboard after a successful login.
+- `static/` — 画像や追加の JS/CSS アセット置き場（`app.py` から静的配信）。  
+  - `static/` — Extra JS/CSS/static assets served by `app.py`.
+- `edge_device_code/` — ハードウェア別クライアントと `device_test/` ユーティリティ（`jetson/`, `raspberrypi4/`, `raspberrypi-pico/`）。  
+  - `edge_device_code/` — Platform-specific clients plus `device_test/` utilities for Jetson, Raspberry Pi 4, and Raspberry Pi Pico W.
+- `Dockerfile` / `docker-compose.yml` — Gunicorn イメージとホットリロード開発環境のビルド定義。  
+  - `Dockerfile` / `docker-compose.yml` — Build the Gunicorn image and the hot-reload dev environment.
+- `requirements.txt` — Flask、dotenv、OpenAI SDK など Python 依存関係を固定。  
+  - `requirements.txt` — Pins Python dependencies like Flask, dotenv, and the OpenAI SDK.
+- `tests/` — 追加予定の pytest 置き場（現状サンプルなし）。  
+  - `tests/` — Reserved for future pytest modules.
+- `view_prompt.txt` / `AGENTS.md` など — LLM プロンプトや運用方針を記述した補助資料。  
+  - `view_prompt.txt` / `AGENTS.md` — Supplemental docs for LLM prompts and operational guidance.
 
-## 実行前の準備
-1. **Python**: バックエンドは Python 3.11 で検証されています。
-2. **依存関係のインストール**:
+## セットアップ手順
+1. Python / venv — Python 3.11 で検証済み。仮想環境を推奨します。  
+   - Python / venv — Verified on Python 3.11; use a virtual environment.
+   ```bash
+   python3.11 -m venv .venv
+   . .venv/bin/activate
+   ```
+2. 依存関係インストール — requirements を一括導入します。  
+   - Install dependencies — Pull all Python requirements.
    ```bash
    pip install -r requirements.txt
    ```
-3. **環境変数 (secrets.env 推奨)**:
-   - `OPENAI_API_KEY` — LLM 呼び出しに使用する OpenAI API キー。
-   - `CLAUDE_API_KEY` または `ANTHROPIC_API_KEY` — Claude 系モデルを選択する場合に使用。
-   - `GEMINI_API_KEY` または `GOOGLE_API_KEY` — Gemini 系モデルを選択する場合に使用。
-   - `GROQ_API_KEY` — Groq (Llama) モデルを選択する場合に使用。
-   - `FLASK_SECRET_KEY` — Flask セッション暗号化キー (未設定時は "change-this-secret")。
-   - `MAX_COMPLETED_JOBS` — 完了ジョブの保持数 (デフォルト 200)。
-   - `DEVICE_RESULT_TIMEOUT` — エッジ結果待機の秒数 (デフォルト 180 秒)。
-   - `APP_PASSWORD` はコード上で `kkawagoe` に固定されています。運用時は `app.py` の定数を変更してください。
+3. 環境変数の準備 — `secrets.env` を作成し、API キーやパスワードを平文で置かないようにします。  
+   - Prepare environment variables — Populate `secrets.env` (or export vars) instead of hardcoding secrets.
+4. FLASK_APP 設定 — ローカル開発では `export FLASK_APP=app` を忘れずに設定してください。  
+   - Set FLASK_APP — Run `export FLASK_APP=app` before invoking Flask locally.
 
-## 起動方法
-### ローカル開発 (Flask リロードモード)
-```bash
-export FLASK_APP=app
-flask run --host=0.0.0.0 --port=5006
-```
-または `docker-compose up --build` で同じコマンドをコンテナ内で実行できます。
+## 実行方法
+- ローカル開発（Flask リロード） — 環境変数を読み込み、デバッグリロードで 5006 番ポートを公開します。  
+  - Local development (Flask reload) — Load env vars and expose port 5006 with the reloader.
+  ```bash
+  export FLASK_APP=app
+  flask run --host=0.0.0.0 --port=5006
+  ```
+- docker-compose — ホットリロード付きの開発用サービスをビルドし、同様のポートで公開します。  
+  - docker-compose — Builds a hot-reload dev container and exposes the same port.
+  ```bash
+  docker-compose up --build
+  ```
+- Docker + Gunicorn — 本番相当の Gunicorn イメージをビルドし、`secrets.env` を指定して実行します。  
+  - Docker + Gunicorn — Build the production-like image and run it with `secrets.env`.
+  ```bash
+  docker build -t iot-agent .
+  docker run --rm -p 5006:5006 --env-file secrets.env iot-agent
+  ```
 
-### Gunicorn (Dockerfile)
-```bash
-docker build -t iot-agent .
-docker run --rm -p 5006:5006 --env-file secrets.env iot-agent
-```
-
-## 認証とフロントエンド
-- ルート (`/`) へアクセスすると、未認証の場合は `login.html` が表示されます。
-- パスワードが正しいとセッションに `authenticated` フラグがセットされ、`index.html` が提供されます。
-- ダッシュボードは左にチャット、右にデバイス一覧カードを表示し、登録ダイアログからデバイスを追加できます。
-
-## チャットと LLM 連携
-- `/api/chat` にユーザーとアシスタントの会話履歴を JSON で送信すると、OpenAI Responses API（デフォルトは `gpt-5.1`、ドロップダウンから即時切替可）を介して
-  日本語回答とデバイスコマンド候補を生成します。
-- エージェント用デバイスが登録済みの場合は、指示文を英語へ変換してエッジ側に送信し、結果を待機・要約します。
-- エージェント不在時は LLM 応答のみを返し、コマンドは実行されません。
-- 周囲確認やカメラ撮影を求める発話があれば、視覚モデル選択時に `capture_camera_photo` を自動キューイングし、Raspberry Pi が Picamera2 で JPEG を撮影して base64 付きでサーバーへ返送します。サーバーは受け取った画像データ URL をビジョン対応 LLM へ渡し、画像内容を踏まえた最終回答を返します（保存先は `IOT_AGENT_CAMERA_DIR`、ウォームアップ秒数は `IOT_AGENT_CAMERA_WARMUP` で調整可能）。
-
-## REST API ダイジェスト
-| メソッド | パス | 説明 |
-| --- | --- | --- |
-| GET | `/` | 認証済みならダッシュボード、未認証ならログイン画面。
-| GET/POST/DELETE | `/api/session` | セッション状態確認、JSON ログイン、ログアウト。
-| POST | `/api/chat` | チャットメッセージを処理し、LLM 応答と実行結果を返却。
-| GET | `/api/models` | 利用可能な LLM モデル一覧と現在の選択を返却。
-| GET | `/api/dependencies` | 主要依存関係と必須環境変数のセット状況を返却（値は返さない）。
-| POST | `/api/devices/register` | 新規デバイス登録 (能力一覧とメタ情報を受け取る)。
-| GET | `/api/devices` | 登録済みデバイス一覧。
-| PATCH | `/api/devices/<device_id>/name` | 表示名の更新。
-| DELETE | `/api/devices/<device_id>` | デバイス削除とキューのクリーンアップ。
-| GET | `/api/devices/<device_id>/jobs` | ジョブ履歴と結果。
-| POST | `/api/devices/<device_id>/jobs` | 手動ジョブ投入。`wait_for_result` で同期待機も可能。
-| GET | `/api/devices/<device_id>/jobs/next` | エッジデバイスが次ジョブを取得するポーリング用。
-| POST | `/api/devices/<device_id>/jobs/result` | エッジ側が実行結果をアップロード。
-| GET | `/api/jobs/<job_id>` | 任意ジョブの状態確認。
-| DELETE | `/api/jobs/<job_id>` | キュー上に残るジョブのキャンセル。
-| GET | `/api/ping` | 動作確認用の簡易ヘルスチェック。
-
-## ジョブとデータ管理
-- デバイス、ジョブ、結果はすべてアプリケーションプロセス内メモリで保持されます。
-- `_DEVICES` に `DeviceState` が保存され、各デバイスは FIFO ジョブキューを持ちます。
-- `_PENDING_JOBS` / `_JOB_METADATA` / `_COMPLETED_JOBS` でジョブ状態を追跡し、完了済みは最大 `MAX_COMPLETED_JOBS` 件にローテーションします。
-- 永続化は行われないため、プロセス再起動で全データが消去されます。
+## 主要環境変数と設定
+- `OPENAI_API_KEY` — OpenAI モデル利用時に必須。  
+  - `OPENAI_API_KEY` — Required for OpenAI models.
+- `CLAUDE_API_KEY` / `ANTHROPIC_API_KEY` — Claude 系モデルを選ぶ場合に設定。  
+  - `CLAUDE_API_KEY` / `ANTHROPIC_API_KEY` — Needed when selecting Claude models.
+- `GEMINI_API_KEY` / `GOOGLE_API_KEY` — Gemini モデル向けの認証情報。  
+  - `GEMINI_API_KEY` / `GOOGLE_API_KEY` — Credentials for Gemini models.
+- `GROQ_API_KEY` — Groq (Llama) モデル利用時に設定。  
+  - `GROQ_API_KEY` — Required for Groq-powered Llama models.
+- `FLASK_SECRET_KEY` — セッション暗号化キー（未設定なら `"change-this-secret"`）。  
+  - `FLASK_SECRET_KEY` — Session secret (defaults to `"change-this-secret"` if unset).
+- `APP_PASSWORD` — ログイン用パスワード。既定は `app.py` 内で `kkawagoe` に固定されているので必ず変更してください。  
+  - `APP_PASSWORD` — Login password (hard-coded to `kkawagoe` in `app.py`; change it for production).
+- `MAX_COMPLETED_JOBS` — 完了ジョブの保持数（デフォルト 200）。  
+  - `MAX_COMPLETED_JOBS` — Number of completed jobs to retain (default 200).
+- `DEVICE_RESULT_TIMEOUT` — エッジデバイス結果を待つ秒数（デフォルト 180）。  
+  - `DEVICE_RESULT_TIMEOUT` — Seconds to wait for device results (default 180).
+- `IOT_AGENT_CAMERA_DIR` / `IOT_AGENT_CAMERA_WARMUP` — 画像保存先とカメラウォームアップ秒数。  
+  - `IOT_AGENT_CAMERA_DIR` / `IOT_AGENT_CAMERA_WARMUP` — Photo directory and camera warm-up duration.
+- `IOT_AGENT_AUTO_APPROVE` — `1` で能力登録を自動承認、`0` で手動レビューを強制。  
+  - `IOT_AGENT_AUTO_APPROVE` — `1` auto-approves capability registration, `0` requires manual review.
 
 ## エッジデバイス クライアント
-- `edge_device_code/jetson/jetson-iot-edge.py` — Jetson 向けサンプル。REST API を通じてジョブ取得と結果送信を行います。
-- `edge_device_code/raspberrypi4/raspberrypi-iot-edge.py` — Raspberry Pi 4 向け。GPIO やセンサー制御をカスタマイズするためのテンプレート。
-- `edge_device_code/raspberrypi-pico/iot-server-edge.py` — MicroPython ベースの Pico W 用実装。Wi-Fi 経由でジョブを処理します。
-- 上記サンプルは `secrets.py` 等でサーバー URL・デバイス ID・認証情報を設定した後、ジョブポーリング (`/jobs/next`) と結果報告 (`/jobs/result`) を行います。
-- Raspberry Pi 4/Jetson エージェントは `IOT_AGENT_AUTO_APPROVE=1`（デフォルト）で起動するとサーバー側の手動承認なしで capabilities を登録します。セキュリティの都合で承認を必須にしたい場合は `IOT_AGENT_AUTO_APPROVE=0` を設定してください。
+- `edge_device_code/jetson/jetson-iot-edge.py` — Jetson Orin/Nano 向け Python クライアント。  
+  - `edge_device_code/jetson/jetson-iot-edge.py` — Python client for Jetson boards.
+- `edge_device_code/raspberrypi4/raspberrypi-iot-edge.py` — Raspberry Pi 4 用テンプレート（GPIO/センサー拡張想定）。  
+  - `edge_device_code/raspberrypi4/raspberrypi-iot-edge.py` — Raspberry Pi 4 template for GPIO and sensors.
+- `edge_device_code/raspberrypi-pico/iot-server-edge.py` — MicroPython ベースの Pico W クライアント。  
+  - `edge_device_code/raspberrypi-pico/iot-server-edge.py` — MicroPython client for Pico W.
+- `edge_device_code/*/device_test/` — カメラ、センサー、接続確認用の個別テストスクリプト。対象ボード上で直接実行してください。  
+  - `edge_device_code/*/device_test/` — Device-specific health checks for camera, sensors, or connectivity; run them on the target board.
+- すべてのクライアントは `/api/devices/<device_id>/jobs/next` でジョブをポーリングし、`/jobs/result` へ結果（必要に応じて base64 画像）を返します。  
+  - Every client polls `/api/devices/<device_id>/jobs/next` and posts results (plus optional base64 images) to `/jobs/result`.
 
-## フロントエンドの特徴
-- `app.js` は 5 秒間隔で `/api/devices` をポーリングし、カード表示やメタ情報を整形します。
-- チャット欄では入力のサニタイズ、折りたたみ表示、通知表示など UI コンポーネントを用意。
-- `styles.css` はダッシュボード全体のレイアウト、カードグリッド、モーダルダイアログ、チャット欄のスタイルを定義します。
+## REST API ハイライト
+| メソッド / Method | パス / Path | 説明 / Description |
+| --- | --- | --- |
+| GET | `/` | 認証済みならダッシュボードを返し、未認証なら `login.html` を提供します。<br>Returns the dashboard for authenticated users or `login.html` otherwise. |
+| GET / POST / DELETE | `/api/session` | セッション状態確認、JSON ログイン、ログアウトをひとまとめに提供します。<br>Checks the session, accepts JSON login, and clears sessions. |
+| POST | `/api/chat` | 会話履歴を LLM へ渡し、応答やキューイングされたデバイスジョブ結果を返却します。<br>Sends the conversation to the LLM and returns responses plus queued job outcomes. |
+| GET | `/api/models` | 選択可能な LLM 一覧と現在の選択情報を返します。<br>Lists all available LLM options and the current selection. |
+| GET | `/api/dependencies` | 主要依存関係と必須環境変数のセット状況を確認するヘルスエンドポイント。<br>Health endpoint listing dependency versions and env-variable availability. |
+| POST | `/api/devices/register` | 新規デバイスメタと capabilities を受け取り、`_DEVICES` に登録します。<br>Registers a device plus its capabilities into `_DEVICES`. |
+| GET | `/api/devices` | 登録済みデバイス一覧と最新ジョブ状態を配信します。<br>Returns the device list with latest job metadata. |
+| PATCH | `/api/devices/<device_id>/name` | デバイス表示名を更新します。<br>Updates a device display name. |
+| GET / POST | `/api/devices/<device_id>/jobs` | ジョブ履歴取得や手動ジョブ投入、`wait_for_result` 指定も可能です。<br>Reads job history or enqueues manual jobs, optionally waiting for completion. |
+| GET | `/api/devices/<device_id>/jobs/next` | エッジが次のジョブをポーリングするためのエンドポイント。<br>Polling endpoint for edge clients to retrieve the next job. |
+| POST | `/api/devices/<device_id>/jobs/result` | 実行結果や添付データをサーバーへ戻します。<br>Uploads execution results and attachments back to the server. |
+| GET / DELETE | `/api/jobs/<job_id>` | 任意ジョブの状態確認およびキャンセル。<br>Fetches a job status or cancels it if still pending. |
+| GET | `/api/ping` | 最小限のヘルスチェック応答。<br>Simple health check endpoint. |
 
-## 開発メモ
-- すべての API はセッション認証を前提としているため、フロントエンドからの fetch は認証後に実行されます。
-- LLM 呼び出しはネットワークに依存し、例外発生時は 500 応答とエラーメッセージを返します。
-- 本番環境では HTTPS 経由での提供、環境変数によるパスワード設定、永続データストアの導入をご検討ください。
+## ジョブとデータ管理
+- `_DEVICES` / `_PENDING_JOBS` / `_JOB_METADATA` / `_COMPLETED_JOBS` はすべてプロセス内メモリに存在し、プロセス再起動でリセットされます。  
+  - `_DEVICES`, `_PENDING_JOBS`, `_JOB_METADATA`, and `_COMPLETED_JOBS` live in-process and reset on restart.
+- 各デバイスには FIFO キューが割り当てられ、最前のジョブをポーリングしたクライアントが責任を持って処理します。  
+  - Each device owns a FIFO queue; the client pulling the head job is responsible for executing it.
+- `MAX_COMPLETED_JOBS` を超える結果は古い順にドロップされ、メモリ使用量を制御します。  
+  - Results beyond `MAX_COMPLETED_JOBS` are dropped oldest-first to bound memory usage.
+
+## フロントエンドと UX
+- `app.js` は 5 秒間隔で `/api/devices` をポーリングし、チャットログとデバイスカードを書き換えます。  
+  - `app.js` polls `/api/devices` every 5 seconds to refresh chat logs and device cards.
+- チャット UI は入力サニタイズ、通知、折りたたみ、モデル切り替えドロップダウンを提供します。  
+  - The chat UI offers input sanitization, notifications, collapsible sections, and a model switcher.
+- `capture_camera_photo` を含むジョブでは、Raspberry Pi などから Picamera2 で撮影した JPEG を base64 で受け取り、LLM へ画像 URL として渡します。  
+  - Jobs containing `capture_camera_photo` receive base64 JPEGs (e.g., from Picamera2) and forward their data URLs to a vision-capable LLM.
+- `styles.css` でグリッド、モーダル、チャットレイアウトを定義し、HTML 側の id と JS セレクタを一致させています。  
+  - `styles.css` defines the grid, modal, and chat layout while keeping HTML ids aligned with JS selectors.
+
+## 開発・テストのヒント
+- まだ統合テストは無いため、将来は `tests/` 以下に pytest を追加してください。  
+  - No central unit tests exist yet; add pytest modules under `tests/` when extending functionality.
+- ハードウェア依存の変更を行う場合は、対象ボード上で `edge_device_code/*/device_test/` のスクリプトを直接実行し、PR で手動検証手順を記録します。  
+  - For hardware-facing changes, run the scripts under `edge_device_code/*/device_test/` on the actual board and document manual validation steps in your PR.
+- LLM や外部 API を変えるときは早めにレビューを依頼し、エッジクライアント所有者が追従できるようにします。  
+  - Request early reviews when changing LLMs or APIs so edge-client owners can adapt quickly.
+- `plan` スキルや AGENTS の指示に従い、作業計画を共有してから大きな変更を進めてください。  
+  - Follow the `plan` skill / AGENTS guidance and communicate plans before landing large changes.
+
+## セキュリティと運用上の注意
+- すべてのシークレットは `secrets.env` またはインフラ側のシークレットマネージャーで管理し、リポジトリに含めないでください。  
+  - Keep all secrets in `secrets.env` or a platform secret manager; never commit them.
+- デプロイ前に `APP_PASSWORD`、`OPENAI_API_KEY` などを更新し、必要に応じてローテーションしてください。  
+  - Rotate `APP_PASSWORD`, `OPENAI_API_KEY`, and other credentials before deployment.
+- `_normalise_capabilities` を通じてデバイス能力スキーマを検証し、想定外のコマンド注入を防ぎます。  
+  - Validate capability schemas via `_normalise_capabilities` to prevent unexpected command injection.
+- 公開環境では TLS 終端、HTTPS 配信、永続ストレージ導入を検討し、プロセス再起動によるデータ喪失を避けます。  
+  - In production, terminate TLS, serve over HTTPS, and add persistence to avoid data loss on restarts.
+- `IOT_AGENT_AUTO_APPROVE=0` とすることで新規デバイスを手動承認し、運用リスクを下げられます。  
+  - Set `IOT_AGENT_AUTO_APPROVE=0` to require manual approval for new devices and reduce operational risk.
