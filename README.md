@@ -163,3 +163,7 @@ This project bundles a Flask IoT management server, a single-page style dashboar
   - In production, terminate TLS, serve over HTTPS, and add persistence to avoid data loss on restarts.
 - `IOT_AGENT_AUTO_APPROVE=0` とすることで新規デバイスを手動承認し、運用リスクを下げられます。  
   - Set `IOT_AGENT_AUTO_APPROVE=0` to require manual approval for new devices and reduce operational risk.
+
+## ライセンス / License
+このプロジェクトは MIT ライセンスの下で公開されています。詳細は [LICENSE.md](LICENSE.md) を参照してください。  
+This project is licensed under the MIT License - see the [LICENSE.md](LICENSE.md) file for details.
