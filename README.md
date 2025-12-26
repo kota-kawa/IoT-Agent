@@ -1,3 +1,5 @@
+<img src="static/README-Logo/IoT-Agent-Logo.png" width="800" alt="IoT Agent Logo">
+
 # IoT Agent 管理システム
 IoT Agent Management System
 
