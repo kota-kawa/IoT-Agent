@@ -1,7 +1,7 @@
+# IoT Agent
+
 <img src="static/README-Logo/IoT-Agent-Logo.png" width="800" alt="IoT Agent Logo">
 
-# IoT Agent 管理システム
-IoT Agent Management System
 
 ## 概要
 このプロジェクトは、Flask ベースの IoT 管理サーバー、シングルページ風ダッシュボード、Jetson / Raspberry Pi / Pico W 向けの参照クライアントをまとめ、自然言語チャットからデバイスジョブを配信できるようにします。バックエンドは `app.py` が担い、API・セッション認証・LLM 連携・静的ファイル配信を単一プロセスで実装しています。
