@@ -8,8 +8,8 @@
 This project bundles a Flask IoT management server, a single-page style dashboard, and reference clients for Jetson, Raspberry Pi, and Pico W so that natural language chat can dispatch device jobs. The backend lives in `app.py`, which exposes the APIs, session auth, LLM integration, and static asset delivery from one process.
 
 ## 主な特長
-- チャット駆動のデバイス制御 — OpenAI Responses API（既定は `gpt-5.1`）を中心に複数モデルへ切り替え可能で、自然言語からエージェントジョブを組み立てます。  
-  - Chat-driven device control — Uses the OpenAI Responses API (default `gpt-5.1`) with optional model switching to map natural language to agent jobs.
+- チャット駆動のデバイス制御 — OpenAI Responses API（既定は `GPT-OSS`）を中心に複数モデルへ切り替え可能で、自然言語からエージェントジョブを組み立てます。  
+  - Chat-driven device control — Uses the OpenAI Responses API (default `GPT-OSS`) with optional model switching to map natural language to agent jobs.
 - ブラウザダッシュボード — 左ペインでチャット、右ペインでデバイスカードや登録モーダルを表示し、数秒毎のポーリングで状態を同期します。  
   - Browser dashboard — Chat on the left, device cards and registration modal on the right, refreshed via multi-second polling.
 - メモリ内ジョブ管理 — `DeviceState` と FIFO キューでジョブ投入、`wait_for_result` や結果要約をサポートし、最大 `MAX_COMPLETED_JOBS` 件までリングバッファに保持します。  

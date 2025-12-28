@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 
 # Multi-Agent-Platform の設定モーダルと揃えるデフォルト
-DEFAULT_SELECTION = {"provider": "openai", "model": "gpt-5.1", "base_url": ""}
+DEFAULT_SELECTION = {"provider": "groq", "model": "openai/gpt-oss-20b", "base_url": ""}
 
 AVAILABLE_MODELS: List[Dict[str, str]] = [
     # OpenAI
