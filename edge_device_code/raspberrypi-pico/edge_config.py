@@ -2,7 +2,7 @@
 共通設定値と secrets.py ロードを切り出したモジュール。
 """
 
-# Flask サーバーへの接続先 URL と API パス
+# サーバーへの接続先 URL と API パス
 BASE_URL = "https://iot-agent.project-kk.com"
 REGISTER_PATH = "/api/devices/register"
 NEXT_PATH = "/api/devices/{device_id}/jobs/next"

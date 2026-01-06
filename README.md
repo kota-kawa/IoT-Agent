@@ -4,8 +4,8 @@
 
 
 ## 概要
-このプロジェクトは、Flask ベースの IoT 管理サーバー、シングルページ風ダッシュボード、Jetson / Raspberry Pi / Pico W 向けの参照クライアントをまとめ、自然言語チャットからデバイスジョブを配信できるようにします。バックエンドは `app.py` が担い、API・セッション認証・LLM 連携・静的ファイル配信を単一プロセスで実装しています。
-This project bundles a Flask IoT management server, a single-page style dashboard, and reference clients for Jetson, Raspberry Pi, and Pico W so that natural language chat can dispatch device jobs. The backend lives in `app.py`, which exposes the APIs, session auth, LLM integration, and static asset delivery from one process.
+このプロジェクトは、FastAPI ベースの IoT 管理サーバー、シングルページ風ダッシュボード、Jetson / Raspberry Pi / Pico W 向けの参照クライアントをまとめ、自然言語チャットからデバイスジョブを配信できるようにします。バックエンドは `app.py` が担い、API・セッション認証・LLM 連携・静的ファイル配信を単一プロセスで実装しています。
+This project bundles a FastAPI IoT management server, a single-page style dashboard, and reference clients for Jetson, Raspberry Pi, and Pico W so that natural language chat can dispatch device jobs. The backend lives in `app.py`, which exposes the APIs, session auth, LLM integration, and static asset delivery from one process.
 
 ## 主な特長
 - チャット駆動のデバイス制御 — OpenAI Responses API（既定は `GPT-OSS`）を中心に複数モデルへ切り替え可能で、自然言語からエージェントジョブを組み立てます。  
@@ -18,8 +18,8 @@ This project bundles a Flask IoT management server, a single-page style dashboar
   - Camera and multimodal support — Provides `capture_camera_photo`, forwards captures to vision models, and returns multilingual responses.
 
 ## リポジトリ構成
-- `app.py` — Flask アプリ本体。認証、チャット、ジョブ、デバイス API がここに集中しています。  
-  - `app.py` — Core Flask app hosting auth, chat, job, and device APIs.
+- `app.py` — FastAPI アプリ本体。認証、チャット、ジョブ、デバイス API がここに集中しています。  
+  - `app.py` — Core FastAPI app hosting auth, chat, job, and device APIs.
 - `index.html` / `app.js` / `styles.css` — UI 全体、チャット、デバイスグリッド、モーダルの描画を担当。  
   - `index.html` / `app.js` / `styles.css` — Render the UI, chat workflow, device grid, and modal dialogs.
 - `login.html` — パスワード入力画面を提供し、成功時はダッシュボードへ遷移させます。  
@@ -28,12 +28,12 @@ This project bundles a Flask IoT management server, a single-page style dashboar
   - `static/` — Extra JS/CSS/static assets served by `app.py`.
 - `edge_device_code/` — ハードウェア別クライアントと `device_test/` ユーティリティ（`jetson/`, `raspberrypi4/`, `raspberrypi-pico/`）。  
   - `edge_device_code/` — Platform-specific clients plus `device_test/` utilities for Jetson, Raspberry Pi 4, and Raspberry Pi Pico W.
-- `Dockerfile` / `docker-compose.yml` — Gunicorn イメージとホットリロード開発環境のビルド定義。  
-  - `Dockerfile` / `docker-compose.yml` — Build the Gunicorn image and the hot-reload dev environment.
-- `requirements.txt` — Flask、dotenv、OpenAI SDK など Python 依存関係を固定。  
-  - `requirements.txt` — Pins Python dependencies like Flask, dotenv, and the OpenAI SDK.
-- `tests/` — 追加予定の pytest 置き場（現状サンプルなし）。  
-  - `tests/` — Reserved for future pytest modules.
+- `Dockerfile` / `docker-compose.yml` — Gunicorn(Uvicorn worker) イメージとホットリロード開発環境のビルド定義。  
+  - `Dockerfile` / `docker-compose.yml` — Build the Gunicorn (Uvicorn worker) image and the hot-reload dev environment.
+- `requirements.txt` — FastAPI、dotenv、OpenAI SDK など Python 依存関係を固定。  
+  - `requirements.txt` — Pins Python dependencies like FastAPI, dotenv, and the OpenAI SDK.
+- `tests/` — pytest モジュール置き場。FastAPI ルーティングの基本テストを含みます。  
+  - `tests/` — pytest modules, including basic FastAPI routing coverage.
 - `view_prompt.txt` / `AGENTS.md` など — LLM プロンプトや運用方針を記述した補助資料。  
   - `view_prompt.txt` / `AGENTS.md` — Supplemental docs for LLM prompts and operational guidance.
 
@@ -51,15 +51,12 @@ This project bundles a Flask IoT management server, a single-page style dashboar
    ```
 3. 環境変数の準備 — `secrets.env` を作成し、API キーやパスワードを平文で置かないようにします。  
    - Prepare environment variables — Populate `secrets.env` (or export vars) instead of hardcoding secrets.
-4. FLASK_APP 設定 — ローカル開発では `export FLASK_APP=app` を忘れずに設定してください。  
-   - Set FLASK_APP — Run `export FLASK_APP=app` before invoking Flask locally.
 
 ## 実行方法
-- ローカル開発（Flask リロード） — 環境変数を読み込み、デバッグリロードで 5006 番ポートを公開します。  
-  - Local development (Flask reload) — Load env vars and expose port 5006 with the reloader.
+- ローカル開発（FastAPI リロード） — 環境変数を読み込み、リロード付きで 5006 番ポートを公開します。  
+  - Local development (FastAPI reload) — Load env vars and expose port 5006 with the reloader.
   ```bash
-  export FLASK_APP=app
-  flask run --host=0.0.0.0 --port=5006
+  uvicorn app:app --host=0.0.0.0 --port=5006 --reload
   ```
 - docker-compose — ホットリロード付きの開発用サービスをビルドし、同様のポートで公開します。  
   - docker-compose — Builds a hot-reload dev container and exposes the same port.
@@ -143,8 +140,8 @@ This project bundles a Flask IoT management server, a single-page style dashboar
   - `styles.css` defines the grid, modal, and chat layout while keeping HTML ids aligned with JS selectors.
 
 ## 開発・テストのヒント
-- まだ統合テストは無いため、将来は `tests/` 以下に pytest を追加してください。  
-  - No central unit tests exist yet; add pytest modules under `tests/` when extending functionality.
+- `tests/` に FastAPI ルーティングの基本テストを追加済みです。必要に応じて機能追加時に拡張してください。  
+  - Basic FastAPI routing tests live under `tests/`; extend them when adding functionality.
 - ハードウェア依存の変更を行う場合は、対象ボード上で `edge_device_code/*/device_test/` のスクリプトを直接実行し、PR で手動検証手順を記録します。  
   - For hardware-facing changes, run the scripts under `edge_device_code/*/device_test/` on the actual board and document manual validation steps in your PR.
 - LLM や外部 API を変えるときは早めにレビューを依頼し、エッジクライアント所有者が追従できるようにします。  
