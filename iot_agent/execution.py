@@ -15,7 +15,7 @@ from .device_utils import (
     _format_result_for_prompt,
 )
 from .llm import (
-    _call_llm_and_parse,
+    _call_llm_and_parse_async,
     _call_llm_text,
     _client,
     _sanitize_messages,
@@ -845,11 +845,11 @@ def _structured_multi_command_followup_prompt(
     return {"model": resolved_model, "input": messages}
 
 
-def _chat_via_legacy(messages: List[Dict[str, str]]) -> Tuple[Dict[str, Any], int]:
+async def _chat_via_legacy(messages: List[Dict[str, str]]) -> Tuple[Dict[str, Any], int]:
     # エージェントデバイス不在時にレガシーフローでチャットを処理
 
     client = _client()
-    parsed_response = _call_llm_and_parse(client, messages)
+    parsed_response = await _call_llm_and_parse_async(client, messages)
 
     reply_message = parsed_response.get("reply")
     if not isinstance(reply_message, str):

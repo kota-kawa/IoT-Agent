@@ -20,10 +20,10 @@ This project bundles a FastAPI IoT management server, a single-page style dashbo
 ## リポジトリ構成
 - `app.py` — FastAPI アプリ本体。認証、チャット、ジョブ、デバイス API がここに集中しています。  
   - `app.py` — Core FastAPI app hosting auth, chat, job, and device APIs.
-- `index.html` / `app.js` / `styles.css` — UI 全体、チャット、デバイスグリッド、モーダルの描画を担当。  
-  - `index.html` / `app.js` / `styles.css` — Render the UI, chat workflow, device grid, and modal dialogs.
-- `login.html` — パスワード入力画面を提供し、成功時はダッシュボードへ遷移させます。  
-  - `login.html` — Password prompt that routes to the dashboard after a successful login.
+- `pages/index.html` / `static/app.js` / `static/styles.css` — UI 全体、チャット、デバイスグリッド、モーダルの描画を担当。  
+  - `pages/index.html` / `static/app.js` / `static/styles.css` — Render the UI, chat workflow, device grid, and modal dialogs.
+- `pages/login.html` — パスワード入力画面を提供し、成功時はダッシュボードへ遷移させます。  
+  - `pages/login.html` — Password prompt that routes to the dashboard after a successful login.
 - `static/` — 画像や追加の JS/CSS アセット置き場（`app.py` から静的配信）。  
   - `static/` — Extra JS/CSS/static assets served by `app.py`.
 - `edge_device_code/` — ハードウェア別クライアントと `device_test/` ユーティリティ（`jetson/`, `raspberrypi4/`, `raspberrypi-pico/`）。  
@@ -107,7 +107,7 @@ This project bundles a FastAPI IoT management server, a single-page style dashbo
 ## REST API ハイライト
 | メソッド / Method | パス / Path | 説明 / Description |
 | --- | --- | --- |
-| GET | `/` | 認証済みならダッシュボードを返し、未認証なら `login.html` を提供します。<br>Returns the dashboard for authenticated users or `login.html` otherwise. |
+| GET | `/` | 認証済みならダッシュボードを返し、未認証なら `pages/login.html` を提供します。<br>Returns the dashboard for authenticated users or `pages/login.html` otherwise. |
 | GET / POST / DELETE | `/api/session` | セッション状態確認、JSON ログイン、ログアウトをひとまとめに提供します。<br>Checks the session, accepts JSON login, and clears sessions. |
 | POST | `/api/chat` | 会話履歴を LLM へ渡し、応答やキューイングされたデバイスジョブ結果を返却します。<br>Sends the conversation to the LLM and returns responses plus queued job outcomes. |
 | GET | `/api/models` | 選択可能な LLM 一覧と現在の選択情報を返します。<br>Lists all available LLM options and the current selection. |
@@ -130,14 +130,14 @@ This project bundles a FastAPI IoT management server, a single-page style dashbo
   - Results beyond `MAX_COMPLETED_JOBS` are dropped oldest-first to bound memory usage.
 
 ## フロントエンドと UX
-- `app.js` は 5 秒間隔で `/api/devices` をポーリングし、チャットログとデバイスカードを書き換えます。  
-  - `app.js` polls `/api/devices` every 5 seconds to refresh chat logs and device cards.
+- `static/app.js` は 5 秒間隔で `/api/devices` をポーリングし、チャットログとデバイスカードを書き換えます。  
+  - `static/app.js` polls `/api/devices` every 5 seconds to refresh chat logs and device cards.
 - チャット UI は入力サニタイズ、通知、折りたたみ、モデル切り替えドロップダウンを提供します。  
   - The chat UI offers input sanitization, notifications, collapsible sections, and a model switcher.
 - `capture_camera_photo` を含むジョブでは、Raspberry Pi などから Picamera2 で撮影した JPEG を base64 で受け取り、LLM へ画像 URL として渡します。  
   - Jobs containing `capture_camera_photo` receive base64 JPEGs (e.g., from Picamera2) and forward their data URLs to a vision-capable LLM.
-- `styles.css` でグリッド、モーダル、チャットレイアウトを定義し、HTML 側の id と JS セレクタを一致させています。  
-  - `styles.css` defines the grid, modal, and chat layout while keeping HTML ids aligned with JS selectors.
+- `static/styles.css` でグリッド、モーダル、チャットレイアウトを定義し、HTML 側の id と JS セレクタを一致させています。  
+  - `static/styles.css` defines the grid, modal, and chat layout while keeping HTML ids aligned with JS selectors.
 
 ## 開発・テストのヒント
 - `tests/` に FastAPI ルーティングの基本テストを追加済みです。必要に応じて機能追加時に拡張してください。  

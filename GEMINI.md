@@ -42,8 +42,8 @@ docker-compose up --build
 - **根ディレクトリ**:
   - `app.py`: アプリケーションのエントリーポイント。FastAPIサーバー定義、ルートハンドリング。
   - `model_selection.py`: LLMモデルの選択ロジック。
-  - `index.html`, `login.html`: フロントエンドUI。
-  - `app.js`, `styles.css`: フロントエンドのロジックとスタイル。
+  - `pages/index.html`, `pages/login.html`: フロントエンドUI。
+  - `static/app.js`, `static/styles.css`: フロントエンドのロジックとスタイル。
   - `requirements.txt`: Python依存パッケージリスト。
   - `Dockerfile`, `docker-compose.yml`: コンテナ化設定。
 

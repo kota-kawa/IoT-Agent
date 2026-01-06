@@ -32,7 +32,7 @@ from iot_agent.device_utils import (
 )
 from iot_agent.execution import _chat_via_legacy, _execute_device_command_sequence
 from iot_agent.llm import (
-    _call_llm_and_parse,
+    _call_llm_and_parse_async,
     _call_llm_for_conversation_review,
     _client,
     _latest_user_turn,
@@ -184,8 +184,11 @@ def _json_response(payload: Dict[str, Any], status_code: int = 200) -> JSONRespo
     return JSONResponse(content=payload, status_code=status_code)
 
 
-def _file_response(filename: str) -> FileResponse:
-    return FileResponse(_BASE_DIR / filename)
+_PAGES_DIR = _BASE_DIR / "pages"
+
+
+def _page_response(filename: str) -> FileResponse:
+    return FileResponse(_PAGES_DIR / filename)
 
 
 @app.get("/")
@@ -194,7 +197,7 @@ async def index(request: Request):
 
     if not request.session.get("authenticated"):
         return RedirectResponse(url="/login", status_code=302)
-    return _file_response("index.html")
+    return _page_response("index.html")
 
 
 @app.get("/login")
@@ -203,7 +206,7 @@ async def login_get(request: Request):
 
     if request.session.get("authenticated"):
         return RedirectResponse(url="/", status_code=302)
-    return _file_response("login.html")
+    return _page_response("login.html")
 
 
 @app.post("/login")
@@ -226,22 +229,22 @@ async def logout(request: Request):
 
 @app.get("/app.js")
 async def app_js():
-    return _file_response("app.js")
+    return FileResponse(_BASE_DIR / "static" / "app.js")
 
 
 @app.get("/styles.css")
 async def styles_css():
-    return _file_response("styles.css")
+    return FileResponse(_BASE_DIR / "static" / "styles.css")
 
 
 @app.get("/index.html")
 async def index_html():
-    return _file_response("index.html")
+    return _page_response("index.html")
 
 
 @app.get("/login.html")
 async def login_html():
-    return _file_response("login.html")
+    return _page_response("login.html")
 
 
 @app.get("/api/session")
@@ -402,7 +405,7 @@ async def chat(request: Request):
     try:
         if agent_device:
             client = _client()
-            parsed_response = _call_llm_and_parse(client, formatted_messages)
+            parsed_response = await _call_llm_and_parse_async(client, formatted_messages)
 
             reply_message = parsed_response.get("reply")
             if not isinstance(reply_message, str):
@@ -454,7 +457,7 @@ async def chat(request: Request):
                 )
                 response_payload = {"reply": final_reply, "images": images}
         else:
-            response_payload, status = _chat_via_legacy(formatted_messages)
+            response_payload, status = await _chat_via_legacy(formatted_messages)
     except Exception as exc:
         response_payload, status = _llm_unavailable_response(exc)
 

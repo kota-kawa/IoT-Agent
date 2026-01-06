@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 - `app.py` — FastAPI backend orchestrating chat-driven device jobs.
-- `app.js`, `index.html`, `styles.css`, `login.html` — dashboard UI and auth screens served as static assets.
+- `static/app.js`, `static/styles.css`, `pages/index.html`, `pages/login.html` — dashboard UI and auth screens served as static assets.
 - `edge_device_code/` — hardware-specific client references; note `jetson/`, `raspberrypi4/`, and `raspberrypi-pico/` with `device_test/` utilities.
 - `Dockerfile` and `docker-compose.yml` define container targets; `requirements.txt` tracks server dependencies.
 
@@ -15,7 +15,7 @@
 
 ## Coding Style & Naming Conventions
 - Python follows PEP 8 with 4-space indents, dataclasses for state, and explicit type hints; keep module-level constants in screaming snake case (e.g., `DEVICE_RESULT_TIMEOUT`).
-- JavaScript in `app.js` uses `const`/`let`, arrow utilities, and 2-space indents; prefer descriptive functions such as `formatRelativeTime`.
+- JavaScript in `static/app.js` uses `const`/`let`, arrow utilities, and 2-space indents; prefer descriptive functions such as `formatRelativeTime`.
 - Align HTML ids with JS selectors (`#deviceGrid`, `#registerNotice`) and avoid inline styling.
 - Configuration secrets belong in `secrets.env`; do not persist environment-specific values in source.
 
