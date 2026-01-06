@@ -11,8 +11,13 @@ from mcp.types import (
     EmbeddedResource
 )
 import mcp.types as types
-from iot_agent.state import _DEVICES, _PENDING_JOBS, _JOB_METADATA, _COMPLETED_JOBS
-from iot_agent.device_utils import _enqueue_device_command, _await_device_result, _await_device_result_async, _device_supports_capability, _serialize_device
+from iot_agent.device_utils import (
+    _await_device_result_async,
+    _device_supports_capability,
+    _enqueue_device_command,
+    _serialize_device,
+)
+from iot_agent.storage import get_store
 
 # Create the server instance
 mcp_server = Server("iot-agent")
@@ -20,7 +25,8 @@ mcp_server = Server("iot-agent")
 @mcp_server.list_resources()
 async def list_resources() -> list[Resource]:
     resources = []
-    for device_id, device in _DEVICES.items():
+    for device in get_store().list_devices():
+        device_id = device.device_id
         display_name = device.meta.get("display_name", device_id)
         resources.append(
             Resource(
@@ -43,7 +49,7 @@ async def read_resource(uri: str) -> str | bytes:
         raise ValueError(f"Invalid URI: {uri}")
         
     device_id = parts[0]
-    device = _DEVICES.get(device_id)
+    device = get_store().get_device(device_id)
     if not device:
         raise ValueError(f"Device not found: {device_id}")
         
@@ -53,7 +59,7 @@ async def read_resource(uri: str) -> str | bytes:
 async def list_tools() -> list[Tool]:
     tools = []
     
-    device_ids = list(_DEVICES.keys())
+    device_ids = [device.device_id for device in get_store().list_devices()]
     
     # Generic control tool with dynamic device_id enum
     tools.append(Tool(
@@ -106,7 +112,7 @@ async def list_tools() -> list[Tool]:
 @mcp_server.call_tool()
 async def call_tool(name: str, arguments: Any) -> list[types.TextContent | types.ImageContent | types.EmbeddedResource]:
     if name == "get_device_list":
-        devices = [_serialize_device(d) for d in _DEVICES.values()]
+        devices = [_serialize_device(d) for d in get_store().list_devices()]
         return [TextContent(type="text", text=json.dumps(devices, ensure_ascii=False, indent=2))]
 
     if name == "control_device":
@@ -119,7 +125,7 @@ async def call_tool(name: str, arguments: Any) -> list[types.TextContent | types
         if not device_id:
              return [TextContent(type="text", text="エラー: device_id は必須です")]
         
-        device = _DEVICES.get(device_id)
+        device = get_store().get_device(device_id)
         if not device:
              return [TextContent(type="text", text=f"エラー: デバイス '{device_id}' が見つかりません")]
              

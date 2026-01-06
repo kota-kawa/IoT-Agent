@@ -1,7 +1,7 @@
 from typing import Any, Dict, List, Optional, Tuple
 
 from .device_utils import _first_device_id
-from .state import _DEVICES
+from .storage import get_store
 
 
 def _validate_device_command(command: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
@@ -19,18 +19,20 @@ def _validate_device_command(command: Dict[str, Any]) -> Tuple[Optional[Dict[str
         return None
 
     raw_device_id = command.get("device_id")
+    devices = get_store().list_devices()
+    device_ids = {device.device_id for device in devices}
     device_id: Optional[str] = None
     if isinstance(raw_device_id, str) and raw_device_id.strip():
         device_id = raw_device_id.strip()
-    elif len(_DEVICES) == 1:
+    elif len(devices) == 1:
         device_id = _first_device_id()
 
     if not device_id:
-        if _DEVICES:
+        if devices:
             return None, "複数のデバイスが登録されているため、device_id を指定できないコマンドは実行しません。"
         return None, "実行可能なデバイスが登録されていません。"
 
-    if device_id not in _DEVICES:
+    if device_id not in device_ids:
         return None, f"不明な device_id '{device_id}' が指定されたため処理を中止しました。"
 
     name = command.get("name")
@@ -44,7 +46,7 @@ def _validate_device_command(command: Dict[str, Any]) -> Tuple[Optional[Dict[str
         return None, "device_command の args はオブジェクトである必要があります。"
 
     validated_name = name.strip()
-    device = _DEVICES.get(device_id)
+    device = get_store().get_device(device_id)
     capability_names = {
         str(cap.get("name")).strip()
         for cap in (device.capabilities if device else [])

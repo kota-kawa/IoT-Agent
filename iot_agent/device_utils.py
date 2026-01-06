@@ -1,18 +1,11 @@
 import json
 import time
-import uuid
 import asyncio
-from typing import Any, Deque, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
-from .config import AGENT_CAPABILITY_NAME, AGENT_ROLE_VALUE, MAX_COMPLETED_JOBS
+from .config import AGENT_CAPABILITY_NAME, AGENT_ROLE_VALUE
 from .models import DeviceState
-from .state import (
-    _COMPLETED_JOBS,
-    _COMPLETED_JOB_ORDER,
-    _DEVICES,
-    _JOB_METADATA,
-    _PENDING_JOBS,
-)
+from .storage import get_store
 
 
 def _normalise_capability_params(params: Any) -> List[Dict[str, Any]]:
@@ -103,7 +96,8 @@ def _normalise_capabilities(raw_capabilities: Any) -> List[Dict[str, Any]]:
 
 def _first_device_id() -> Optional[str]:
     # 最初に登録されたデバイス ID を取得（ダッシュボード表示用）
-    return next(iter(_DEVICES), None)
+    devices = get_store().list_devices()
+    return devices[0].device_id if devices else None
 
 
 def _device_is_agent(device: DeviceState) -> bool:
@@ -124,7 +118,7 @@ def _device_is_agent(device: DeviceState) -> bool:
 
 def _agent_device() -> Optional[DeviceState]:
     # 登録デバイスの中からエージェント役割を担うものを検索する
-    for device in _DEVICES.values():
+    for device in get_store().list_devices():
         if _device_is_agent(device):
             return device
     return None
@@ -239,24 +233,25 @@ def _describe_device_role(device: DeviceState) -> List[str]:
 
 def _build_device_context() -> str:
     # LLM へのプロンプトに用いる全デバイスの状況サマリーを構築
-    if not _DEVICES:
+    devices = get_store().list_devices()
+    if not devices:
         return "No devices are currently registered."
 
     lines: List[str] = []
     
     # デバイス数に応じた指示を記載
-    if len(_DEVICES) == 1:
-        only_device = next(iter(_DEVICES.values()))
+    if len(devices) == 1:
+        only_device = devices[0]
         lines.append(f"[IMPORTANT] Only ONE device is registered: {only_device.device_id}")
         lines.append("Always use this device without asking for clarification.")
         lines.append("")
     else:
-        lines.append(f"[INFO] {len(_DEVICES)} devices are registered.")
+        lines.append(f"[INFO] {len(devices)} devices are registered.")
         lines.append("If the user's request clearly maps to a specific device or capability, execute immediately without confirmation.")
         lines.append("Only ask for clarification when there are genuinely ambiguous choices that cannot be inferred from context.")
         lines.append("")
     
-    for device in _DEVICES.values():
+    for device in devices:
         lines.append(f"Device ID: {device.device_id}")
         display_name = device.meta.get("display_name") if isinstance(device.meta, dict) else None
         if isinstance(display_name, str) and display_name.strip():
@@ -272,7 +267,8 @@ def _build_device_context() -> str:
             "  Last seen: "
             + time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(device.last_seen))
         )
-        lines.append(f"  Queue depth: {len(device.job_queue)}")
+        queue_depth = device.queue_depth if device.queue_depth else len(device.job_queue)
+        lines.append(f"  Queue depth: {queue_depth}")
         lines.append("  Capabilities:")
         for cap in device.capabilities:
             params = cap.get("params") or []
@@ -305,85 +301,52 @@ def _build_device_context() -> str:
     return "\n".join(lines).strip()
 
 
-def _store_completed_job(job_id: Optional[str], result: Dict[str, Any]) -> None:
-    # 完了済みジョブの結果を保持し、必要に応じて古いものを破棄
-
-    if not isinstance(job_id, str) or not job_id:
-        return
-
-    _COMPLETED_JOBS[job_id] = dict(result)
-    try:
-        _COMPLETED_JOB_ORDER.remove(job_id)
-    except ValueError:
-        pass
-    _COMPLETED_JOB_ORDER.append(job_id)
-
-    while len(_COMPLETED_JOB_ORDER) > MAX_COMPLETED_JOBS:
-        oldest = _COMPLETED_JOB_ORDER.popleft()
-        _COMPLETED_JOBS.pop(oldest, None)
-        _JOB_METADATA.pop(oldest, None)
-
-
 def _enqueue_device_command(
     device_id: str, command: Dict[str, Any], *, source: str = "internal"
 ) -> Optional[str]:
     # 指定デバイスのジョブキューへコマンドを追加し、job_id を返す
-    device = _DEVICES.get(device_id)
-    if not device:
-        return None
-
-    job_id = uuid.uuid4().hex
-    device.job_queue.append({"job_id": job_id, "command": command})
-    device.last_seen = time.time()
-    _PENDING_JOBS[job_id] = device_id
-    _JOB_METADATA[job_id] = {
-        "job_id": job_id,
-        "device_id": device_id,
-        "command": dict(command),
-        "queued_at": time.time(),
-        "status": "pending",
-        "source": source,
-    }
-    return job_id
+    return get_store().enqueue_job(device_id, command, source)
 
 
 def _await_device_result(device_id: str, job_id: str, timeout: float = 300.0) -> Optional[Dict[str, Any]]:
     # デバイスから結果が返るまでポーリングし、タイムアウトしたら None
     deadline = time.time() + timeout
+    store = get_store()
+
+    existing = store.get_completed_result(job_id)
+    if existing:
+        return existing
+
     while time.time() < deadline:
-        device = _DEVICES.get(device_id)
-        if not device:
-            return None
-        result = device.job_results.pop(job_id, None)
+        result = store.pop_wait_result(device_id, job_id)
         if result:
-            _PENDING_JOBS.pop(job_id, None)
-            metadata = _JOB_METADATA.get(job_id)
-            if metadata is not None:
-                metadata["status"] = "completed"
-                metadata["completed_at"] = time.time()
-            _store_completed_job(job_id, result)
             return result
         time.sleep(0.2)
+
+    existing = store.get_completed_result(job_id)
+    if existing:
+        return existing
     return None
 
 
 async def _await_device_result_async(device_id: str, job_id: str, timeout: float = 300.0) -> Optional[Dict[str, Any]]:
     # デバイスから結果が返るまでポーリングし、タイムアウトしたら None (Async版)
     deadline = time.time() + timeout
+    store = get_store()
+
+    existing = store.get_completed_result(job_id)
+    if existing:
+        return existing
+
     while time.time() < deadline:
-        device = _DEVICES.get(device_id)
-        if not device:
-            return None
-        result = device.job_results.pop(job_id, None)
+        result = store.pop_wait_result(device_id, job_id)
         if result:
-            _PENDING_JOBS.pop(job_id, None)
-            metadata = _JOB_METADATA.get(job_id)
-            if metadata is not None:
-                metadata["status"] = "completed"
-                metadata["completed_at"] = time.time()
-            _store_completed_job(job_id, result)
             return result
         await asyncio.sleep(0.2)
+
+    existing = store.get_completed_result(job_id)
+    if existing:
+        return existing
     return None
 
 
@@ -410,7 +373,7 @@ def _serialize_device(device: DeviceState) -> Dict[str, Any]:
         "capabilities": device.capabilities,
         "meta": device.meta,
         "action_catalog": _action_catalog_for_device(device),
-        "queue_depth": len(device.job_queue),
+        "queue_depth": device.queue_depth if device.queue_depth else len(device.job_queue),
         "last_seen": device.last_seen,
         "registered_at": device.registered_at,
         "last_result": safe_result,
@@ -420,7 +383,7 @@ def _serialize_device(device: DeviceState) -> Dict[str, Any]:
 
 def _device_label_for_prompt(device_id: str) -> str:
     # ユーザーへの説明に使うラベル文字列を生成
-    device = _DEVICES.get(device_id)
+    device = get_store().get_device(device_id)
     if not device:
         return device_id
     display_name = device.meta.get("display_name") if isinstance(device.meta, dict) else None
