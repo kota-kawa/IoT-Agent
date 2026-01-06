@@ -12,4 +12,4 @@ COPY . ./
 
 EXPOSE 5006
 
-CMD ["gunicorn", "-b", "0.0.0.0:5006", "app:app"]
+CMD ["gunicorn", "-k", "uvicorn.workers.UvicornWorker", "-b", "0.0.0.0:5006", "app:app"]

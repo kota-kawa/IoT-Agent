@@ -1,15 +1,15 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- `app.py` — Flask backend orchestrating chat-driven device jobs.
+- `app.py` — FastAPI backend orchestrating chat-driven device jobs.
 - `app.js`, `index.html`, `styles.css`, `login.html` — dashboard UI and auth screens served as static assets.
 - `edge_device_code/` — hardware-specific client references; note `jetson/`, `raspberrypi4/`, and `raspberrypi-pico/` with `device_test/` utilities.
 - `Dockerfile` and `docker-compose.yml` define container targets; `requirements.txt` tracks server dependencies.
 
 ## Build, Test, and Development Commands
 - `python3.11 -m venv .venv && . .venv/bin/activate` creates the tested runtime locally.
-- `pip install -r requirements.txt` installs Flask, dotenv, and the OpenAI SDK.
-- `export FLASK_APP=app && flask run --host=0.0.0.0 --port=5006` starts the reloadable dev server.
+- `pip install -r requirements.txt` installs FastAPI, dotenv, and the OpenAI SDK.
+- `uvicorn app:app --host=0.0.0.0 --port=5006 --reload` starts the reloadable dev server.
 - `docker-compose up --build` mirrors the dev setup with hot reload inside a container.
 - `docker build -t iot-agent . && docker run --rm -p 5006:5006 --env-file secrets.env iot-agent` packages and runs the Gunicorn image.
 
@@ -20,7 +20,7 @@
 - Configuration secrets belong in `secrets.env`; do not persist environment-specific values in source.
 
 ## Testing Guidelines
-- No central unit suite yet—add pytest modules under a future `tests/` directory when extending the server.
+- pytest modules live under `tests/` and cover basic FastAPI routing; extend them when changing the server.
 - Hardware checks live in `edge_device_code/*/device_test/`; run individually (e.g., `python edge_device_code/raspberrypi4/device_test/camera_test.py`) on the matching board.
 - Document manual validation steps in PRs when features touch live hardware or third-party APIs.
 

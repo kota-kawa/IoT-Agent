@@ -1,12 +1,12 @@
 # IoT Agent プロジェクト
 
 ## プロジェクト概要
-このプロジェクトは、FlaskベースのIoT管理サーバーと、それに対応するエッジデバイス（Jetson, Raspberry Pi, Picoなど）の制御システムです。
+このプロジェクトは、FastAPIベースのIoT管理サーバーと、それに対応するエッジデバイス（Jetson, Raspberry Pi, Picoなど）の制御システムです。
 ユーザーはWebインターフェース（チャット）を通じて自然言語で指示を出し、LLM（OpenAI, Anthropic, Geminiなど）がそれを解釈して適切なデバイスコマンドを生成・実行します。
 
 ## 技術スタック
 - **言語**: Python 3.11+, JavaScript (Frontend)
-- **フレームワーク**: Flask (Backend)
+- **フレームワーク**: FastAPI (Backend)
 - **AI/LLM**: OpenAI API, Anthropic API, Google Gemini API
 - **エッジデバイス**: Python (Jetson, Raspberry Pi), MicroPython (Pico W)
 - **コンテナ化**: Docker, Docker Compose
@@ -26,11 +26,10 @@
    `secrets.env` または環境変数で API キーを設定してください。
    ```bash
    export OPENAI_API_KEY="sk-..."
-   export FLASK_APP=app
    ```
 3. サーバー起動:
    ```bash
-   flask run --host=0.0.0.0 --port=5006
+   uvicorn app:app --host=0.0.0.0 --port=5006 --reload
    ```
 
 ### Dockerでの実行
@@ -41,7 +40,7 @@ docker-compose up --build
 ## ディレクトリ構成
 
 - **根ディレクトリ**:
-  - `app.py`: アプリケーションのエントリーポイント。Flaskサーバー定義、ルートハンドリング。
+  - `app.py`: アプリケーションのエントリーポイント。FastAPIサーバー定義、ルートハンドリング。
   - `model_selection.py`: LLMモデルの選択ロジック。
   - `index.html`, `login.html`: フロントエンドUI。
   - `app.js`, `styles.css`: フロントエンドのロジックとスタイル。

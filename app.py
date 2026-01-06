@@ -1,51 +1,61 @@
-import json
-import os
-import requests
-import time
-import threading
-import queue
-import uuid
 import asyncio
-import anyio
+import json
+import logging
+import os
+import queue
+import threading
+import time
+import uuid
 from collections import deque
 from importlib import metadata
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from flask import Flask, jsonify, redirect, request, session, url_for, Response, stream_with_context
-from pydantic import TypeAdapter
+import anyio
+import requests
+from fastapi import FastAPI, Request
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from mcp.types import JSONRPCMessage
-from iot_agent.mcp_server import mcp_server
+from pydantic import TypeAdapter
+from starlette.middleware.sessions import SessionMiddleware
 
 from iot_agent.config import APP_PASSWORD, DEVICE_RESULT_TIMEOUT, SECRET_KEY
 from iot_agent.device_utils import (
     _agent_device,
     _await_device_result,
+    _device_supports_capability,
     _enqueue_device_command,
     _normalise_capabilities,
     _serialize_device,
     _store_completed_job,
-    _device_supports_capability,
 )
 from iot_agent.execution import _chat_via_legacy, _execute_device_command_sequence
 from iot_agent.llm import (
     _call_llm_and_parse,
     _call_llm_for_conversation_review,
     _client,
-    _normalise_conversation_messages,
     _latest_user_turn,
+    _normalise_conversation_messages,
 )
+from iot_agent.mcp_server import mcp_server
+from iot_agent.models import DeviceState
+from iot_agent.state import _COMPLETED_JOBS, _DEVICES, _JOB_METADATA, _PENDING_JOBS
+from iot_agent.validation import _validate_device_command, _validate_device_command_sequence
 from model_selection import (
     apply_model_selection,
     current_available_models,
     provider_supports_vision,
     update_override,
 )
-from iot_agent.models import DeviceState
-from iot_agent.state import _COMPLETED_JOBS, _DEVICES, _JOB_METADATA, _PENDING_JOBS
-from iot_agent.validation import _validate_device_command, _validate_device_command_sequence
 
-app = Flask(__name__, static_folder=".", static_url_path="")
-app.secret_key = SECRET_KEY
+app = FastAPI()
+app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
+
+_BASE_DIR = Path(__file__).resolve().parent
+app.mount("/static", StaticFiles(directory=_BASE_DIR / "static"), name="static")
+
+logger = logging.getLogger("iot-agent")
 
 # Default platform base for pushing model changes back to Multi-Agent-Platform
 _PLATFORM_BASE = os.getenv("MULTI_AGENT_PLATFORM_BASE", "http://web:5050").rstrip("/")
@@ -76,6 +86,7 @@ _ENV_EN_KEYWORDS = [
     "snapshot",
     "camera",
 ]
+
 
 def _iter_platform_bases() -> list[str]:
     """Return potential Multi-Agent Platform bases for sync in priority order."""
@@ -131,7 +142,7 @@ def _dependency_report() -> Dict[str, Any]:
     """Return a lightweight snapshot of dependency and environment readiness."""
 
     packages = {}
-    for pkg in ("flask", "openai", "python-dotenv"):
+    for pkg in ("fastapi", "uvicorn", "openai", "python-dotenv"):
         try:
             packages[pkg] = metadata.version(pkg)
         except metadata.PackageNotFoundError:
@@ -161,7 +172,7 @@ def _dependency_report() -> Dict[str, Any]:
 def _llm_unavailable_response(exc: Exception) -> Tuple[Dict[str, Any], int]:
     """Build a friendly fallback when the LLM/Responses API cannot be reached."""
 
-    app.logger.exception("LLM chat flow failed", exc_info=exc)
+    logger.exception("LLM chat flow failed", exc_info=exc)
     message = (
         "LLM への接続に失敗しました。API キーとネットワークを確認したうえで、"
         "しばらくしてから再度お試しください。"
@@ -169,67 +180,103 @@ def _llm_unavailable_response(exc: Exception) -> Tuple[Dict[str, Any], int]:
     return {"reply": message, "error": str(exc)}, 200
 
 
+def _json_response(payload: Dict[str, Any], status_code: int = 200) -> JSONResponse:
+    return JSONResponse(content=payload, status_code=status_code)
+
+
+def _file_response(filename: str) -> FileResponse:
+    return FileResponse(_BASE_DIR / filename)
+
+
 @app.get("/")
-def index():
+async def index(request: Request):
     # 認証済みでなければログインページへリダイレクト
 
-    if not session.get("authenticated"):
-        return redirect(url_for("login"))
-    return app.send_static_file("index.html")
+    if not request.session.get("authenticated"):
+        return RedirectResponse(url="/login", status_code=302)
+    return _file_response("index.html")
 
 
-@app.route("/login", methods=["GET", "POST"])
-def login():
+@app.get("/login")
+async def login_get(request: Request):
     # シンプルなパスワード認証を行い、成功時にセッションを確立
 
-    if request.method == "POST":
-        password = request.form.get("password", "")
-        if password == APP_PASSWORD:
-            session["authenticated"] = True
-            return redirect(url_for("index"))
-        return redirect(url_for("login", error="1"))
+    if request.session.get("authenticated"):
+        return RedirectResponse(url="/", status_code=302)
+    return _file_response("login.html")
 
-    if session.get("authenticated"):
-        return redirect(url_for("index"))
-    return app.send_static_file("login.html")
+
+@app.post("/login")
+async def login_post(request: Request):
+    form = await request.form()
+    password = form.get("password", "") if form else ""
+    if password == APP_PASSWORD:
+        request.session["authenticated"] = True
+        return RedirectResponse(url="/", status_code=302)
+    return RedirectResponse(url="/login?error=1", status_code=302)
 
 
 @app.post("/logout")
-def logout():
+async def logout(request: Request):
     # セッション情報を破棄してログイン画面へ戻す
 
-    session.clear()
-    return redirect(url_for("login"))
+    request.session.clear()
+    return RedirectResponse(url="/login", status_code=302)
+
+
+@app.get("/app.js")
+async def app_js():
+    return _file_response("app.js")
+
+
+@app.get("/styles.css")
+async def styles_css():
+    return _file_response("styles.css")
+
+
+@app.get("/index.html")
+async def index_html():
+    return _file_response("index.html")
+
+
+@app.get("/login.html")
+async def login_html():
+    return _file_response("login.html")
 
 
 @app.get("/api/session")
-def session_status():
+async def session_status(request: Request):
     # 現在のセッションが認証済みかどうかを返す API
 
-    return jsonify({"authenticated": bool(session.get("authenticated"))})
+    return _json_response({"authenticated": bool(request.session.get("authenticated"))})
 
 
 @app.post("/api/session")
-def session_login():
+async def session_login(request: Request):
     # JSON 経由でのログイン要求を処理し、成功時にセッションを確立
 
-    payload = request.get_json(silent=True) or {}
-    password = payload.get("password") if isinstance(payload, dict) else None
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+
+    payload = payload if isinstance(payload, dict) else {}
+    password = payload.get("password")
 
     if isinstance(password, str) and password == APP_PASSWORD:
-        session["authenticated"] = True
-        return jsonify({"authenticated": True})
+        request.session["authenticated"] = True
+        return _json_response({"authenticated": True})
 
-    session.pop("authenticated", None)
-    return jsonify({"authenticated": False, "error": "invalid credentials"}), 401
+    request.session.pop("authenticated", None)
+    return _json_response({"authenticated": False, "error": "invalid credentials"}, status_code=401)
 
 
 @app.delete("/api/session")
-def session_logout():
+async def session_logout(request: Request):
     # API 経由でのログアウト要求。セッションを破棄して応答
 
-    session.clear()
-    return jsonify({"authenticated": False})
+    request.session.clear()
+    return _json_response({"authenticated": False})
 
 
 def _notify_platform(selection: dict) -> None:
@@ -258,16 +305,21 @@ def _notify_platform(selection: dict) -> None:
         errors.append(f"{url}: {res.status_code} {res.text}")
 
     if errors:
-        app.logger.info("Platform model sync skipped (%s)", "; ".join(errors))
+        logger.info("Platform model sync skipped (%s)", "; ".join(errors))
 
 
 @app.post("/model_settings")
-def update_model_settings():
+async def update_model_settings(request: Request):
     """Update LLM model selection without restarting the service."""
     # This endpoint allows the frontend to switch models dynamically.
 
-    payload = request.get_json(silent=True) or {}
-    raw_selection = payload.get("selection") if isinstance(payload, dict) and "selection" in payload else payload
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+
+    payload = payload if isinstance(payload, dict) else {}
+    raw_selection = payload.get("selection") if "selection" in payload else payload
     selection = raw_selection.get("iot") if isinstance(raw_selection, dict) and "iot" in raw_selection else raw_selection
     selection = selection if isinstance(selection, dict) else {}
     try:
@@ -276,16 +328,16 @@ def update_model_settings():
         if request.headers.get("X-Platform-Propagation") != "1" and selection:
             _notify_platform(applied_selection)
     except Exception as exc:  # noqa: BLE001
-        return jsonify({"error": f"モデル設定の更新に失敗しました: {exc}"}), 500
-    return jsonify({"status": "ok", "applied": applied_selection if selection else "from_file"})
+        return _json_response({"error": f"モデル設定の更新に失敗しました: {exc}"}, status_code=500)
+    return _json_response({"status": "ok", "applied": applied_selection if selection else "from_file"})
 
 
 @app.get("/api/models")
-def list_models():
+async def list_models():
     """Expose available model choices and the active selection to the UI."""
 
     provider, model, base_url, _ = apply_model_selection("iot")
-    return jsonify(
+    return _json_response(
         {
             "models": current_available_models(),
             "current": {"provider": provider, "model": model, "base_url": base_url},
@@ -294,21 +346,26 @@ def list_models():
 
 
 @app.get("/api/devices/ping")
-def device_ping():
+async def device_ping():
     # エッジデバイスからの疎通確認に応答するシンプルなエンドポイント
 
-    return jsonify({"message": "ok"})
+    return _json_response({"message": "ok"})
 
 
 @app.post("/api/chat")
-def chat():
+async def chat(request: Request):
     # チャット API のメインエントリーポイントで、LLM 連携とデバイス制御を仲介
 
-    payload = request.get_json(silent=True) or {}
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+
+    payload = payload if isinstance(payload, dict) else {}
     messages = payload.get("messages", [])
 
     if not isinstance(messages, list):
-        return jsonify({"error": "messages must be a list"}), 400
+        return _json_response({"error": "messages must be a list"}, status_code=400)
 
     formatted_messages = []
     for msg in messages:
@@ -326,10 +383,10 @@ def chat():
     formatted_messages = _latest_user_turn(formatted_messages)
 
     if not formatted_messages:
-        return jsonify({"error": "no user message found"}), 400
+        return _json_response({"error": "no user message found"}, status_code=400)
 
     if not formatted_messages or formatted_messages[-1]["role"] != "user":
-        return jsonify({"error": "last message must be from user"}), 400
+        return _json_response({"error": "last message must be from user"}, status_code=400)
 
     agent_device = _agent_device()
     provider, _, _, _ = apply_model_selection("iot")
@@ -339,7 +396,7 @@ def chat():
         agent_device and _device_supports_capability(agent_device, "capture_camera_photo")
     )
 
-    payload: Dict[str, Any]
+    response_payload: Dict[str, Any]
     status: int
 
     try:
@@ -379,62 +436,67 @@ def chat():
             if limitation_notice:
                 reply_message = (reply_message + "\n" if reply_message else "") + limitation_notice
 
-            payload = {"reply": reply_message}
-            
+            response_payload = {"reply": reply_message}
+
             # If images were captured during tool execution (MCP flow), include them
             captured_images = parsed_response.get("images")
             if captured_images:
-                payload["images"] = captured_images
+                response_payload["images"] = captured_images
 
             status = 200
 
             if validation_errors:
                 notice = "\n".join(f"(システム通知: {error})" for error in validation_errors)
-                payload["reply"] = (reply_message + "\n" if reply_message else "") + notice
+                response_payload["reply"] = (reply_message + "\n" if reply_message else "") + notice
             elif validated_commands:
                 final_reply, status, images = _execute_device_command_sequence(
                     client, formatted_messages, reply_message, validated_commands
                 )
-                payload = {"reply": final_reply, "images": images}
+                response_payload = {"reply": final_reply, "images": images}
         else:
-            payload, status = _chat_via_legacy(formatted_messages)
+            response_payload, status = _chat_via_legacy(formatted_messages)
     except Exception as exc:
-        payload, status = _llm_unavailable_response(exc)
+        response_payload, status = _llm_unavailable_response(exc)
 
     # Multi-Agent-Platform (requests) からのアクセスの場合は画像を削除する
     if "python-requests" in request.headers.get("User-Agent", ""):
-        payload.pop("images", None)
+        response_payload.pop("images", None)
 
-    return jsonify(payload), status
+    return _json_response(response_payload, status_code=status)
 
 
 @app.post("/api/conversations/review")
-def review_conversation():
+async def review_conversation(request: Request):
     # 他エージェントから渡された会話ログを評価し、必要なら IoT 操作を実行
 
-    payload = request.get_json(silent=True) or {}
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+
+    payload = payload if isinstance(payload, dict) else {}
     raw_history = payload.get("history")
     if raw_history is None:
         raw_history = payload.get("messages")
 
     if raw_history is None:
-        return jsonify({"error": "history is required"}), 400
+        return _json_response({"error": "history is required"}, status_code=400)
     if not isinstance(raw_history, list):
-        return jsonify({"error": "history must be a list"}), 400
+        return _json_response({"error": "history must be a list"}, status_code=400)
 
     messages = _normalise_conversation_messages(raw_history)
     messages = _latest_user_turn(messages)
 
     if not messages:
-        return jsonify({"error": "no user message found"}), 400
+        return _json_response({"error": "no user message found"}, status_code=400)
 
     try:
         client = _client()
         analysis = _call_llm_for_conversation_review(client, messages)
     except RuntimeError as exc:
-        return jsonify({"error": str(exc)}), 500
+        return _json_response({"error": str(exc)}, status_code=500)
     except Exception as exc:  # pragma: no cover - network/SDK errors
-        return jsonify({"error": str(exc)}), 500
+        return _json_response({"error": str(exc)}, status_code=500)
 
     validation_target: Any = analysis.get("device_commands")
     validated_commands, validation_errors = _validate_device_command_sequence(validation_target)
@@ -453,13 +515,13 @@ def review_conversation():
 
     if validation_errors:
         response_payload["analysis"]["validation_errors"] = validation_errors
-        return jsonify(response_payload), 200
+        return _json_response(response_payload, status_code=200)
 
     if action_required and not validated_commands:
         response_payload["analysis"]["validation_errors"] = [
             "LLM indicated action_required but did not provide executable commands."
         ]
-        return jsonify(response_payload), 200
+        return _json_response(response_payload, status_code=200)
 
     if action_required and validated_commands:
         initial_reply = analysis.get("reason", "")
@@ -470,24 +532,29 @@ def review_conversation():
         response_payload["analysis"]["executed_commands"] = validated_commands
         response_payload["execution_reply"] = final_reply
         # response_payload["images"] = images  # Images omitted for platform review
-        return jsonify(response_payload), status
+        return _json_response(response_payload, status_code=status)
 
-    return jsonify(response_payload), 200
+    return _json_response(response_payload, status_code=200)
 
 
 @app.post("/api/devices/register")
-def register_device():
+async def register_device(request: Request):
     # 新しいデバイスを手動登録し、メタ情報を保存
 
-    payload = request.get_json(silent=True) or {}
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+
+    payload = payload if isinstance(payload, dict) else {}
     device_id = payload.get("device_id")
     capabilities = payload.get("capabilities")
     meta = payload.get("meta") or {}
 
     if not isinstance(device_id, str) or not device_id.strip():
-        return jsonify({"error": "device_id is required"}), 400
+        return _json_response({"error": "device_id is required"}, status_code=400)
     if not isinstance(capabilities, list):
-        return jsonify({"error": "capabilities must be a list"}), 400
+        return _json_response({"error": "capabilities must be a list"}, status_code=400)
     capabilities = _normalise_capabilities(capabilities)
     cleaned_id = device_id.strip()
     now = time.time()
@@ -510,14 +577,12 @@ def register_device():
 
     if existing:
         if not existing.approved and not manual_registration:
-            return (
-                jsonify(
-                    {
-                        "error": "device not approved",
-                        "message": "Device must be registered from the dashboard before connecting.",
-                    }
-                ),
-                403,
+            return _json_response(
+                {
+                    "error": "device not approved",
+                    "message": "Device must be registered from the dashboard before connecting.",
+                },
+                status_code=403,
             )
 
         existing.capabilities = capabilities
@@ -541,14 +606,12 @@ def register_device():
         device_state = existing
     else:
         if not manual_registration:
-            return (
-                jsonify(
-                    {
-                        "error": "device not approved",
-                        "message": "Device must be registered from the dashboard before connecting.",
-                    }
-                ),
-                403,
+            return _json_response(
+                {
+                    "error": "device not approved",
+                    "message": "Device must be registered from the dashboard before connecting.",
+                },
+                status_code=403,
             )
 
         device_state = DeviceState(
@@ -561,41 +624,48 @@ def register_device():
         _DEVICES[cleaned_id] = device_state
         status = "registered"
 
-    return jsonify({
-        "status": status,
-        "device_id": device_state.device_id,
-        "device": _serialize_device(device_state),
-    })
+    return _json_response(
+        {
+            "status": status,
+            "device_id": device_state.device_id,
+            "device": _serialize_device(device_state),
+        }
+    )
 
 
-@app.get("/api/devices/<device_id>")
-def get_device(device_id: str):
+@app.get("/api/devices/{device_id}")
+async def get_device(device_id: str):
     # 指定デバイスの詳細情報を取得する API
 
     cleaned_id = (device_id or "").strip()
     if not cleaned_id:
-        return jsonify({"error": "device_id is required"}), 400
+        return _json_response({"error": "device_id is required"}, status_code=400)
 
     device = _DEVICES.get(cleaned_id)
     if not device:
-        return jsonify({"error": "device not registered"}), 404
+        return _json_response({"error": "device not registered"}, status_code=404)
 
-    return jsonify({"device": _serialize_device(device)})
+    return _json_response({"device": _serialize_device(device)})
 
 
-@app.put("/api/devices/<device_id>")
-def update_device(device_id: str):
+@app.put("/api/devices/{device_id}")
+async def update_device(device_id: str, request: Request):
     # デバイスのメタ情報や機能を更新する API
 
     cleaned_id = (device_id or "").strip()
     if not cleaned_id:
-        return jsonify({"error": "device_id is required"}), 400
+        return _json_response({"error": "device_id is required"}, status_code=400)
 
     device = _DEVICES.get(cleaned_id)
     if not device:
-        return jsonify({"error": "device not registered"}), 404
+        return _json_response({"error": "device not registered"}, status_code=404)
 
-    payload = request.get_json(silent=True) or {}
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+
+    payload = payload if isinstance(payload, dict) else {}
 
     if "capabilities" in payload:
         capabilities = payload.get("capabilities")
@@ -604,7 +674,7 @@ def update_device(device_id: str):
         elif isinstance(capabilities, list):
             device.capabilities = _normalise_capabilities(capabilities)
         else:
-            return jsonify({"error": "capabilities must be a list or null"}), 400
+            return _json_response({"error": "capabilities must be a list or null"}, status_code=400)
 
     if "meta" in payload:
         meta = payload.get("meta")
@@ -627,26 +697,26 @@ def update_device(device_id: str):
                 else:
                     device.meta.pop("display_name", None)
         else:
-            return jsonify({"error": "meta must be an object or null"}), 400
+            return _json_response({"error": "meta must be an object or null"}, status_code=400)
 
     if "approved" in payload:
         device.approved = bool(payload.get("approved"))
 
     device.last_seen = time.time()
-    return jsonify({"status": "updated", "device": _serialize_device(device)})
+    return _json_response({"status": "updated", "device": _serialize_device(device)})
 
 
-@app.get("/api/devices/<device_id>/jobs")
-def list_device_jobs(device_id: str):
+@app.get("/api/devices/{device_id}/jobs")
+async def list_device_jobs(device_id: str):
     # デバイスごとのジョブ履歴を取得
 
     cleaned_id = (device_id or "").strip()
     if not cleaned_id:
-        return jsonify({"error": "device_id is required"}), 400
+        return _json_response({"error": "device_id is required"}, status_code=400)
 
     device = _DEVICES.get(cleaned_id)
     if not device:
-        return jsonify({"error": "device not registered"}), 404
+        return _json_response({"error": "device not registered"}, status_code=404)
 
     jobs: List[Dict[str, Any]] = []
     for job_id, metadata in _JOB_METADATA.items():
@@ -666,21 +736,26 @@ def list_device_jobs(device_id: str):
         jobs.append({k: v for k, v in job_info.items() if v is not None})
 
     jobs.sort(key=lambda item: item.get("queued_at") or 0)
-    return jsonify({"device_id": cleaned_id, "jobs": jobs})
+    return _json_response({"device_id": cleaned_id, "jobs": jobs})
 
 
-@app.post("/api/devices/<device_id>/jobs")
-def create_device_job(device_id: str):
+@app.post("/api/devices/{device_id}/jobs")
+async def create_device_job(device_id: str, request: Request):
     # 外部サービスから直接ジョブを投入する API
 
     cleaned_id = (device_id or "").strip()
     if not cleaned_id:
-        return jsonify({"error": "device_id is required"}), 400
+        return _json_response({"error": "device_id is required"}, status_code=400)
 
     if cleaned_id not in _DEVICES:
-        return jsonify({"error": "device not registered"}), 404
+        return _json_response({"error": "device not registered"}, status_code=404)
 
-    payload = request.get_json(silent=True) or {}
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+
+    payload = payload if isinstance(payload, dict) else {}
 
     command_payload: Dict[str, Any]
     raw_command = payload.get("command")
@@ -697,7 +772,7 @@ def create_device_job(device_id: str):
 
     validated_command, error_message = _validate_device_command(command_payload)
     if not validated_command:
-        return jsonify({"error": error_message or "invalid command"}), 400
+        return _json_response({"error": error_message or "invalid command"}, status_code=400)
 
     queue_command = {
         "name": validated_command["name"],
@@ -706,7 +781,7 @@ def create_device_job(device_id: str):
 
     job_id = _enqueue_device_command(cleaned_id, queue_command, source="api")
     if job_id is None:
-        return jsonify({"error": "device not registered"}), 404
+        return _json_response({"error": "device not registered"}, status_code=404)
 
     wait_for_result = bool(payload.get("wait_for_result"))
     timeout_value = payload.get("timeout")
@@ -753,31 +828,36 @@ def create_device_job(device_id: str):
     else:
         status_code = 202
 
-    return jsonify(response_payload), status_code
+    return _json_response(response_payload, status_code=status_code)
 
 
 @app.get("/api/devices")
-def list_devices():
+async def list_devices():
     # 登録済みデバイス一覧を JSON 形式で返却
 
     devices = [_serialize_device(device) for device in _DEVICES.values()]
     devices.sort(key=lambda d: d["device_id"])
-    return jsonify({"devices": devices})
+    return _json_response({"devices": devices})
 
 
-@app.patch("/api/devices/<device_id>/name")
-def update_device_name(device_id: str):
+@app.patch("/api/devices/{device_id}/name")
+async def update_device_name(device_id: str, request: Request):
     # デバイスの表示名を更新する PATCH エンドポイント
 
     cleaned_id = (device_id or "").strip()
     if not cleaned_id:
-        return jsonify({"error": "device_id is required"}), 400
+        return _json_response({"error": "device_id is required"}, status_code=400)
 
     device = _DEVICES.get(cleaned_id)
     if not device:
-        return jsonify({"error": "device not registered"}), 404
+        return _json_response({"error": "device not registered"}, status_code=404)
 
-    payload = request.get_json(silent=True) or {}
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+
+    payload = payload if isinstance(payload, dict) else {}
     display_name = payload.get("display_name") if payload else None
 
     if not isinstance(device.meta, dict):
@@ -788,7 +868,7 @@ def update_device_name(device_id: str):
     elif isinstance(display_name, str):
         new_name = display_name.strip()
     else:
-        return jsonify({"error": "display_name must be a string or null"}), 400
+        return _json_response({"error": "display_name must be a string or null"}, status_code=400)
 
     if new_name:
         device.meta["display_name"] = new_name
@@ -796,20 +876,20 @@ def update_device_name(device_id: str):
         device.meta.pop("display_name", None)
 
     device.last_seen = time.time()
-    return jsonify({"status": "updated", "device": _serialize_device(device)})
+    return _json_response({"status": "updated", "device": _serialize_device(device)})
 
 
-@app.delete("/api/devices/<device_id>")
-def delete_device(device_id: str):
+@app.delete("/api/devices/{device_id}")
+async def delete_device(device_id: str):
     # デバイスを削除し、関連ジョブもクリア
 
     cleaned_id = (device_id or "").strip()
     if not cleaned_id:
-        return jsonify({"error": "device_id is required"}), 400
+        return _json_response({"error": "device_id is required"}, status_code=400)
 
     device = _DEVICES.pop(cleaned_id, None)
     if not device:
-        return jsonify({"error": "device not registered"}), 404
+        return _json_response({"error": "device not registered"}, status_code=404)
 
     stale_jobs = [job_id for job_id, mapped in _PENDING_JOBS.items() if mapped == cleaned_id]
     for job_id in stale_jobs:
@@ -819,20 +899,20 @@ def delete_device(device_id: str):
             metadata["status"] = "cancelled"
             metadata["cancelled_at"] = time.time()
 
-    return jsonify({"status": "deleted", "device_id": cleaned_id})
+    return _json_response({"status": "deleted", "device_id": cleaned_id})
 
 
-@app.delete("/api/devices/<device_id>/jobs")
-def clear_device_jobs(device_id: str):
+@app.delete("/api/devices/{device_id}/jobs")
+async def clear_device_jobs(device_id: str):
     # 指定デバイスの待機ジョブをすべてクリア
 
     cleaned_id = (device_id or "").strip()
     if not cleaned_id:
-        return jsonify({"error": "device_id is required"}), 400
+        return _json_response({"error": "device_id is required"}, status_code=400)
 
     device = _DEVICES.get(cleaned_id)
     if not device:
-        return jsonify({"error": "device not registered"}), 404
+        return _json_response({"error": "device not registered"}, status_code=404)
 
     # 保留中のジョブIDを特定
     jobs_to_cancel = [
@@ -855,30 +935,30 @@ def clear_device_jobs(device_id: str):
     if device.job_queue:
         count += len(device.job_queue)
         device.job_queue.clear()
-        
+
     # 重複カウントを調整（PendingJobsにあるものはQueueにもあるはずなので）
     # 正確な数は難しいが、ユーザーへのフィードバックとしては "Cleared" で十分
 
     device.last_seen = time.time()
-    return jsonify({"status": "cleared", "device_id": cleaned_id, "count": count})
+    return _json_response({"status": "cleared", "device_id": cleaned_id, "count": count})
 
 
-@app.get("/api/devices/<device_id>/jobs/next")
-def next_job(device_id: str):
+@app.get("/api/devices/{device_id}/jobs/next")
+async def next_job(device_id: str):
     # エッジデバイスが次に取得するジョブをポーリング
 
     cleaned_id = (device_id or "").strip()
     if not cleaned_id:
-        return jsonify({"error": "device_id is required"}), 400
+        return _json_response({"error": "device_id is required"}, status_code=400)
 
     device = _DEVICES.get(cleaned_id)
     if not device:
-        return jsonify({"error": "device not registered"}), 404
+        return _json_response({"error": "device not registered"}, status_code=404)
 
     device.last_seen = time.time()
 
     if not device.job_queue:
-        return ("", 204)
+        return Response(content="", status_code=204)
 
     job = device.job_queue.popleft()
     job_id = job.get("job_id") if isinstance(job, dict) else None
@@ -887,23 +967,23 @@ def next_job(device_id: str):
         if metadata is not None and metadata.get("status") == "pending":
             metadata["status"] = "dispatched"
             metadata["dispatched_at"] = time.time()
-    return jsonify(job)
+    return _json_response(job)
 
 
-@app.get("/api/jobs/<job_id>")
-def get_job(job_id: str):
+@app.get("/api/jobs/{job_id}")
+async def get_job(job_id: str):
     # ジョブ ID に紐づく状態と結果を返す
 
     cleaned_id = (job_id or "").strip()
     if not cleaned_id:
-        return jsonify({"error": "job_id is required"}), 400
+        return _json_response({"error": "job_id is required"}, status_code=400)
 
     metadata = _JOB_METADATA.get(cleaned_id)
     pending_device = _PENDING_JOBS.get(cleaned_id)
     result = _COMPLETED_JOBS.get(cleaned_id)
 
     if not metadata and not pending_device and result is None:
-        return jsonify({"error": "job not found"}), 404
+        return _json_response({"error": "job not found"}, status_code=404)
 
     response_payload: Dict[str, Any] = {"job_id": cleaned_id}
 
@@ -924,19 +1004,19 @@ def get_job(job_id: str):
 
     response_payload.setdefault("status", metadata.get("status") if metadata else "unknown")
 
-    return jsonify(response_payload)
+    return _json_response(response_payload)
 
 
-@app.delete("/api/jobs/<job_id>")
-def cancel_job(job_id: str):
+@app.delete("/api/jobs/{job_id}")
+async def cancel_job(job_id: str):
     # キューに残っているジョブをキャンセル
 
     cleaned_id = (job_id or "").strip()
     if not cleaned_id:
-        return jsonify({"error": "job_id is required"}), 400
+        return _json_response({"error": "job_id is required"}, status_code=400)
 
     if cleaned_id in _COMPLETED_JOBS:
-        return jsonify({"error": "job already completed"}), 409
+        return _json_response({"error": "job already completed"}, status_code=409)
 
     device_id = _PENDING_JOBS.get(cleaned_id)
     metadata = _JOB_METADATA.get(cleaned_id)
@@ -948,8 +1028,8 @@ def cancel_job(job_id: str):
                 "job_id": cleaned_id,
                 "device_id": metadata.get("device_id"),
             }
-            return jsonify(response_payload)
-        return jsonify({"error": "job not found or already dispatched"}), 404
+            return _json_response(response_payload)
+        return _json_response({"error": "job not found or already dispatched"}, status_code=404)
 
     device = _DEVICES.get(device_id)
     if not device:
@@ -957,10 +1037,10 @@ def cancel_job(job_id: str):
         if metadata is not None:
             metadata["status"] = "cancelled"
             metadata["cancelled_at"] = time.time()
-        return jsonify({"status": "cancelled", "job_id": cleaned_id, "device_id": device_id})
+        return _json_response({"status": "cancelled", "job_id": cleaned_id, "device_id": device_id})
 
     removed = False
-    new_queue: Deque[Dict[str, Any]] = deque()
+    new_queue: deque[Dict[str, Any]] = deque()
     while device.job_queue:
         job = device.job_queue.popleft()
         if not removed and job.get("job_id") == cleaned_id:
@@ -973,7 +1053,7 @@ def cancel_job(job_id: str):
     if not removed:
         # ジョブは既にデバイスに取得されている
         device.job_queue = new_queue
-        return jsonify({"error": "job already dispatched"}), 409
+        return _json_response({"error": "job already dispatched"}, status_code=409)
 
     device.last_seen = time.time()
     _PENDING_JOBS.pop(cleaned_id, None)
@@ -981,16 +1061,21 @@ def cancel_job(job_id: str):
         metadata["status"] = "cancelled"
         metadata["cancelled_at"] = time.time()
 
-    return jsonify({"status": "cancelled", "job_id": cleaned_id, "device_id": device_id})
+    return _json_response({"status": "cancelled", "job_id": cleaned_id, "device_id": device_id})
 
 
-@app.post("/api/devices/<device_id>/jobs/result")
-def post_result(device_id: str):
+@app.post("/api/devices/{device_id}/jobs/result")
+async def post_result(device_id: str, request: Request):
     # エッジデバイスからのジョブ結果を受け取り記録
 
-    payload = request.get_json(silent=True)
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = None
+
     if payload is None:
-        raw_body = request.get_data(cache=False, as_text=True) or ""
+        body_bytes = await request.body()
+        raw_body = body_bytes.decode("utf-8") if body_bytes else ""
         try:
             payload = json.loads(raw_body) if raw_body else {}
         except json.JSONDecodeError:
@@ -999,8 +1084,8 @@ def post_result(device_id: str):
     job_id = payload.get("job_id") if isinstance(payload, dict) else None
     raw_device_id = payload.get("device_id") if isinstance(payload, dict) else None
 
-    query_device_id = request.args.get("device_id", "")
-    query_job_id = request.args.get("job_id", "")
+    query_device_id = request.query_params.get("device_id", "")
+    query_job_id = request.query_params.get("job_id", "")
     header_device_id = request.headers.get("X-Device-ID", "")
     path_device_id = device_id
 
@@ -1024,10 +1109,7 @@ def post_result(device_id: str):
             provided_ids.append(cleaned)
 
     if len(provided_ids) > 1:
-        return (
-            jsonify({"error": "conflicting device_id values"}),
-            400,
-        )
+        return _json_response({"error": "conflicting device_id values"}, status_code=400)
 
     if not isinstance(job_id, str) or not job_id.strip():
         cleaned_job_id = _normalise_candidate(query_job_id)
@@ -1067,8 +1149,8 @@ def post_result(device_id: str):
 
     if not resolved_device:
         if provided_ids or job_id:
-            return jsonify({"error": "device not registered"}), 404
-        return jsonify({"error": "device_id is required"}), 400
+            return _json_response({"error": "device not registered"}, status_code=404)
+        return _json_response({"error": "device_id is required"}, status_code=400)
 
     if (
         mapped_device_id
@@ -1111,24 +1193,25 @@ def post_result(device_id: str):
     if mismatch_resolved_via_job:
         response_payload["warning"] = "device_id mismatch resolved via job_id"
 
-    return jsonify(response_payload)
+    return _json_response(response_payload)
 
 
 # --- MCP Server Bridge ---
-_MCP_SESSIONS = {}
+_MCP_SESSIONS: Dict[str, queue.Queue] = {}
 
-@app.route("/mcp/sse")
-def mcp_sse_endpoint():
+
+@app.get("/mcp/sse")
+async def mcp_sse_endpoint():
     session_id = str(uuid.uuid4())
-    input_queue = queue.Queue()
-    output_queue = queue.Queue()
+    input_queue: queue.Queue = queue.Queue()
+    output_queue: queue.Queue = queue.Queue()
     _MCP_SESSIONS[session_id] = input_queue
-    
+
     def run_server_loop():
         async def run():
             read_stream_send, read_stream_recv = anyio.create_memory_object_stream(10)
             write_stream_send, write_stream_recv = anyio.create_memory_object_stream(10)
-            
+
             async def feed_input():
                 while True:
                     try:
@@ -1139,8 +1222,8 @@ def mcp_sse_endpoint():
                         try:
                             parsed = TypeAdapter(JSONRPCMessage).validate_python(msg)
                             await read_stream_send.send(parsed)
-                        except Exception as e:
-                            print(f"MCP Parse Error: {e}")
+                        except Exception as exc:
+                            print(f"MCP Parse Error: {exc}")
                     except Exception:
                         break
                 await read_stream_send.aclose()
@@ -1159,53 +1242,61 @@ def mcp_sse_endpoint():
                 tg.start_soon(feed_input)
                 tg.start_soon(consume_output)
                 output_queue.put(f"event: endpoint\ndata: /mcp/messages?session_id={session_id}\n\n")
-                
+
                 try:
                     await mcp_server.run(
                         read_stream_recv,
                         write_stream_send,
-                        initialization_options=mcp_server.create_initialization_options()
+                        initialization_options=mcp_server.create_initialization_options(),
                     )
-                except Exception as e:
-                    print(f"MCP Run Error: {e}")
-        
+                except Exception as exc:
+                    print(f"MCP Run Error: {exc}")
+
         try:
             asyncio.run(run())
         finally:
             if session_id in _MCP_SESSIONS:
                 del _MCP_SESSIONS[session_id]
-                
+
     t = threading.Thread(target=run_server_loop, daemon=True)
     t.start()
-    
+
     def generate():
         while True:
             try:
-                msg = output_queue.get(timeout=25) # Keepalive timeout
+                msg = output_queue.get(timeout=25)  # Keepalive timeout
                 if msg is None:
                     break
                 yield msg
             except queue.Empty:
                 yield ": keepalive\n\n"
-                
-    return Response(stream_with_context(generate()), mimetype="text/event-stream")
 
-@app.route("/mcp/messages", methods=["POST"])
-def mcp_messages_endpoint():
-    session_id = request.args.get("session_id")
+    return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+@app.post("/mcp/messages")
+async def mcp_messages_endpoint(request: Request):
+    session_id = request.query_params.get("session_id")
     if not session_id or session_id not in _MCP_SESSIONS:
-        return jsonify({"error": "Session not found"}), 404
-    
-    _MCP_SESSIONS[session_id].put(request.json)
-    return jsonify({"status": "accepted"}), 202
+        return _json_response({"error": "Session not found"}, status_code=404)
+
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = None
+
+    _MCP_SESSIONS[session_id].put(payload)
+    return _json_response({"status": "accepted"}, status_code=202)
 
 
 @app.get("/api/dependencies")
-def dependencies_status():
+async def dependencies_status():
     """Return dependency and environment readiness without exposing secrets."""
 
-    return jsonify(_dependency_report())
+    return _json_response(_dependency_report())
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5006)
+    import uvicorn
+
+    uvicorn.run(app, host="0.0.0.0", port=5006)

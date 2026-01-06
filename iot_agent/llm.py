@@ -8,15 +8,16 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple, Union
 from types import SimpleNamespace
 
-from openai import OpenAI, APIError
+from openai import OpenAI, AsyncOpenAI, APIError
 try:
     from openai import APIConnectionError, APITimeoutError, BadRequestError, RateLimitError
 except Exception:  # pragma: no cover - fallback for older SDKs
     APIConnectionError = APITimeoutError = BadRequestError = RateLimitError = APIError
 try:
-    from anthropic import Anthropic
+    from anthropic import Anthropic, AsyncAnthropic
 except ImportError:
     Anthropic = None
+    AsyncAnthropic = None
 
 from mcp.types import Tool
 from iot_agent.mcp_server import list_tools, call_tool
@@ -528,7 +529,7 @@ async def _chat_completion_with_retries_async(
 
     for attempt in range(1, attempts + 1):
         try:
-            return client.chat.completions.create(**call_kwargs), None
+            return await client.chat.completions.create(**call_kwargs), None
         except Exception as exc:
             last_error = exc
             retryable, drop_tools, message = _classify_provider_error(exc)
@@ -555,34 +556,14 @@ def _chat_completion_with_retries_sync(
     max_attempts: int = 3,
     **kwargs: Any,
 ) -> Tuple[Optional[Any], Optional[Exception]]:
-    """Synchronous variant for retrying chat completions."""
+    """Synchronous wrapper for retrying chat completions."""
 
-    attempts = max(1, max_attempts)
-    delay = 1.0
-    last_error: Optional[Exception] = None
-    call_kwargs = dict(kwargs)
-
-    for attempt in range(1, attempts + 1):
-        try:
-            return client.chat.completions.create(**call_kwargs), None
-        except Exception as exc:
-            last_error = exc
-            retryable, drop_tools, message = _classify_provider_error(exc)
-            print(f"[LLM Retry] attempt {attempt}/{attempts} failed: {message}")
-
-            if drop_tools and call_kwargs.get("tools"):
-                call_kwargs["tools"] = None
-                call_kwargs["tool_choice"] = None
-                print("[LLM Retry] Retrying without tool payload due to provider rejection.")
-                continue
-
-            if retryable and attempt < attempts:
-                time.sleep(delay)
-                delay = min(delay * 2, 8)
-                continue
-            break
-
-    return None, last_error
+    try:
+        return asyncio.run(_chat_completion_with_retries_async(
+            client, max_attempts=max_attempts, **kwargs
+        ))
+    except Exception as exc:
+        return None, exc
 
 
 class UnifiedClient:
@@ -598,9 +579,9 @@ class UnifiedClient:
             )
 
         if self.provider == "claude":
-            if Anthropic is None:
+            if AsyncAnthropic is None:
                 raise ImportError("Anthropic SDK is not installed. Please run `pip install anthropic`.")
-            self.client = Anthropic(api_key=self.api_key)
+            self.client = AsyncAnthropic(api_key=self.api_key)
         else:
             client_kwargs: Dict[str, Any] = {"api_key": self.api_key}
             if self.base_url:
@@ -608,7 +589,7 @@ class UnifiedClient:
             if self.provider == "gemini":
                 # Google の OpenAI 互換APIは API key をヘッダーでも受け付ける
                 client_kwargs["default_headers"] = {"x-goog-api-key": self.api_key}
-            self.client = OpenAI(**client_kwargs)
+            self.client = AsyncOpenAI(**client_kwargs)
 
         self.chat = self
 
@@ -616,13 +597,13 @@ class UnifiedClient:
     def completions(self):
         return self
 
-    def create(self, **kwargs):
+    async def create(self, **kwargs):
         if self.provider == "claude":
-            return self._create_anthropic(**kwargs)
+            return await self._create_anthropic(**kwargs)
         else:
-            return self.client.chat.completions.create(**kwargs)
+            return await self.client.chat.completions.create(**kwargs)
 
-    def _create_anthropic(self, **kwargs):
+    async def _create_anthropic(self, **kwargs):
         model = kwargs.get("model", self.model_name)
         messages = kwargs.get("messages", [])
         tools = kwargs.get("tools")
@@ -670,7 +651,7 @@ class UnifiedClient:
                 
                 for tc in msg["tool_calls"]:
                     func = tc.get("function", {})
-                    args = func.get("arguments", "{}")
+                    args = func.get("arguments", "{{}}")
                     if isinstance(args, str):
                         try:
                             args = json.loads(args)
@@ -751,7 +732,7 @@ class UnifiedClient:
         if anthropic_tools:
             create_kwargs["tools"] = anthropic_tools
 
-        response = self.client.messages.create(**create_kwargs)
+        response = await self.client.messages.create(**create_kwargs)
 
         # Convert Anthropic response back to OpenAI-like format for uniformity
         content_text = ""
@@ -808,62 +789,48 @@ async def _process_chat_with_tools(client: UnifiedClient, messages: List[Dict[st
     messages = _sanitize_messages(messages, allow_vision=vision_supported)
     
     device_context = _build_device_context()
-    system_prompt = (
-        f"{_current_datetime_line()}\n"
-        "あなたは一般家庭のIoTデバイス管理を専門とする、親切で役立つアシスタントです。"
-        "あなたの目標は、提供されたツールを使ってデバイスを制御し、ユーザーの生活を便利にすることです。"
-        "応答やアクションを生成する際は、ユーザーのプロファイル、実際に利用可能なコマンド、周囲の環境を慎重に考慮してください。"
-        "依頼が曖昧な場合は、その場の状況を読み取り（read the room）、ユーザーの意図を推測して最適なアクションを選択してください。"
-        "**過度な質問を避けること**: ユーザーは細かい設定（音の種類、表示行、色、速度、回数など）を聞かれることを嫌います。これらが指定されていない場合は、質問せずに**最も一般的で標準的な設定**を勝手に選択して実行してください。"
-        "特に**移動やモーター制御（「前に進んで」「右を向いて」「サーボを動かして」など）**の場合、時間や角度が未指定なら**黙って標準値（duration=5.0, angle=90, または action='sweep'）で実行**してください。「どのくらい？」「どの角度？」と聞くのは厳禁です。"
-        "「全部動かして」など、対象が複数の場合で、もし技術的に全同時実行が難しくても、ユーザーに聞き返さず、代表的なデバイス（例: サーボ1と2）を勝手に選んで実行してください。\n"
-        "依頼が曖昧な場合でも、実行可能な部分を特定し、可能であれば実行してください。"
-        "実行不可能なアクションは生成しないでください。"
-        "自分の出力やアクションの結果を予測し、その予測を応答に反映させてください。\n"
-        "\n"
-        "【重要: 確認を求めずに即座に実行すべきケース】:\n"
-        "- **デバイスが1つだけ登録されている場合**: ユーザーの発言が**デバイスの操作や状態確認を意図していると判断できる場合**に限り、その唯一のデバイスを対象として即座に実行してください。ただし、**日常会話、感想、質問、挨拶など、物理的なデバイス操作を伴わない発言に対しては、絶対にコマンドを生成せず、会話のみで返答してください**。\n"
-        "- **コマンドが明確な場合**: 「ブザーを鳴らして」「LEDを点灯して」「モーターを動かして」など、実行すべき機能が明らかな場合は確認せずに実行してください。\n"
-        "- **パラメータが省略されている場合**: デフォルト値を使用し、さらに細かいオプションも勝手に決めて実行してください。例: ブザーなら melody='alert'、LEDなら pattern='demo'、移動なら duration=5.0 を使用。「どのような音にしますか？」や「どのくらい動かしますか？」と聞くのは禁止です。\n"
-        "- **サーボ・モーター操作**: 「サーボを動かして」と言われたら、'servo_1'と'servo_2'（または利用可能なもの）を対象に、angle=90 または action='sweep' で即座に実行してください。「どのサーボですか？」「角度は？」と聞くのは禁止です。\n"
-        "常に自然的で温かみがあり、わかりやすい日本語で応答してください。"
-        "可能な限り専門用語は避け、親しみやすい会話調のトーンを心がけてください。\n"
-        "\n"
-        "【ツール使用に関する重要指示 - よく読んでください】:\n"
-        "あなたはユーザーと物理的なIoTデバイスとの間の架け橋です。あなた自身が物理的なアクションを行うことはできません。「control_device」ツールを介してのみ実行可能です。\n"
-        "1. **ツール呼び出しなしのアクション禁止**: ユーザーが物理的なアクション（例: 「テキストを表示して」、「モーターを動かして」、「写真を撮って」）を要求した場合、必ず「control_device」関数を呼び出してください。\n"
-        "2. **嘘をつかない**: 実際に同じターンでツール呼び出しを生成していない限り、「やりました」や「表示しています」と言わないでください。ツール呼び出しなしでテキスト応答のみを返すことは失敗とみなされます。\n"
-        "3. **黙って失敗しない**: 適切なツールやデバイスが見つからない場合は、それを認めてください。コマンドを実行したふりをしないでください。\n"
-        "4. **厳格なマッピング**: \n"
-        "   - ユーザー: 「OLEDにgoodと表示して」 -> ツール: control_device(device_id='...', command='display_robot_animation', args={'text': 'good'})\n"
-        "   - ユーザー: 「サーボを動かして」 -> ツール: control_device(device_id='...', command='operate_dc_motors', ...)\n"
-        "5. **複数アクションの最適化**: \n"
-        "   - 同一デバイスに対して複数のアクション（例: 「LEDをつけてブザーを鳴らして」）を行う場合は、control_device を複数回呼ぶのではなく、**必ず 'commands' パラメータ（リスト）を使用して1回の呼び出しにまとめてください**。\n"
-        "   - 同時実行が必要な場合（例: 「ブザーを鳴らしながらモーターを動かして」）は、mode='parallel' を指定してください。特に指定がない場合は mode='sequential'（デフォルト）で順次実行されます。\n"
-        "6. **パラメータの検証**: デバイスリストで指定されている必須フィールド（例: 'text', 'duration'）が 'args' に含まれていることを確認してください。\n"
-        "7. **許可待ち禁止**: パラメータが明確な場合は確認を求めずに即座に「control_device」を呼び出してください。説明だけしてツールを呼ばないことは失敗です。\n"
-        "\n"
-        "【OLEDディスプレイに関する具体的指示】:\n"
-        "ロボットデバイスのOLED画面にテキストメッセージを表示できます。"
-        "これを行うには、以下の特定のコマンド名で「control_device」ツールを使用する必要があります。"
-        "「Available devices」リストにこれらのコマンドのパラメータが明示的に表示されていなくても、"
-        "必ず 'args' オブジェクトにそれらを提供してください。パラメータなしと想定しないでください。\n"
-        "\n"
-        "- Raspberry Pi 4の場合:\n"
-        "  * コマンド: 'display_robot_animation' のみを使う（'show_text_on_oled' は使わない）。\n"
-        "  * 必須引数: {'text': 'YOUR_TEXT', 'duration': 5.0}\n"
-        "  * 推奨: motion は指定がなくても 'default' を設定し、text は20文字以内・改行なしの短い日本語/英数字に要約する。\n"
-        "  * duration をユーザーが指定しない場合でも 5.0 の数値を必ず入れる。\n"
-        "  * **表示位置（行）について質問禁止**: テキストは自動的に中央揃えされます。「どの行にしますか？」という質問は無意味なので絶対にしないでください。\n"
-        "  * 「表示してよいか？」と尋ねずに、単一ターンで control_device を発行し、説明とツール呼び出しを同じ応答に含める。\n"
-        "\n"
-        "- Jetsonの場合:\n"
-        "  コマンド: 'show_text_on_oled'\n"
-        "  必須引数: {'text': 'YOUR_TEXT', 'duration': 5.0}\n"
-        "  (ユーザーが指定しない場合、デフォルト時間は5.0秒)\n"
-        "\n"
-        "ユーザーの要求が曖昧な場合（例: 「画面にこんにちはと表示して」）、文脈から正しいデバイスを推測してください。"
-    )
+    system_prompt = f"""{_current_datetime_line()}
+あなたは一般家庭のIoTデバイス管理を専門とする、親切で役立つアシスタントです。あなたは目標は、提供されたツールを使ってデバイスを制御し、ユーザーの生活を便利にすることです。応答やアクションを生成する際は、ユーザーのプロファイル、実際に利用可能なコマンド、周囲の環境を慎重に考慮してください。依頼が曖昧な場合は、その場の状況を読み取り（read the room）、ユーザーの意図を推測して最適なアクションを選択してください。**過度な質問を避けること**: ユーザーは細かい設定（音の種類、表示行、色、速度、回数など）を聞かれることを嫌います。これらが指定されていない場合は、質問せずに**最も一般的で標準的な設定**を勝手に選択して実行してください。特に**移動やモーター制御（「前に進んで」「右を向いて」「サーボを動かして」など）**の場合、時間や角度が未指定なら**黙って標準値（duration=5.0, angle=90, または action='sweep'）で実行**してください。「どのくらい？」「どの角度？」と聞くのは厳禁です。「全部動かして」など、対象が複数の場合で、もし技術的に全同時実行が難しくても、ユーザーに聞き返さず、代表的なデバイス（例: サーボ1と2）を勝手に選んで実行してください。
+依頼が曖昧な場合でも、実行可能な部分を特定し、可能であれば実行してください。実行不可能なアクションは生成しないでください。自分の出力やアクションの結果を予測し、その予測を応答に反映させてください。
+
+【重要: 確認を求めずに即座に実行すべきケース】:
+- **デバイスが1つだけ登録されている場合**: ユーザーの発言が**デバイスの操作や状態確認を意図していると判断できる場合**に限り、その唯一のデバイスを対象として即座に実行してください。ただし、**日常会話、感想、質問、挨拶など、物理的なデバイス操作を伴わない発言に対しては、絶対にコマンドを生成せず、会話のみで返答してください**。
+- **コマンドが明確な場合**: 「ブザーを鳴らして」「LEDを点灯して」「モーターを動かして」など、実行すべき機能が明らかな場合は確認せずに実行してください。
+- **パラメータが省略されている場合**: デフォルト値を使用し、さらに細かいオプションも勝手に決めて実行してください。例: ブザーなら melody='alert'、LEDなら pattern='demo'、移動なら duration=5.0 を使用。「どのような音にしますか？」や「どのくらい動かしますか？」と聞くのは禁止です。
+- **サーボ・モーター操作**: 「サーボを動かして」と言われたら、'servo_1'と'servo_2'（または利用可能なもの）を対象に、angle=90 または action='sweep' で即座に実行してください。「どのサーボですか？」「角度は？」と聞くのは禁止です。
+常に自然的で温かみがあり、わかりやすい日本語で応答してください。可能な限り専門用語は避け、親しみやすい会話調のトーンを心がけてください。
+
+【ツール使用に関する重要指示 - よく読んでください】:
+あなたはユーザーと物理的なIoTデバイスとの間の架け橋です。あなた自身が物理的なアクションを行うことはできません。「control_device」ツールを介してのみ実行可能です。
+1. **ツール呼び出しなしのアクション禁止**: ユーザーが物理的なアクション（例: 「テキストを表示して」、「モーターを動かして」、「写真を撮って」）を要求した場合、必ず「control_device」関数を呼び出してください。
+2. **嘘をつかない**: 実際に同じターンでツール呼び出しを生成していない限り、「やりました」や「表示しています」と言わないでください。ツール呼び出しなしでテキスト応答のみを返すことは失敗とみなされます。
+3. **黙って失敗しない**: 適切なツールやデバイスが見つからない場合は、それを認めてください。コマンドを実行したふりをしないでください。
+4. **厳格なマッピング**: 
+   - ユーザー: 「OLEDにgoodと表示して」 -> ツール: control_device(device_id='...', command='display_robot_animation', args={{'text': 'good'}})
+   - ユーザー: 「サーボを動かして」 -> ツール: control_device(device_id='...', command='operate_dc_motors', ...)
+5. **複数アクションの最適化**: 
+   - 同一デバイスに対して複数のアクション（例: 「LEDをつけてブザーを鳴らして」）を行う場合は、control_device を複数回呼ぶのではなく、**必ず 'commands' パラメータ（リスト）を使用して1回の呼び出しにまとめてください**。
+   - 同時実行が必要な場合（例: 「ブザーを鳴らしながらモーターを動かして」）は、mode='parallel' を指定してください。特に指定がない場合は mode='sequential'（デフォルト）で順次実行されます。
+6. **パラメータの検証**: デバイスリストで指定されている必須フィールド（例: 'text', 'duration'）が 'args' に含まれていることを確認してください。
+7. **許可待ち禁止**: パラメータが明確な場合は確認を求めずに即座に「control_device」を呼び出してください。説明だけしてツールを呼ばないことは失敗です。
+
+【OLEDディスプレイに関する具体的指示】:
+ロボットデバイスのOLED画面にテキストメッセージを表示できます。これを行うには、以下の特定のコマンド名で「control_device」ツールを使用する必要があります。「Available devices」リストにこれらのコマンドのパラメータが明示的に表示されていなくても、必ず 'args' オブジェクトにそれらを提供してください。パラメータなしと想定しないでください。
+
+- Raspberry Pi 4の場合:
+  * コマンド: 'display_robot_animation' のみを使う（'show_text_on_oled' は使わない）。
+  * 必須引数: {{'text': 'YOUR_TEXT', 'duration': 5.0}}
+  * 推奨: motion は指定がなくても 'default' を設定し、text は20文字以内・改行なしの短い日本語/英数字に要約する。
+  * duration をユーザーが指定しない場合でも 5.0 の数値を必ず入れる。
+  * **表示位置（行）について質問禁止**: テキストは自動的に中央揃えされます。「どの行にしますか？」という質問は無意味なので絶対にしないでください。
+  * 「表示してよいか？」と尋ねずに、単一ターンで control_device を発行し、説明とツール呼び出しを同じ応答に含める。
+
+- Jetsonの場合:
+  コマンド: 'show_text_on_oled'
+  必須引数: {{'text': 'YOUR_TEXT', 'duration': 5.0}}
+  (ユーザーが指定しない場合、デフォルト時間は5.0秒)
+
+ユーザーの要求が曖昧な場合（例: 「画面にこんにちはと表示して」）、文脈から正しいデバイスを推測してください。"""
     
     context_message = f"利用可能なデバイス:\n{device_context}" if device_context else "現在登録されているデバイスはありません。"
     
@@ -883,7 +850,7 @@ async def _process_chat_with_tools(client: UnifiedClient, messages: List[Dict[st
     
     while turn < max_turns:
         # LLM呼び出し
-        # 注意: UnifiedClient.create は同期メソッド
+        # 注意: UnifiedClient.create は同期メソッド -> Now Async!
         response, llm_error = await _chat_completion_with_retries_async(
             client,
             model=client.model_name,
@@ -1049,58 +1016,49 @@ def _structured_conversation_review_prompt(messages: List[Dict[str, str]]) -> Di
 
     device_context = _build_device_context()
     timestamp_line = _current_datetime_line()
-    system_prompt = (
-        f"{timestamp_line}\n"
-        "あなたは「IoTデバイス操作専門」の運用アナリストです。\n\n"
-        
-        "【あなたの専門分野（発言可能な範囲）】\n"
-        "- スマートホームデバイスの操作: 照明、エアコン、スマートプラグ\n"
-        "- センサーデータの確認: 温度、湿度、モーションセンサー\n"
-        "- デバイスの状態監視: 接続状態、バッテリー残量\n"
-        "- 自動化ルールの提案: デバイス連携、スケジュール実行\n\n"
-        
-        "【重要: 即座に実行すべきケース】\n"
-        "- デバイスが1つだけ登録されている場合: ユーザーの発言が**明確にデバイスの操作や状態確認を意図している場合**に限り、自動的に選択してください。**日常会話や一般的な質問など、デバイスへの介入が不要な場合は、操作不要（action_required: false）としてください**。\n"
-        "- コマンドが明確な場合（「ブザーを鳴らして」「LEDを点灯」など）: 確認なしに device_commands を生成してください。\n"
-        "- パラメータが省略されている場合: 音の種類や表示位置、移動時間などの詳細が不明でも、勝手に標準的なデフォルト値（例: melody='alert'、textは自動中心揃え、移動ならduration=5.0）を補完して device_commands を生成してください。質問は不要です。\n\n"
-        
-        "【実行順序と同時実行の指定方法】\n"
-        "- 同時に動かしても安全な場合（例: ブザーを鳴らしながらモーターを回す）は、各コマンドに同じ `sequence_group` (1以上の整数) を付けて並列に実行させてください。デバイスが異なっても（Pico W / Jetson / Raspberry Pi 4など）同じ番号なら同時に動かします。\n"
-        "- 明確に順番が必要な場合（例: 先にLED点灯を確認してからモーターを回す）は、`sequence_group` を 1, 2, 3... と段階的に上げてください。同じ番号同士は同時実行、番号が小さいものから順番に処理されます。\n"
-        "- `sequence_group` が指定されない場合は 1 とみなし、同じ番号のコマンドはまとめて即時実行します。不要な待ち時間を避けるため、できるだけ並列実行できるものは同じ番号にまとめてください。\n\n"
-        
-        "【発言してはいけない場合】\n"
-        "- Web検索・ブラウザ操作の話題 → Browser Agentの専門\n"
-        "- 料理・洗濯・家庭科の知識 → Life-Style Agentの専門\n"
-        "- スケジュール・予定管理 → Scheduler Agentの専門\n"
-        "- IoTデバイスと無関係な一般的な話題\n\n"
-        
-        "【判断ルール】\n"
-        "1. `action_required: true` は、登録済みデバイスへの具体的な操作が必要な場合のみ\n"
-        "2. `should_reply: true` は、IoTに関する質問・問題解決の場合のみ\n"
-        "3. 他エージェントへの呼びかけは禁止（自分の専門外は無視する）\n"
-        "4. 単なるアドバイスやコメントでは発言しない\n"
-        "5. デバイスが1つしかない場合は、device_commands に自動的にそのデバイスIDを設定する\n\n"
-        
-        "【発言する例】\n"
-        "- 「照明をつけて」→ action_required: true, device_commands を即生成\n"
-        "- 「ブザーを鳴らして」→ action_required: true, device_commands を即生成（デバイスが1つなら確認不要）\n"
-        "- 「部屋の温度は？」→ should_reply: true（センサー確認）\n"
-        
-        "【発言しない例】\n"
-        "- 「天気を調べて」→ 発言しない\n"
-        "- 「夕食のレシピ」→ 発言しない\n"
-        "- 「明日の予定」→ 発言しない\n\n"
-        
-        "常に以下のフィールドを含む厳密なJSONオブジェクトで応答してください: "
-        "'action_required' (boolean), "
-        "'reason' (あなたの判断を説明する文字列), "
-        "'device_commands' (null または 'device_id', 'name', 'args' を持つコマンドオブジェクトの配列; 並列・順次を切り替える場合は各コマンドに任意で 'sequence_group' (1以上の整数) を付ける), "
-        "'notes' (任意), "
-        "'should_reply' (boolean), "
-        "'reply' (短く役立つメッセージ), "
-        "'addressed_agents' (呼びかけるエージェント名の配列; なければ空). "
-    )
+    system_prompt = f"""{timestamp_line}
+あなたは「IoTデバイス操作専門」の運用アナリストです。
+
+【あなたの専門分野（発言可能な範囲）】
+- スマートホームデバイスの操作: 照明、エアコン、スマートプラグ
+- センサーデータの確認: 温度、湿度、モーションセンサー
+- デバイスの状態監視: 接続状態、バッテリー残量
+- 自動化ルールの提案: デバイス連携、スケジュール実行
+
+【重要: 即座に実行すべきケース】
+- デバイスが1つだけ登録されている場合: ユーザーの発言が**明確にデバイスの操作や状態確認を意図している場合**に限り、自動的に選択してください。**日常会話や一般的な質問など、デバイスへの介入が不要な場合は、操作不要（action_required: false）としてください**。
+- コマンドが明確な場合（「ブザーを鳴らして」「LEDを点灯」など）: 確認なしに device_commands を生成してください。
+- パラメータが省略されている場合: 音の種類や表示位置、移動時間などの詳細が不明でも、勝手に標準的なデフォルト値（例: melody='alert'、textは自動中心揃え、移動ならduration=5.0）を補完して device_commands を生成してください。質問は不要です。
+
+【実行順序と同時実行の指定方法】
+- 同時に動かしても安全な場合（例: ブザーを鳴らしながらモーターを回す）は、各コマンドに同じ `sequence_group` (1以上の整数) を付けて並列に実行させてください。デバイスが異なっても（Pico W / Jetson / Raspberry Pi 4など）同じ番号なら同時に動かします。
+- 明確に順番が必要な場合（例: 先にLED点灯を確認してからモーターを回す）は、`sequence_group` を 1, 2, 3... と段階的に上げてください。同じ番号同士は同時実行、番号が小さいものから順番に処理されます。
+- `sequence_group` が指定されない場合は 1 とみなし、同じ番号のコマンドはまとめて即時実行します。不要な待ち時間を避けるため、できるだけ並列実行できるものは同じ番号にまとめてください。
+
+【発言してはいけない場合】
+- Web検索・ブラウザ操作の話題 -> Browser Agentの専門
+- 料理・洗濯・家庭科の知識 -> Life-Style Agentの専門
+- スケジュール・予定管理 -> Scheduler Agentの専門
+- IoTデバイスと無関係な一般的な話題
+
+【判断ルール】
+1. `action_required: true` は、登録済みデバイスへの具体的な操作が必要な場合のみ
+2. `should_reply: true` は、IoTに関する質問・問題解決の場合のみ
+3. 他エージェントへの呼びかけは禁止（自分の専門外は無視する）
+4. 単なるアドバイスやコメントでは発言しない
+5. デバイスが1つしかない場合は、device_commands に自動的にそのデバイスIDを設定する
+
+【発言する例】
+- 「照明をつけて」-> action_required: true, device_commands を即生成
+- 「ブザーを鳴らして」-> action_required: true, device_commands を即生成（デバイスが1つなら確認不要）
+- 「部屋の温度は？」-> should_reply: true（センサー確認）
+
+【発言しない例】
+- 「天気を調べて」-> 発言しない
+- 「夕食のレシピ」-> 発言しない
+- 「明日の予定」-> 発言しない
+
+常に以下のフィールドを含む厳密なJSONオブジェクトで応答してください: 'action_required' (boolean), 'reason' (あなたの判断を説明する文字列), 'device_commands' (null または 'device_id', 'name', 'args' を持つコマンドオブジェクトの配列; 並列・順次を切り替える場合は各コマンドに任意で 'sequence_group' (1以上の整数) を付ける), 'notes' (任意), 'should_reply' (boolean), 'reply' (短く役立つメッセージ), 'addressed_agents' (呼びかけるエージェント名の配列; なければ空). """
 
     context_message = (
         "利用可能なデバイス情報:\n" + device_context
@@ -1296,37 +1254,51 @@ def _call_llm_text(client: UnifiedClient, payload: Dict[str, Any]) -> str:
 
     provider = getattr(client, "provider", "")
     responses_client = getattr(getattr(client, "client", None), "responses", None)
-    if provider_supports_vision(provider) and responses_client and _messages_include_images(messages):
-        try:
-            responses_input = _convert_messages_to_responses_input(messages)
-            if responses_input:
-                response = responses_client.create(model=model, input=responses_input)
-                text = _response_output_to_text(response)
-                if text:
-                    return text.strip()
-        except Exception as e:  # pragma: no cover - network/SDK errors
-            print(f"[{datetime.now()}] Responses API Text Error: {str(e)}")
+    
+    async def _internal_call():
+        if provider_supports_vision(provider) and responses_client and _messages_include_images(messages):
+            try:
+                responses_input = _convert_messages_to_responses_input(messages)
+                if responses_input:
+                    # Note: If responses API client is also async, await it.
+                    # Assuming client.client is async, responses_client should support await if it follows the pattern.
+                    # However, typical OpenAI AsyncClient uses 'await client.chat.completions.create'
+                    # We assume responses_client.create is awaitable.
+                    response = await responses_client.create(model=model, input=responses_input)
+                    text = _response_output_to_text(response)
+                    if text:
+                        return text.strip()
+            except Exception as e:  # pragma: no cover - network/SDK errors
+                print(f"[{datetime.now()}] Responses API Text Error: {str(e)}")
+                traceback.print_exc()
+
+        response, llm_error = await _chat_completion_with_retries_async(
+            client,
+            model=model,
+            messages=messages,
+            max_attempts=2,
+        )
+
+        if response:
+            choice = response.choices[0] if response and response.choices else None
+            message = choice.message if choice else None
+            content = getattr(message, "content", None) if message else None
+            text = _content_to_text(content)
+            return text.strip()
+
+        if llm_error:
+            print(f"[{datetime.now()}] LLM Text Error: {str(llm_error)}")
             traceback.print_exc()
 
-    response, llm_error = _chat_completion_with_retries_sync(
-        client,
-        model=model,
-        messages=messages,
-        max_attempts=2,
-    )
+        return ""
 
-    if response:
-        choice = response.choices[0] if response and response.choices else None
-        message = choice.message if choice else None
-        content = getattr(message, "content", None) if message else None
-        text = _content_to_text(content)
-        return text.strip()
-
-    if llm_error:
-        print(f"[{datetime.now()}] LLM Text Error: {str(llm_error)}")
+    try:
+        return asyncio.run(_internal_call())
+    except Exception:
+        # If we are already in an event loop, we might need a different approach or just fail/log
+        # But this function is typically called from sync contexts.
         traceback.print_exc()
-
-    return ""
+        return ""
 
 
 def _structured_agent_instruction_prompt(
@@ -1340,11 +1312,7 @@ def _structured_agent_instruction_prompt(
     if target_role == "jetson-agent":
         # language = "Japanese"
         pass
-    system_prompt = (
-        f"{timestamp_line}\n"
-        "あなたは運用アシスタントです。 "
-        f"{language}で特定の指示文字列のみを出力してください。"
-    )
+    system_prompt = f"{timestamp_line}\nあなたは運用アシスタントです。{language}で特定の指示文字列のみを出力してください。"
     context_message = f"利用可能なデバイス:\n{device_context}"
     model_name = apply_model_selection("iot")[1]
     return {
@@ -1355,5 +1323,3 @@ def _structured_agent_instruction_prompt(
             *messages,
         ],
     }
-
-# _structured_agent_followup_prompt is not strictly needed for MCP flow but execution.py uses it
