@@ -4,6 +4,7 @@ import re
 import time
 import traceback
 import asyncio
+import threading
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple, Union
 from types import SimpleNamespace
@@ -960,16 +961,54 @@ async def _process_chat_with_tools(client: UnifiedClient, messages: List[Dict[st
     }
 
 
-def _call_llm_and_parse(client: UnifiedClient, messages: List[Dict[str, str]]) -> Dict[str, Any]:
-    # 同期ラッパー: アプリケーション互換性のために残す
+async def _call_llm_and_parse_async(
+    client: UnifiedClient, messages: List[Dict[str, str]]
+) -> Dict[str, Any]:
     try:
-        return asyncio.run(_process_chat_with_tools(client, messages))
+        return await _process_chat_with_tools(client, messages)
     except Exception as e:
         traceback.print_exc()
         return {
-            "reply": f"内部エラーが発生しました: {str(e)}", 
-            "device_commands": []
+            "reply": f"内部エラーが発生しました: {str(e)}",
+            "device_commands": [],
         }
+
+
+def _call_llm_and_parse(client: UnifiedClient, messages: List[Dict[str, str]]) -> Dict[str, Any]:
+    # 同期ラッパー: 同期コードから呼ばれる前提で維持
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        try:
+            return asyncio.run(_process_chat_with_tools(client, messages))
+        except Exception as e:
+            traceback.print_exc()
+            return {
+                "reply": f"内部エラーが発生しました: {str(e)}",
+                "device_commands": [],
+            }
+
+    result: Dict[str, Any] = {}
+    error: Optional[Exception] = None
+
+    def _runner() -> None:
+        nonlocal result, error
+        try:
+            result = asyncio.run(_process_chat_with_tools(client, messages))
+        except Exception as exc:
+            error = exc
+
+    thread = threading.Thread(target=_runner)
+    thread.start()
+    thread.join()
+
+    if error is not None:
+        traceback.print_exc()
+        return {
+            "reply": f"内部エラーが発生しました: {str(error)}",
+            "device_commands": [],
+        }
+    return result
 
 
 def _normalise_conversation_messages(raw_messages: Any) -> List[Dict[str, str]]:
