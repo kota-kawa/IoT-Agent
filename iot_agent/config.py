@@ -17,3 +17,12 @@ MAX_COMPLETED_JOBS = int(os.getenv("MAX_COMPLETED_JOBS", "200"))
 DEVICE_RESULT_TIMEOUT = float(os.getenv("DEVICE_RESULT_TIMEOUT", "300.0"))
 
 SECRET_KEY = os.getenv("FLASK_SECRET_KEY", "change-this-secret")
+
+DATABASE_URL = os.getenv("DATABASE_URL")
+REDIS_URL = os.getenv("REDIS_URL")
+STORAGE_BACKEND = os.getenv("IOT_AGENT_STORAGE_BACKEND", "auto")
+REDIS_PREFIX = os.getenv("IOT_AGENT_REDIS_PREFIX", "iot_agent")
+try:
+    JOB_RESULT_TTL_SECONDS = int(os.getenv("IOT_AGENT_JOB_RESULT_TTL", "3600"))
+except ValueError:
+    JOB_RESULT_TTL_SECONDS = 3600

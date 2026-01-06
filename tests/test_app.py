@@ -5,22 +5,12 @@ import pytest
 
 from app import app
 from iot_agent.config import APP_PASSWORD
-from iot_agent.state import (
-    _COMPLETED_JOB_ORDER,
-    _COMPLETED_JOBS,
-    _DEVICES,
-    _JOB_METADATA,
-    _PENDING_JOBS,
-)
+from iot_agent.storage import reset_store
 
 
 @pytest.fixture(autouse=True)
 def reset_state():
-    _DEVICES.clear()
-    _PENDING_JOBS.clear()
-    _JOB_METADATA.clear()
-    _COMPLETED_JOBS.clear()
-    _COMPLETED_JOB_ORDER.clear()
+    reset_store()
     yield
 
 

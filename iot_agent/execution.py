@@ -22,7 +22,7 @@ from .llm import (
     _structured_agent_instruction_prompt,
 )
 from .models import DeviceState, _CommandExecutionSummary
-from .state import _DEVICES, _JOB_METADATA, _PENDING_JOBS
+from .storage import get_store
 from .validation import _validate_device_command_sequence
 from model_selection import apply_model_selection, provider_supports_vision
 
@@ -307,7 +307,7 @@ def _execute_device_command_sequence(
 
     def _run_command(index: int, command: Dict[str, Any]) -> None:
         device_id = command.get("device_id")
-        device = _DEVICES.get(device_id) if isinstance(device_id, str) else None
+        device = get_store().get_device(device_id) if isinstance(device_id, str) else None
 
         try:
             if device and _device_is_agent(device):

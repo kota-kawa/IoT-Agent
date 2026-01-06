@@ -12,8 +12,8 @@ This project bundles a FastAPI IoT management server, a single-page style dashbo
   - Chat-driven device control — Uses the OpenAI Responses API (default `GPT-OSS`) with optional model switching to map natural language to agent jobs.
 - ブラウザダッシュボード — 左ペインでチャット、右ペインでデバイスカードや登録モーダルを表示し、数秒毎のポーリングで状態を同期します。  
   - Browser dashboard — Chat on the left, device cards and registration modal on the right, refreshed via multi-second polling.
-- メモリ内ジョブ管理 — `DeviceState` と FIFO キューでジョブ投入、`wait_for_result` や結果要約をサポートし、最大 `MAX_COMPLETED_JOBS` 件までリングバッファに保持します。  
-  - In-memory job tracking — `DeviceState` objects keep FIFO queues, support `wait_for_result`, and rotate completed jobs up to `MAX_COMPLETED_JOBS`.
+- PostgreSQL + Redis ジョブ管理 — デバイス台帳は PostgreSQL、ジョブキュー／状態は Redis で管理し、`wait_for_result` を含むジョブライフサイクルを永続化します。  
+  - PostgreSQL + Redis job tracking — Devices live in PostgreSQL while queues/state live in Redis, preserving `wait_for_result` and job history across restarts.
 - カメラ／マルチモーダル対応 — 画像撮影ジョブ (`capture_camera_photo`) やビジョンモデル連携、LLM 応答の多言語サポートを備えています。  
   - Camera and multimodal support — Provides `capture_camera_photo`, forwards captures to vision models, and returns multilingual responses.
 
@@ -63,6 +63,11 @@ This project bundles a FastAPI IoT management server, a single-page style dashbo
   ```bash
   docker-compose up --build
   ```
+- PostgreSQL/Redis を同時に起動する場合は profile を有効にし、`POSTGRES_PASSWORD` と `DATABASE_URL` / `REDIS_URL` を `secrets.env` に設定してください。  
+  - To run PostgreSQL/Redis together, enable the profile and set `POSTGRES_PASSWORD` plus `DATABASE_URL` / `REDIS_URL` in `secrets.env`.
+  ```bash
+  docker-compose --profile storage up --build
+  ```
 - Docker + Gunicorn — 本番相当の Gunicorn イメージをビルドし、`secrets.env` を指定して実行します。  
   - Docker + Gunicorn — Build the production-like image and run it with `secrets.env`.
   ```bash
@@ -87,6 +92,16 @@ This project bundles a FastAPI IoT management server, a single-page style dashbo
   - `MAX_COMPLETED_JOBS` — Number of completed jobs to retain (default 200).
 - `DEVICE_RESULT_TIMEOUT` — エッジデバイス結果を待つ秒数（デフォルト 180）。  
   - `DEVICE_RESULT_TIMEOUT` — Seconds to wait for device results (default 180).
+- `DATABASE_URL` — PostgreSQL 接続文字列（例: `postgresql://user:pass@host:5432/iot_agent`）。  
+  - `DATABASE_URL` — PostgreSQL connection string (e.g., `postgresql://user:pass@host:5432/iot_agent`).
+- `REDIS_URL` — Redis 接続文字列（例: `redis://host:6379/0`）。  
+  - `REDIS_URL` — Redis connection string (e.g., `redis://host:6379/0`).
+- `IOT_AGENT_STORAGE_BACKEND` — `auto` (既定) / `postgres_redis` / `memory`。  
+  - `IOT_AGENT_STORAGE_BACKEND` — `auto` (default) / `postgres_redis` / `memory`.
+- `IOT_AGENT_REDIS_PREFIX` — Redis キーのプレフィックス（既定 `iot_agent`）。  
+  - `IOT_AGENT_REDIS_PREFIX` — Redis key prefix (default `iot_agent`).
+- `IOT_AGENT_JOB_RESULT_TTL` — `wait_for_result` 用の Redis 結果保持秒数（既定 3600）。  
+  - `IOT_AGENT_JOB_RESULT_TTL` — Redis TTL (seconds) for `wait_for_result` results (default 3600).
 - `IOT_AGENT_CAMERA_DIR` / `IOT_AGENT_CAMERA_WARMUP` — 画像保存先とカメラウォームアップ秒数。  
   - `IOT_AGENT_CAMERA_DIR` / `IOT_AGENT_CAMERA_WARMUP` — Photo directory and camera warm-up duration.
 - `IOT_AGENT_AUTO_APPROVE` — `1` で能力登録を自動承認、`0` で手動レビューを強制。  
@@ -112,7 +127,7 @@ This project bundles a FastAPI IoT management server, a single-page style dashbo
 | POST | `/api/chat` | 会話履歴を LLM へ渡し、応答やキューイングされたデバイスジョブ結果を返却します。<br>Sends the conversation to the LLM and returns responses plus queued job outcomes. |
 | GET | `/api/models` | 選択可能な LLM 一覧と現在の選択情報を返します。<br>Lists all available LLM options and the current selection. |
 | GET | `/api/dependencies` | 主要依存関係と必須環境変数のセット状況を確認するヘルスエンドポイント。<br>Health endpoint listing dependency versions and env-variable availability. |
-| POST | `/api/devices/register` | 新規デバイスメタと capabilities を受け取り、`_DEVICES` に登録します。<br>Registers a device plus its capabilities into `_DEVICES`. |
+| POST | `/api/devices/register` | 新規デバイスメタと capabilities を受け取り、PostgreSQL の device 台帳へ登録します。<br>Registers a device plus its capabilities into the PostgreSQL device registry. |
 | GET | `/api/devices` | 登録済みデバイス一覧と最新ジョブ状態を配信します。<br>Returns the device list with latest job metadata. |
 | PATCH | `/api/devices/<device_id>/name` | デバイス表示名を更新します。<br>Updates a device display name. |
 | GET / POST | `/api/devices/<device_id>/jobs` | ジョブ履歴取得や手動ジョブ投入、`wait_for_result` 指定も可能です。<br>Reads job history or enqueues manual jobs, optionally waiting for completion. |
@@ -122,12 +137,12 @@ This project bundles a FastAPI IoT management server, a single-page style dashbo
 | GET | `/api/ping` | 最小限のヘルスチェック応答。<br>Simple health check endpoint. |
 
 ## ジョブとデータ管理
-- `_DEVICES` / `_PENDING_JOBS` / `_JOB_METADATA` / `_COMPLETED_JOBS` はすべてプロセス内メモリに存在し、プロセス再起動でリセットされます。  
-  - `_DEVICES`, `_PENDING_JOBS`, `_JOB_METADATA`, and `_COMPLETED_JOBS` live in-process and reset on restart.
-- 各デバイスには FIFO キューが割り当てられ、最前のジョブをポーリングしたクライアントが責任を持って処理します。  
-  - Each device owns a FIFO queue; the client pulling the head job is responsible for executing it.
-- `MAX_COMPLETED_JOBS` を超える結果は古い順にドロップされ、メモリ使用量を制御します。  
-  - Results beyond `MAX_COMPLETED_JOBS` are dropped oldest-first to bound memory usage.
+- デバイス台帳とジョブ履歴は PostgreSQL に永続化され、再起動後も復元されます。  
+  - The device registry and job history are persisted in PostgreSQL to survive restarts.
+- デバイスごとの FIFO キューと pending 状態は Redis で管理され、ポーリング順にジョブを配信します。  
+  - Per-device FIFO queues and pending state live in Redis, preserving poll order.
+- `IOT_AGENT_STORAGE_BACKEND=memory` を指定すると、従来どおりインメモリで動作します（テスト用途向け）。  
+  - Setting `IOT_AGENT_STORAGE_BACKEND=memory` keeps the legacy in-memory behavior (useful for tests).
 
 ## フロントエンドと UX
 - `static/app.js` は 5 秒間隔で `/api/devices` をポーリングし、チャットログとデバイスカードを書き換えます。  

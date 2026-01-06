@@ -14,8 +14,31 @@ services:
     networks:
       - default
       - multi_agent_network
+  postgres:
+    image: postgres:16
+    profiles: ["storage"]
+    env_file:
+      - secrets.env
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-iot_agent}
+      POSTGRES_USER: ${POSTGRES_USER:-iot_agent}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+  redis:
+    image: redis:7
+    profiles: ["storage"]
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
 
 networks:
   multi_agent_network:
     external: true
     name: ${MULTI_AGENT_NETWORK:-multi_agent_platform_net}
+
+volumes:
+  pg_data:
+  redis_data:

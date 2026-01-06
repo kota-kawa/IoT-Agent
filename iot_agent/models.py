@@ -16,6 +16,8 @@ class DeviceState:
     meta: Dict[str, Any]
     # エッジデバイスが取得するジョブの待ち行列
     job_queue: Deque[Dict[str, Any]] = field(default_factory=deque)
+    # Redis など外部キューの長さ（ストア実装が埋める）
+    queue_depth: int = 0
     # 完了したジョブ結果を job_id ごとに保持
     job_results: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     # 最後にポーリングされた時刻（UNIX 時刻）

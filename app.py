@@ -6,7 +6,6 @@ import queue
 import threading
 import time
 import uuid
-from collections import deque
 from importlib import metadata
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -28,7 +27,6 @@ from iot_agent.device_utils import (
     _enqueue_device_command,
     _normalise_capabilities,
     _serialize_device,
-    _store_completed_job,
 )
 from iot_agent.execution import _chat_via_legacy, _execute_device_command_sequence
 from iot_agent.llm import (
@@ -40,7 +38,7 @@ from iot_agent.llm import (
 )
 from iot_agent.mcp_server import mcp_server
 from iot_agent.models import DeviceState
-from iot_agent.state import _COMPLETED_JOBS, _DEVICES, _JOB_METADATA, _PENDING_JOBS
+from iot_agent.storage import get_store
 from iot_agent.validation import _validate_device_command, _validate_device_command_sequence
 from model_selection import (
     apply_model_selection,
@@ -56,6 +54,17 @@ _BASE_DIR = Path(__file__).resolve().parent
 app.mount("/static", StaticFiles(directory=_BASE_DIR / "static"), name="static")
 
 logger = logging.getLogger("iot-agent")
+
+
+@app.on_event("startup")
+def _init_storage() -> None:
+    get_store()
+
+
+@app.on_event("shutdown")
+def _shutdown_storage() -> None:
+    store = get_store()
+    store.close()
 
 # Default platform base for pushing model changes back to Multi-Agent-Platform
 _PLATFORM_BASE = os.getenv("MULTI_AGENT_PLATFORM_BASE", "http://web:5050").rstrip("/")
@@ -576,7 +585,8 @@ async def register_device(request: Request):
     elif isinstance(metadata, dict) and "display_name" in metadata:
         metadata.pop("display_name", None)
 
-    existing = _DEVICES.get(cleaned_id)
+    store = get_store()
+    existing = store.get_device(cleaned_id)
 
     if existing:
         if not existing.approved and not manual_registration:
@@ -624,8 +634,10 @@ async def register_device(request: Request):
             last_seen=now,
             approved=True,
         )
-        _DEVICES[cleaned_id] = device_state
+        device_state.registered_at = now
         status = "registered"
+
+    store.save_device(device_state)
 
     return _json_response(
         {
@@ -644,7 +656,7 @@ async def get_device(device_id: str):
     if not cleaned_id:
         return _json_response({"error": "device_id is required"}, status_code=400)
 
-    device = _DEVICES.get(cleaned_id)
+    device = get_store().get_device(cleaned_id)
     if not device:
         return _json_response({"error": "device not registered"}, status_code=404)
 
@@ -659,7 +671,8 @@ async def update_device(device_id: str, request: Request):
     if not cleaned_id:
         return _json_response({"error": "device_id is required"}, status_code=400)
 
-    device = _DEVICES.get(cleaned_id)
+    store = get_store()
+    device = store.get_device(cleaned_id)
     if not device:
         return _json_response({"error": "device not registered"}, status_code=404)
 
@@ -706,6 +719,7 @@ async def update_device(device_id: str, request: Request):
         device.approved = bool(payload.get("approved"))
 
     device.last_seen = time.time()
+    store.save_device(device)
     return _json_response({"status": "updated", "device": _serialize_device(device)})
 
 
@@ -717,28 +731,12 @@ async def list_device_jobs(device_id: str):
     if not cleaned_id:
         return _json_response({"error": "device_id is required"}, status_code=400)
 
-    device = _DEVICES.get(cleaned_id)
+    store = get_store()
+    device = store.get_device(cleaned_id)
     if not device:
         return _json_response({"error": "device not registered"}, status_code=404)
 
-    jobs: List[Dict[str, Any]] = []
-    for job_id, metadata in _JOB_METADATA.items():
-        if metadata.get("device_id") != cleaned_id:
-            continue
-
-        job_info = dict(metadata)
-        job_info["job_id"] = job_id
-
-        if job_id in _PENDING_JOBS:
-            if job_info.get("status") not in {"dispatched", "cancelled"}:
-                job_info["status"] = "pending"
-        elif job_id in _COMPLETED_JOBS and job_info.get("status") != "cancelled":
-            job_info["status"] = "completed"
-            job_info["result"] = _COMPLETED_JOBS[job_id]
-
-        jobs.append({k: v for k, v in job_info.items() if v is not None})
-
-    jobs.sort(key=lambda item: item.get("queued_at") or 0)
+    jobs = store.list_device_jobs(cleaned_id)
     return _json_response({"device_id": cleaned_id, "jobs": jobs})
 
 
@@ -750,7 +748,8 @@ async def create_device_job(device_id: str, request: Request):
     if not cleaned_id:
         return _json_response({"error": "device_id is required"}, status_code=400)
 
-    if cleaned_id not in _DEVICES:
+    store = get_store()
+    if not store.get_device(cleaned_id):
         return _json_response({"error": "device not registered"}, status_code=404)
 
     try:
@@ -795,14 +794,13 @@ async def create_device_job(device_id: str, request: Request):
     except (TypeError, ValueError):
         timeout_seconds = DEVICE_RESULT_TIMEOUT
 
-    metadata = _JOB_METADATA.get(job_id)
-    if metadata is not None:
-        metadata["wait_for_result"] = wait_for_result
-        requested_via = payload.get("requested_via")
-        if isinstance(requested_via, str) and requested_via.strip():
-            metadata["requested_via"] = requested_via.strip()
-        else:
-            metadata.setdefault("requested_via", "api")
+    metadata_fields: Dict[str, Any] = {"wait_for_result": wait_for_result}
+    requested_via = payload.get("requested_via")
+    if isinstance(requested_via, str) and requested_via.strip():
+        metadata_fields["requested_via"] = requested_via.strip()
+    else:
+        metadata_fields["requested_via"] = "api"
+    store.update_job_metadata(job_id, metadata_fields)
 
     response_payload: Dict[str, Any] = {
         "status": "queued",
@@ -812,8 +810,9 @@ async def create_device_job(device_id: str, request: Request):
         "wait_for_result": wait_for_result,
     }
 
-    if metadata is not None:
-        response_payload["queued_at"] = metadata.get("queued_at")
+    job_info = store.get_job(job_id)
+    if job_info is not None:
+        response_payload["queued_at"] = job_info.get("queued_at")
 
     if wait_for_result:
         result = _await_device_result(cleaned_id, job_id, timeout=timeout_seconds)
@@ -838,7 +837,7 @@ async def create_device_job(device_id: str, request: Request):
 async def list_devices():
     # 登録済みデバイス一覧を JSON 形式で返却
 
-    devices = [_serialize_device(device) for device in _DEVICES.values()]
+    devices = [_serialize_device(device) for device in get_store().list_devices()]
     devices.sort(key=lambda d: d["device_id"])
     return _json_response({"devices": devices})
 
@@ -851,7 +850,8 @@ async def update_device_name(device_id: str, request: Request):
     if not cleaned_id:
         return _json_response({"error": "device_id is required"}, status_code=400)
 
-    device = _DEVICES.get(cleaned_id)
+    store = get_store()
+    device = store.get_device(cleaned_id)
     if not device:
         return _json_response({"error": "device not registered"}, status_code=404)
 
@@ -879,6 +879,7 @@ async def update_device_name(device_id: str, request: Request):
         device.meta.pop("display_name", None)
 
     device.last_seen = time.time()
+    store.save_device(device)
     return _json_response({"status": "updated", "device": _serialize_device(device)})
 
 
@@ -890,17 +891,13 @@ async def delete_device(device_id: str):
     if not cleaned_id:
         return _json_response({"error": "device_id is required"}, status_code=400)
 
-    device = _DEVICES.pop(cleaned_id, None)
+    store = get_store()
+    device = store.get_device(cleaned_id)
     if not device:
         return _json_response({"error": "device not registered"}, status_code=404)
 
-    stale_jobs = [job_id for job_id, mapped in _PENDING_JOBS.items() if mapped == cleaned_id]
-    for job_id in stale_jobs:
-        _PENDING_JOBS.pop(job_id, None)
-        metadata = _JOB_METADATA.get(job_id)
-        if metadata is not None:
-            metadata["status"] = "cancelled"
-            metadata["cancelled_at"] = time.time()
+    store.clear_device_jobs(cleaned_id)
+    store.delete_device(cleaned_id)
 
     return _json_response({"status": "deleted", "device_id": cleaned_id})
 
@@ -913,36 +910,13 @@ async def clear_device_jobs(device_id: str):
     if not cleaned_id:
         return _json_response({"error": "device_id is required"}, status_code=400)
 
-    device = _DEVICES.get(cleaned_id)
+    store = get_store()
+    device = store.get_device(cleaned_id)
     if not device:
         return _json_response({"error": "device not registered"}, status_code=404)
 
-    # 保留中のジョブIDを特定
-    jobs_to_cancel = [
-        job_id for job_id, assigned_dev in _PENDING_JOBS.items()
-        if assigned_dev == cleaned_id
-    ]
-
-    count = 0
-    # _PENDING_JOBS から削除し、メタデータを更新
-    for job_id in jobs_to_cancel:
-        _PENDING_JOBS.pop(job_id, None)
-        metadata = _JOB_METADATA.get(job_id)
-        if metadata is not None:
-            metadata["status"] = "cancelled"
-            metadata["cancelled_at"] = time.time()
-        count += 1
-
-    # デバイス自体のキューもクリア
-    # (既にポーリングされてデバイスのメモリにあるものは消せないが、サーバーのキューにあるものは消す)
-    if device.job_queue:
-        count += len(device.job_queue)
-        device.job_queue.clear()
-
-    # 重複カウントを調整（PendingJobsにあるものはQueueにもあるはずなので）
-    # 正確な数は難しいが、ユーザーへのフィードバックとしては "Cleared" で十分
-
-    device.last_seen = time.time()
+    count = store.clear_device_jobs(cleaned_id)
+    store.touch_device(cleaned_id, time.time())
     return _json_response({"status": "cleared", "device_id": cleaned_id, "count": count})
 
 
@@ -954,22 +928,15 @@ async def next_job(device_id: str):
     if not cleaned_id:
         return _json_response({"error": "device_id is required"}, status_code=400)
 
-    device = _DEVICES.get(cleaned_id)
+    store = get_store()
+    device = store.get_device(cleaned_id)
     if not device:
         return _json_response({"error": "device not registered"}, status_code=404)
 
-    device.last_seen = time.time()
-
-    if not device.job_queue:
+    store.touch_device(cleaned_id, time.time())
+    job = store.pop_next_job(cleaned_id)
+    if not job:
         return Response(content="", status_code=204)
-
-    job = device.job_queue.popleft()
-    job_id = job.get("job_id") if isinstance(job, dict) else None
-    if isinstance(job_id, str):
-        metadata = _JOB_METADATA.get(job_id)
-        if metadata is not None and metadata.get("status") == "pending":
-            metadata["status"] = "dispatched"
-            metadata["dispatched_at"] = time.time()
     return _json_response(job)
 
 
@@ -981,33 +948,11 @@ async def get_job(job_id: str):
     if not cleaned_id:
         return _json_response({"error": "job_id is required"}, status_code=400)
 
-    metadata = _JOB_METADATA.get(cleaned_id)
-    pending_device = _PENDING_JOBS.get(cleaned_id)
-    result = _COMPLETED_JOBS.get(cleaned_id)
-
-    if not metadata and not pending_device and result is None:
+    job_info = get_store().get_job(cleaned_id)
+    if not job_info:
         return _json_response({"error": "job not found"}, status_code=404)
 
-    response_payload: Dict[str, Any] = {"job_id": cleaned_id}
-
-    if metadata:
-        response_payload.update({k: v for k, v in metadata.items() if v is not None})
-
-    if pending_device:
-        response_payload["device_id"] = pending_device
-        if metadata and metadata.get("status") == "dispatched":
-            response_payload["status"] = "dispatched"
-        else:
-            response_payload["status"] = "pending"
-
-    if result is not None:
-        response_payload["status"] = "completed"
-        response_payload["result"] = result
-        response_payload.setdefault("device_id", result.get("device_id"))
-
-    response_payload.setdefault("status", metadata.get("status") if metadata else "unknown")
-
-    return _json_response(response_payload)
+    return _json_response(job_info)
 
 
 @app.delete("/api/jobs/{job_id}")
@@ -1018,53 +963,16 @@ async def cancel_job(job_id: str):
     if not cleaned_id:
         return _json_response({"error": "job_id is required"}, status_code=400)
 
-    if cleaned_id in _COMPLETED_JOBS:
+    status, device_id = get_store().cancel_job(cleaned_id)
+    if status == "completed":
         return _json_response({"error": "job already completed"}, status_code=409)
-
-    device_id = _PENDING_JOBS.get(cleaned_id)
-    metadata = _JOB_METADATA.get(cleaned_id)
-
-    if not device_id:
-        if metadata and metadata.get("status") == "cancelled":
-            response_payload = {
-                "status": "cancelled",
-                "job_id": cleaned_id,
-                "device_id": metadata.get("device_id"),
-            }
-            return _json_response(response_payload)
+    if status == "dispatched":
+        return _json_response({"error": "job already dispatched"}, status_code=409)
+    if status == "not_found":
         return _json_response({"error": "job not found or already dispatched"}, status_code=404)
 
-    device = _DEVICES.get(device_id)
-    if not device:
-        _PENDING_JOBS.pop(cleaned_id, None)
-        if metadata is not None:
-            metadata["status"] = "cancelled"
-            metadata["cancelled_at"] = time.time()
-        return _json_response({"status": "cancelled", "job_id": cleaned_id, "device_id": device_id})
-
-    removed = False
-    new_queue: deque[Dict[str, Any]] = deque()
-    while device.job_queue:
-        job = device.job_queue.popleft()
-        if not removed and job.get("job_id") == cleaned_id:
-            removed = True
-            continue
-        new_queue.append(job)
-
-    device.job_queue = new_queue
-
-    if not removed:
-        # ジョブは既にデバイスに取得されている
-        device.job_queue = new_queue
-        return _json_response({"error": "job already dispatched"}, status_code=409)
-
-    device.last_seen = time.time()
-    _PENDING_JOBS.pop(cleaned_id, None)
-    if metadata is not None:
-        metadata["status"] = "cancelled"
-        metadata["cancelled_at"] = time.time()
-
-    return _json_response({"status": "cancelled", "job_id": cleaned_id, "device_id": device_id})
+    response_payload = {"status": "cancelled", "job_id": cleaned_id, "device_id": device_id}
+    return _json_response(response_payload)
 
 
 @app.post("/api/devices/{device_id}/jobs/result")
@@ -1123,32 +1031,38 @@ async def post_result(device_id: str, request: Request):
     else:
         job_id = job_id.strip()
 
+    store = get_store()
     mapped_device_id: Optional[str] = None
     if job_id:
-        mapped = _PENDING_JOBS.get(job_id)
+        mapped = store.pending_job_device(job_id)
         if isinstance(mapped, str) and mapped.strip():
             mapped_device_id = mapped.strip()
+        else:
+            job_info = store.get_job(job_id)
+            candidate = job_info.get("device_id") if isinstance(job_info, dict) else None
+            if isinstance(candidate, str) and candidate.strip():
+                mapped_device_id = candidate.strip()
 
     resolved_device: Optional[DeviceState] = None
     mismatch_resolved_via_job = False
 
-    if mapped_device_id and mapped_device_id in _DEVICES:
-        resolved_device = _DEVICES[mapped_device_id]
+    if mapped_device_id:
+        resolved_device = store.get_device(mapped_device_id)
         if provided_ids and mapped_device_id not in provided_ids:
             mismatch_resolved_via_job = True
 
     if not resolved_device:
         for candidate in provided_ids:
-            device_candidate = _DEVICES.get(candidate)
+            device_candidate = store.get_device(candidate)
             if device_candidate:
                 resolved_device = device_candidate
                 break
 
-    if not resolved_device and len(_DEVICES) == 1:
+    if not resolved_device and store.device_count() == 1:
         # Some edge device firmwares omit the device_id on the result endpoint.
         # When there is only a single registered device we can safely assume it
         # is the source of the result so that measurements are not dropped.
-        resolved_device = next(iter(_DEVICES.values()))
+        resolved_device = next(iter(store.list_devices()), None)
 
     if not resolved_device:
         if provided_ids or job_id:
@@ -1157,18 +1071,14 @@ async def post_result(device_id: str, request: Request):
 
     if (
         mapped_device_id
-        and mapped_device_id in _DEVICES
         and resolved_device.device_id != mapped_device_id
     ):
-        resolved_device = _DEVICES[mapped_device_id]
+        resolved_device = store.get_device(mapped_device_id)
         mismatch_resolved_via_job = True
 
     device = resolved_device
 
-    device.last_seen = time.time()
-    if isinstance(job_id, str) and job_id:
-        _PENDING_JOBS.pop(job_id, None)
-    else:
+    if not isinstance(job_id, str) or not job_id:
         job_id = None
     result_record = {
         "job_id": job_id,
@@ -1180,17 +1090,7 @@ async def post_result(device_id: str, request: Request):
         "ts": payload.get("ts"),
         "device_id": device.device_id,
     }
-    device.last_result = result_record
-    if job_id:
-        device.job_results[job_id] = dict(result_record)
-        metadata = _JOB_METADATA.setdefault(job_id, {"job_id": job_id})
-        metadata["device_id"] = device.device_id
-        metadata.setdefault("command", payload.get("command"))
-        metadata.setdefault("queued_at", time.time())
-        metadata["status"] = "completed"
-        metadata["completed_at"] = time.time()
-        metadata["result_ok"] = bool(payload.get("ok"))
-    _store_completed_job(job_id, result_record)
+    store.record_job_result(device.device_id, job_id, result_record, payload.get("command"))
 
     response_payload = {"status": "ack"}
     if mismatch_resolved_via_job:
