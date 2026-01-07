@@ -1,6 +1,7 @@
 import json
 import os
 import threading
+import asyncio
 from typing import Any, Dict, List, Optional, Tuple
 
 from openai import OpenAI
@@ -867,7 +868,8 @@ async def _chat_via_legacy(messages: List[Dict[str, str]]) -> Tuple[Dict[str, An
         return {"reply": final_reply}, 200
 
     if validated_commands:
-        final_reply, status, images = _execute_device_command_sequence(
+        final_reply, status, images = await asyncio.to_thread(
+            _execute_device_command_sequence,
             client, messages, reply_message, validated_commands
         )
         return {"reply": final_reply, "images": images}, status

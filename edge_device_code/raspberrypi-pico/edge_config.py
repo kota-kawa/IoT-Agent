@@ -2,7 +2,7 @@
 共通設定値と secrets.py ロードを切り出したモジュール。
 """
 
-# サーバーへの接続先 URL と API パス
+# Flask サーバーへの接続先 URL と API パス
 BASE_URL = "https://iot-agent.project-kk.com"
 REGISTER_PATH = "/api/devices/register"
 NEXT_PATH = "/api/devices/{device_id}/jobs/next"
@@ -52,7 +52,7 @@ USER_AGENT = "MicroPython-IoT-Edge-Agent/1.1"
 HTTP_BODY_PREVIEW_LEN = 512
 RETURN_TEXT_LIMIT = 3000
 RETURN_TEXT_KEEP = 1500
-HTTP_TIMEOUT_SEC = 300
+HTTP_TIMEOUT_SEC = 60
 _RECV_CHUNK = 1024
 RESULT_MAX_ATTEMPTS = 4
 RESULT_RETRY_BASE_DELAY = 2
@@ -80,3 +80,4 @@ __all__ = [
     "RESULT_MAX_ATTEMPTS",
     "RESULT_RETRY_BASE_DELAY",
 ]
+

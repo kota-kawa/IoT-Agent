@@ -461,7 +461,8 @@ async def chat(request: Request):
                 notice = "\n".join(f"(システム通知: {error})" for error in validation_errors)
                 response_payload["reply"] = (reply_message + "\n" if reply_message else "") + notice
             elif validated_commands:
-                final_reply, status, images = _execute_device_command_sequence(
+                final_reply, status, images = await asyncio.to_thread(
+                    _execute_device_command_sequence,
                     client, formatted_messages, reply_message, validated_commands
                 )
                 response_payload = {"reply": final_reply, "images": images}
@@ -537,7 +538,8 @@ async def review_conversation(request: Request):
 
     if action_required and validated_commands:
         initial_reply = analysis.get("reason", "")
-        final_reply, status, images = _execute_device_command_sequence(
+        final_reply, status, images = await asyncio.to_thread(
+            _execute_device_command_sequence,
             client, messages, initial_reply, validated_commands
         )
         response_payload["action_taken"] = True
