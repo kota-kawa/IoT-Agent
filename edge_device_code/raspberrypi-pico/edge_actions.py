@@ -204,8 +204,8 @@ _motor_pwm = None
 _MOTOR_INITIALISED = False
 _PWM_RANGE_MAX = 4095
 _U16_MAX = 65535
-_MOTOR_DEFAULT_SPEED = 3000  # high enough to overcome startup friction
-_MOTOR_MIN_START_SPEED = 2000  # below this many motors will not start reliably
+_MOTOR_DEFAULT_SPEED = 3800  # slower than max (4095) but enough torque to spin
+_MOTOR_MIN_START_SPEED = 3200  # restored to original to ensure it overcomes friction
 
 
 def _init_motor():
