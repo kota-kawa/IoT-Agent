@@ -7,7 +7,7 @@ from dotenv import load_dotenv as loadenv
 _SECRETS_PATH = Path(__file__).resolve().parents[1] / "secrets.env"
 loadenv(_SECRETS_PATH)
 
-APP_PASSWORD = "kkawagoe"
+APP_PASSWORD = os.getenv("APP_PASSWORD")
 
 AGENT_ROLE_VALUE = "raspberrypi-agent"
 AGENT_CAPABILITY_NAME = "agent_instruction"
