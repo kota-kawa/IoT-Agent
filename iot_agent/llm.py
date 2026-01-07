@@ -337,26 +337,10 @@ def _extract_embedded_tool_calls(text: Any) -> List[Dict[str, Any]]:
     else:
         snippet = text
 
-    # Try to isolate a JSON array within the snippet
+    # Try to isolate a JSON array or object within the snippet
     content = snippet.strip().strip("`").strip()
-    if "[" not in content or "]" not in content:
-        return []
 
-    try:
-        prefix_index = content.index("[")
-        suffix_index = content.rindex("]") + 1
-        json_fragment = content[prefix_index:suffix_index]
-        parsed = json.loads(json_fragment)
-    except Exception:
-        return []
-
-    if not isinstance(parsed, list):
-        return []
-
-    tool_like_calls: List[Dict[str, Any]] = []
-    for index, entry in enumerate(parsed):
-        if not isinstance(entry, dict):
-            continue
+    def _tool_calls_from_entry(entry: Dict[str, Any], index: int) -> Optional[Dict[str, Any]]:
         name = (
             entry.get("tool_name")
             or entry.get("name")
@@ -370,21 +354,63 @@ def _extract_embedded_tool_calls(text: Any) -> List[Dict[str, Any]]:
             or {}
         )
         if not name:
-            continue
+            return None
         try:
             arguments = params if isinstance(params, str) else json.dumps(params or {})
         except Exception:
             arguments = "{}"
+        return {
+            "id": entry.get("id") or entry.get("tool_call_id") or f"embedded_call_{index + 1}",
+            "type": "function",
+            "function": {"name": name, "arguments": arguments},
+        }
 
-        tool_like_calls.append(
-            {
-                "id": entry.get("id") or entry.get("tool_call_id") or f"embedded_call_{index + 1}",
-                "type": "function",
-                "function": {"name": name, "arguments": arguments},
-            }
-        )
+    def _control_device_call_from_args(entry: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        if not isinstance(entry.get("device_id"), str):
+            return None
+        if "command" not in entry and "commands" not in entry:
+            return None
+        try:
+            arguments = json.dumps(entry)
+        except Exception:
+            arguments = "{}"
+        return {
+            "id": entry.get("id") or "embedded_call_1",
+            "type": "function",
+            "function": {"name": "control_device", "arguments": arguments},
+        }
 
-    return tool_like_calls
+    tool_like_calls: List[Dict[str, Any]] = []
+    if "[" in content and "]" in content:
+        try:
+            prefix_index = content.index("[")
+            suffix_index = content.rindex("]") + 1
+            json_fragment = content[prefix_index:suffix_index]
+            parsed = json.loads(json_fragment)
+        except Exception:
+            parsed = None
+
+        if isinstance(parsed, list):
+            for index, entry in enumerate(parsed):
+                if not isinstance(entry, dict):
+                    continue
+                call = _tool_calls_from_entry(entry, index)
+                if call:
+                    tool_like_calls.append(call)
+            if tool_like_calls:
+                return tool_like_calls
+
+    # Fallback: accept a single JSON object that looks like a tool call or control_device args
+    parsed_obj, _ = _extract_json_object(content)
+    if isinstance(parsed_obj, dict):
+        call = _tool_calls_from_entry(parsed_obj, 0)
+        if call:
+            return [call]
+        control_call = _control_device_call_from_args(parsed_obj)
+        if control_call:
+            return [control_call]
+
+    return []
 
 
 def _convert_messages_to_responses_input(messages: Any) -> List[Dict[str, Any]]:
