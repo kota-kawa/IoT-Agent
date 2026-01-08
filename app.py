@@ -251,6 +251,19 @@ async def index_html():
     return _page_response("index.html")
 
 
+@app.get("/agent-result")
+async def agent_result(request: Request):
+    # 認証済みでなければログインページへリダイレクト
+    if not request.session.get("authenticated"):
+        return RedirectResponse(url="/login", status_code=302)
+    return _page_response("agent_result.html")
+
+
+@app.get("/agent_result.html")
+async def agent_result_html():
+    return _page_response("agent_result.html")
+
+
 @app.get("/login.html")
 async def login_html():
     return _page_response("login.html")
