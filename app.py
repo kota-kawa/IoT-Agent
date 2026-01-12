@@ -31,10 +31,8 @@ from iot_agent.device_utils import (
 from iot_agent.execution import _chat_via_legacy, _execute_device_command_sequence
 from iot_agent.llm import (
     _call_llm_and_parse_async,
-    _call_llm_for_conversation_review,
     _client,
     _latest_user_turn,
-    _normalise_conversation_messages,
 )
 from iot_agent.mcp_server import mcp_server
 from iot_agent.models import DeviceState
@@ -489,79 +487,6 @@ async def chat(request: Request):
         response_payload.pop("images", None)
 
     return _json_response(response_payload, status_code=status)
-
-
-@app.post("/api/conversations/review")
-async def review_conversation(request: Request):
-    # 他エージェントから渡された会話ログを評価し、必要なら IoT 操作を実行
-
-    try:
-        payload = await request.json()
-    except Exception:
-        payload = {}
-
-    payload = payload if isinstance(payload, dict) else {}
-    raw_history = payload.get("history")
-    if raw_history is None:
-        raw_history = payload.get("messages")
-
-    if raw_history is None:
-        return _json_response({"error": "history is required"}, status_code=400)
-    if not isinstance(raw_history, list):
-        return _json_response({"error": "history must be a list"}, status_code=400)
-
-    messages = _normalise_conversation_messages(raw_history)
-    messages = _latest_user_turn(messages)
-
-    if not messages:
-        return _json_response({"error": "no user message found"}, status_code=400)
-
-    try:
-        client = _client()
-        analysis = _call_llm_for_conversation_review(client, messages)
-    except RuntimeError as exc:
-        return _json_response({"error": str(exc)}, status_code=500)
-    except Exception as exc:  # pragma: no cover - network/SDK errors
-        return _json_response({"error": str(exc)}, status_code=500)
-
-    validation_target: Any = analysis.get("device_commands")
-    validated_commands, validation_errors = _validate_device_command_sequence(validation_target)
-    action_required = bool(analysis.get("action_required"))
-
-    response_payload: Dict[str, Any] = {
-        "analysis": {
-            "action_required": action_required,
-            "reason": analysis.get("reason", ""),
-            "notes": analysis.get("notes"),
-            "raw": analysis.get("raw"),
-            "suggested_device_commands": validation_target if isinstance(validation_target, list) else [],
-        },
-        "action_taken": False,
-    }
-
-    if validation_errors:
-        response_payload["analysis"]["validation_errors"] = validation_errors
-        return _json_response(response_payload, status_code=200)
-
-    if action_required and not validated_commands:
-        response_payload["analysis"]["validation_errors"] = [
-            "LLM indicated action_required but did not provide executable commands."
-        ]
-        return _json_response(response_payload, status_code=200)
-
-    if action_required and validated_commands:
-        initial_reply = analysis.get("reason", "")
-        final_reply, status, images = await asyncio.to_thread(
-            _execute_device_command_sequence,
-            client, messages, initial_reply, validated_commands
-        )
-        response_payload["action_taken"] = True
-        response_payload["analysis"]["executed_commands"] = validated_commands
-        response_payload["execution_reply"] = final_reply
-        # response_payload["images"] = images  # Images omitted for platform review
-        return _json_response(response_payload, status_code=status)
-
-    return _json_response(response_payload, status_code=200)
 
 
 @app.post("/api/devices/register")
