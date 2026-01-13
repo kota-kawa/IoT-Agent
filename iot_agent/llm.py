@@ -440,20 +440,21 @@ def _convert_messages_to_responses_input(messages: Any) -> List[Dict[str, Any]]:
                     elif part_type in {"image_url", "input_image"}:
                         image_url = part.get("image_url")
                         url = None
+                        detail = None
                         if isinstance(image_url, dict):
                             url = image_url.get("url")
+                            detail = image_url.get("detail")
                         elif isinstance(image_url, str):
                             url = image_url
+                        if isinstance(part.get("detail"), str) and not detail:
+                            detail = part.get("detail")
 
                         if isinstance(url, str) and url.strip():
-                            url = url.strip()
-
-                            # Responses API expects a bare URL string, not an object; data URLs can be huge.
-                            if url.startswith("data:"):
-                                # 長大な base64 はトークン上限を溢れさせるので、プレースホルダーに置換
-                                parts.append({"type": "input_text", "text": "[画像: 省略]"})
-                            else:
-                                parts.append({"type": "input_image", "image_url": url})
+                            url = url.strip().replace("\n", "").replace("\r", "")
+                            image_part = {"type": "input_image", "image_url": url}
+                            if isinstance(detail, str) and detail.strip():
+                                image_part["detail"] = detail.strip()
+                            parts.append(image_part)
                 elif isinstance(part, str) and part.strip():
                     parts.append({"type": "input_text", "text": part})
 
@@ -491,6 +492,68 @@ def _response_output_to_text(response: Any) -> str:
 def _current_datetime_line() -> str:
     """Return the timestamp string used in system prompts."""
     return datetime.now().strftime("現在の日時ー%Y年%m月%d日%H時%M分")
+
+
+def _build_vision_followup_messages(
+    messages: List[Dict[str, Any]],
+    images: List[Dict[str, Any]],
+    draft_reply: str,
+) -> List[Dict[str, Any]]:
+    """Build a vision follow-up prompt to describe captured images."""
+
+    sanitized = _sanitize_messages(messages, allow_vision=False)
+    last_user = ""
+    for entry in reversed(sanitized):
+        if entry.get("role") == "user":
+            last_user = _content_to_text(entry.get("content"))
+            break
+
+    user_parts: List[Dict[str, Any]] = [
+        {
+            "type": "text",
+            "text": (
+                "デバイスがたった今、添付の写真を撮影しました。"
+                "撮影したことを一言伝えたうえで、必ず写真に写っている内容を日本語で説明してください。"
+                "断定できない場合はその旨を述べ、見える範囲で丁寧に説明してください。"
+                "文字が写っている場合は読み取ってください。"
+                "複数枚ある場合はそれぞれ簡潔に触れてください。"
+            ),
+        }
+    ]
+
+    if isinstance(last_user, str) and last_user.strip():
+        user_parts.append({"type": "text", "text": f"ユーザーの依頼: {last_user.strip()}"})
+
+    if isinstance(draft_reply, str) and draft_reply.strip():
+        user_parts.append({"type": "text", "text": f"既存の返答ドラフト: {draft_reply.strip()}"})
+
+    for image in images:
+        if not isinstance(image, dict):
+            continue
+        label = image.get("label")
+        if isinstance(label, str) and label.strip():
+            user_parts.append({"type": "text", "text": f"画像のラベル: {label.strip()}"})
+
+        data_url = image.get("data_url")
+        if isinstance(data_url, str) and data_url.strip():
+            user_parts.append(
+                {
+                    "type": "image_url",
+                    "image_url": {"url": data_url.strip(), "detail": "high"},
+                }
+            )
+
+    return [
+        {
+            "role": "system",
+            "content": (
+                "あなたはIoTデバイスとカメラをサポートする親切なアシスタントです。"
+                "添付された写真に基づいて、自然で温かい日本語の返答を提供してください。"
+                "機械的なログや生のエラーコードは避け、ユーザーに話しかけるように答えてください。"
+            ),
+        },
+        {"role": "user", "content": user_parts},
+    ]
 
 
 def _classify_provider_error(exc: Exception) -> Tuple[bool, bool, str]:
@@ -979,6 +1042,29 @@ async def _process_chat_with_tools(client: UnifiedClient, messages: List[Dict[st
             # ツール呼び出しがない場合、それが最終回答
             final_reply = cleaned_content
             break
+
+    if collected_images and provider_supports_vision(provider):
+        try:
+            vision_messages = _build_vision_followup_messages(
+                current_messages, collected_images, final_reply
+            )
+            response, llm_error = await _chat_completion_with_retries_async(
+                client,
+                model=client.model_name,
+                messages=vision_messages,
+                max_attempts=2,
+            )
+            if response:
+                choice = response.choices[0] if response.choices else None
+                message = choice.message if choice else None
+                content = getattr(message, "content", None) if message else None
+                vision_text = _content_to_text(content).strip()
+                if vision_text:
+                    final_reply = vision_text
+            elif llm_error:
+                print(f"[{datetime.now()}] Vision follow-up error: {str(llm_error)}")
+        except Exception as exc:
+            print(f"[{datetime.now()}] Vision follow-up exception: {str(exc)}")
 
     return {
         "reply": final_reply,
