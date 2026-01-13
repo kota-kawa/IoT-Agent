@@ -9,7 +9,7 @@ const FETCH_DEVICES_INTERVAL_MS = 5000;
 
 const API_BASE = (window.location.protocol === 'file:')
   ? 'http://localhost:5006'
-  : '';
+  : '.';
 
 if (window.location.protocol === 'file:') {
   console.warn("Notice: Opened from file system. Attempting to connect to API server at http://localhost:5006.");

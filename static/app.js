@@ -11,7 +11,7 @@ const FETCH_DEVICES_INTERVAL_MS = 5000;
 // API ベース URL の決定（file: プロトコルで開いた場合のフォールバック）
 const API_BASE = (window.location.protocol === 'file:')
   ? 'http://localhost:5006'
-  : '';
+  : '.';
 
 if (window.location.protocol === 'file:') {
   console.warn("注意: ファイルシステムから直接開いています。APIサーバー(http://localhost:5006)に接続を試みます。");
