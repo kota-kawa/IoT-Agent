@@ -1,5 +1,7 @@
 # 🤖 IoT Agent
 
+[🇺🇸 English](README_en.md)
+
 <img src="static/README-Logo/IoT-Agent-Logo.png" width="800" alt="IoT Agent Logo">
 
 ## 👋 はじめに
