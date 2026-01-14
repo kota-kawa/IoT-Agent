@@ -1135,7 +1135,7 @@ async def _process_chat_with_tools(client: UnifiedClient, messages: List[Dict[st
             )
             if vision_text:
                 final_reply = vision_text
-            elif not attempted_responses:
+            else:
                 response, llm_error = await _chat_completion_with_retries_async(
                     client,
                     model=client.model_name,
@@ -1153,6 +1153,12 @@ async def _process_chat_with_tools(client: UnifiedClient, messages: List[Dict[st
                     print(f"[{datetime.now()}] Vision follow-up error: {str(llm_error)}")
         except Exception as exc:
             print(f"[{datetime.now()}] Vision follow-up exception: {str(exc)}")
+
+    if not isinstance(final_reply, str) or not final_reply.strip():
+        if collected_images:
+            final_reply = "写真は撮影できましたが、説明文の生成に失敗しました。もう一度お試しください。"
+        else:
+            final_reply = "応答を生成できませんでした。もう一度お試しください。"
 
     return {
         "reply": final_reply,
