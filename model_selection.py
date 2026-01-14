@@ -7,6 +7,11 @@ import os
 from pathlib import Path
 from typing import Dict, List, Tuple
 
+from dotenv import load_dotenv
+
+# Load env immediately to ensure keys are available even if config.py hasn't run
+load_dotenv(Path(__file__).resolve().parent / "secrets.env")
+
 # Multi-Agent-Platform の設定モーダルと揃えるデフォルト
 DEFAULT_SELECTION = {"provider": "groq", "model": "openai/gpt-oss-20b", "base_url": ""}
 
@@ -137,7 +142,7 @@ def _resolve_api_key(meta: Dict[str, str | List[str] | None]) -> str:
     for env_name in candidates:
         value = os.getenv(env_name)
         if value:
-            return value
+            return value.strip()
 
     return ""
 
@@ -202,7 +207,7 @@ def _resolve_base_url(meta: Dict[str, str | List[str] | None]) -> str | None:
     for env_name in env_names:
         value = os.getenv(env_name)
         if value:
-            return value
+            return value.strip()
 
     default_base = meta.get("default_base_url")
     if isinstance(default_base, str):
