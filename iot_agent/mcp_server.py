@@ -15,6 +15,7 @@ from iot_agent.device_utils import (
     _await_device_result_async,
     _device_supports_capability,
     _enqueue_device_command,
+    _format_result_for_prompt,
     _serialize_device,
 )
 from iot_agent.storage import get_store
@@ -111,6 +112,22 @@ async def list_tools() -> list[Tool]:
 
 @mcp_server.call_tool()
 async def call_tool(name: str, arguments: Any) -> list[types.TextContent | types.ImageContent | types.EmbeddedResource]:
+    def _collect_image_contents(value: Any, images: List[ImageContent]) -> None:
+        if isinstance(value, dict):
+            for key in ("image_base64", "image_data", "image_base64_jpeg"):
+                data = value.get(key)
+                if isinstance(data, str) and data.strip():
+                    mime = value.get("image_mime_type") or value.get("mime_type") or "image/jpeg"
+                    mime_type = mime.strip() if isinstance(mime, str) and mime.strip() else "image/jpeg"
+                    images.append(ImageContent(type="image", data=data.strip(), mimeType=mime_type))
+            for k, v in value.items():
+                if k in {"image_base64", "image_data", "image_base64_jpeg"}:
+                    continue
+                _collect_image_contents(v, images)
+        elif isinstance(value, list):
+            for item in value:
+                _collect_image_contents(item, images)
+
     if name == "get_device_list":
         devices = [_serialize_device(d) for d in get_store().list_devices()]
         return [TextContent(type="text", text=json.dumps(devices, ensure_ascii=False, indent=2))]
@@ -152,7 +169,10 @@ async def call_tool(name: str, arguments: Any) -> list[types.TextContent | types
         result = await _await_device_result_async(device_id, job_id, timeout=10.0)
         
         if result:
-            return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False))]
+            images: List[ImageContent] = []
+            _collect_image_contents(result, images)
+            text_payload = _format_result_for_prompt(result)
+            return [TextContent(type="text", text=text_payload), *images]
         else:
             return [TextContent(type="text", text="コマンドはキューに入れられましたが、結果待ちでタイムアウトしました。")]
             
