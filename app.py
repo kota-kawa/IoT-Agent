@@ -349,7 +349,8 @@ async def update_model_settings(request: Request):
         provider, model, base_url, _ = update_override(selection if selection else None)
         applied_selection = {"provider": provider, "model": model, "base_url": base_url or ""}
         if request.headers.get("X-Platform-Propagation") != "1" and selection:
-            _notify_platform(applied_selection)
+            # Run notification in background to avoid blocking response
+            asyncio.create_task(asyncio.to_thread(_notify_platform, applied_selection))
     except Exception as exc:  # noqa: BLE001
         return _json_response({"error": f"モデル設定の更新に失敗しました: {exc}"}, status_code=500)
     return _json_response({"status": "ok", "applied": applied_selection if selection else "from_file"})

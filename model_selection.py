@@ -90,15 +90,26 @@ def _coerce_selection(raw: Dict[str, str] | None) -> Dict[str, str | None]:
 
 def _load_selection(agent_key: str) -> Dict[str, str | None]:
     env_path = os.getenv("MULTI_AGENT_SETTINGS_PATH")
+    
+    candidates = []
     if env_path:
-        platform_path = Path(env_path)
-    else:
-        platform_path = Path(__file__).resolve().parent.parent / "Multi-Agent-Platform" / "model_settings.json"
+        candidates.append(Path(env_path))
+    
+    # Try relative path to platform (standard dev structure)
+    candidates.append(Path(__file__).resolve().parent.parent / "Multi-Agent-Platform" / "model_settings.json")
+    # Try local fallback (e.g. Docker container or standalone)
+    candidates.append(Path(__file__).resolve().parent / "model_settings.json")
 
-    try:
-        data = json.loads(platform_path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError):
-        return dict(DEFAULT_SELECTION)
+    data = {}
+    for path in candidates:
+        if path.is_file():
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                break
+            except (FileNotFoundError, json.JSONDecodeError):
+                continue
+    
+    # If no file found, data is empty, will fall back to DEFAULT_SELECTION below
 
     selection = data.get("selection") or data
     chosen = selection.get(agent_key) if isinstance(selection, dict) else None
