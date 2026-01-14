@@ -507,6 +507,36 @@ def _response_output_to_text(response: Any) -> str:
     return ""
 
 
+async def _responses_text_from_messages_async(
+    client: "UnifiedClient",
+    *,
+    model: str,
+    messages: List[Dict[str, Any]],
+) -> Tuple[str, bool]:
+    """
+    Attempt to call the OpenAI Responses API with image inputs.
+    Returns (text, attempted) where attempted=False means Responses was not used.
+    """
+
+    responses_client = getattr(getattr(client, "client", None), "responses", None)
+    if not responses_client:
+        return "", False
+    if not _messages_include_images(messages):
+        return "", False
+
+    try:
+        responses_input = _convert_messages_to_responses_input(messages)
+        if not responses_input:
+            return "", True
+        response = await responses_client.create(model=model, input=responses_input)
+        text = _response_output_to_text(response)
+        return text.strip() if isinstance(text, str) else "", True
+    except Exception as e:  # pragma: no cover - network/SDK errors
+        print(f"[{datetime.now()}] Responses API Vision Error: {str(e)}")
+        traceback.print_exc()
+        return "", True
+
+
 def _current_datetime_line() -> str:
     """Return the timestamp string used in system prompts."""
     return datetime.now().strftime("現在の日時ー%Y年%m月%d日%H時%M分")
@@ -1098,21 +1128,29 @@ async def _process_chat_with_tools(client: UnifiedClient, messages: List[Dict[st
             vision_messages = _build_vision_followup_messages(
                 current_messages, collected_images, final_reply
             )
-            response, llm_error = await _chat_completion_with_retries_async(
+            vision_text, attempted_responses = await _responses_text_from_messages_async(
                 client,
                 model=client.model_name,
                 messages=vision_messages,
-                max_attempts=2,
             )
-            if response:
-                choice = response.choices[0] if response.choices else None
-                message = choice.message if choice else None
-                content = getattr(message, "content", None) if message else None
-                vision_text = _content_to_text(content).strip()
-                if vision_text:
-                    final_reply = vision_text
-            elif llm_error:
-                print(f"[{datetime.now()}] Vision follow-up error: {str(llm_error)}")
+            if vision_text:
+                final_reply = vision_text
+            elif not attempted_responses:
+                response, llm_error = await _chat_completion_with_retries_async(
+                    client,
+                    model=client.model_name,
+                    messages=vision_messages,
+                    max_attempts=2,
+                )
+                if response:
+                    choice = response.choices[0] if response.choices else None
+                    message = choice.message if choice else None
+                    content = getattr(message, "content", None) if message else None
+                    vision_text = _content_to_text(content).strip()
+                    if vision_text:
+                        final_reply = vision_text
+                elif llm_error:
+                    print(f"[{datetime.now()}] Vision follow-up error: {str(llm_error)}")
         except Exception as exc:
             print(f"[{datetime.now()}] Vision follow-up exception: {str(exc)}")
 
