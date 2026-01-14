@@ -11,9 +11,9 @@ from types import SimpleNamespace
 
 from openai import OpenAI, AsyncOpenAI, APIError
 try:
-    from openai import APIConnectionError, APITimeoutError, BadRequestError, RateLimitError
+    from openai import APIConnectionError, APITimeoutError, BadRequestError, RateLimitError, NotFoundError
 except Exception:  # pragma: no cover - fallback for older SDKs
-    APIConnectionError = APITimeoutError = BadRequestError = RateLimitError = APIError
+    APIConnectionError = APITimeoutError = BadRequestError = RateLimitError = NotFoundError = APIError
 try:
     from anthropic import Anthropic, AsyncAnthropic
 except ImportError:
@@ -585,6 +585,11 @@ def _classify_provider_error(exc: Exception) -> Tuple[bool, bool, str]:
             if any(keyword in lowered for keyword in ("unsupported", "not available", "disable", "unavailable")):
                 drop_tools = True
 
+    if isinstance(exc, NotFoundError):
+        # Model not found or endpoint not found -> likely not retryable unless transient
+        # Usually implies the model name is wrong.
+        return False, False, f"Model not found (404): {message}"
+
     if "tools" in lowered and "support" in lowered and "not" in lowered:
         drop_tools = True
 
@@ -598,7 +603,13 @@ def _provider_error_message(exc: Optional[Exception]) -> str:
     if not exc:
         return base
 
-    detail = str(exc).strip().split("\n")[0]
+    msg_str = str(exc)
+    if "404" in msg_str or "not found" in msg_str.lower():
+        base = "指定されたAIモデルが見つかりません。設定画面からモデルを変更してください。"
+    elif "api key" in msg_str.lower() or "auth" in msg_str.lower():
+        base = "APIキーの設定が正しくありません。環境変数を確認してください。"
+
+    detail = msg_str.strip().split("\n")[0]
     if len(detail) > 160:
         detail = detail[:160] + "..."
     return f"{base}\n詳細: {detail}"
@@ -659,35 +670,46 @@ def _chat_completion_with_retries_sync(
 class UnifiedClient:
     def __init__(self):
         self.provider, self.model_name, self.base_url, self.api_key = apply_model_selection("iot")
+        self.init_error: Optional[Exception] = None
 
         if not self.api_key:
             # Look up the expected key for the selected provider for a better error message
             provider_meta = PROVIDER_DEFAULTS.get(self.provider, {})
             expected_key = provider_meta.get("api_key_env", "OPENAI_API_KEY")
-            raise RuntimeError(
+            self.init_error = RuntimeError(
                 f"API key for provider '{self.provider}' is not set. Please set '{expected_key}' in your secrets.env file."
             )
+            # We do not raise here to allow app startup; raise on usage.
 
         if self.provider == "claude":
             if AsyncAnthropic is None:
-                raise ImportError("Anthropic SDK is not installed. Please run `pip install anthropic`.")
-            self.client = AsyncAnthropic(api_key=self.api_key)
+                if not self.init_error:
+                    self.init_error = ImportError("Anthropic SDK is not installed. Please run `pip install anthropic`.")
+            else:
+                if not self.init_error:
+                    self.client = AsyncAnthropic(api_key=self.api_key)
         else:
-            client_kwargs: Dict[str, Any] = {"api_key": self.api_key}
-            if self.base_url:
-                client_kwargs["base_url"] = self.base_url
-            if self.provider == "gemini":
-                # Google の OpenAI 互換APIは API key をヘッダーでも受け付ける
-                client_kwargs["default_headers"] = {"x-goog-api-key": self.api_key}
-            self.client = AsyncOpenAI(**client_kwargs)
+            if not self.init_error:
+                client_kwargs: Dict[str, Any] = {"api_key": self.api_key}
+                if self.base_url:
+                    client_kwargs["base_url"] = self.base_url
+                if self.provider == "gemini":
+                    # Google の OpenAI 互換APIは API key をヘッダーでも受け付ける
+                    client_kwargs["default_headers"] = {"x-goog-api-key": self.api_key}
+                self.client = AsyncOpenAI(**client_kwargs)
 
         self.chat = self
 
     @property
     def completions(self):
+        if self.init_error:
+            raise self.init_error
         return self
 
     async def create(self, **kwargs):
+        if self.init_error:
+            raise self.init_error
+
         if self.provider == "claude":
             return await self._create_anthropic(**kwargs)
         else:
