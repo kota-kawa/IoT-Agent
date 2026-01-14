@@ -15,6 +15,9 @@ load_dotenv(Path(__file__).resolve().parent / "secrets.env")
 # Multi-Agent-Platform の設定モーダルと揃えるデフォルト
 DEFAULT_SELECTION = {"provider": "groq", "model": "openai/gpt-oss-20b", "base_url": ""}
 
+# OpenAI 公式ベースURL（/v1 まで含める）
+OPENAI_DEFAULT_BASE_URL = "https://api.openai.com/v1"
+
 AVAILABLE_MODELS: List[Dict[str, str]] = [
     # OpenAI
     {"provider": "openai", "model": "gpt-5.1", "label": "GPT-5.1"},
@@ -40,7 +43,7 @@ PROVIDER_DEFAULTS: Dict[str, Dict[str, str | List[str] | None]] = {
         "api_key_aliases": [],
         "base_url_env": "OPENAI_BASE_URL",
         "base_url_env_aliases": [],
-        "default_base_url": None,  # 純正OpenAIはNone (デフォルト)
+        "default_base_url": OPENAI_DEFAULT_BASE_URL,  # 公式ベースURL
     },
     "claude": {
         "api_key_env": "CLAUDE_API_KEY",
@@ -84,7 +87,7 @@ def _coerce_selection(raw: Dict[str, str] | None) -> Dict[str, str | None]:
         raw_model = raw.get("model")
         raw_base_url = raw.get("base_url")
         if isinstance(raw_provider, str) and raw_provider.strip():
-            provider = raw_provider.strip()
+            provider = raw_provider.strip().lower()
         if isinstance(raw_model, str) and raw_model.strip():
             model = raw_model.strip()
         if isinstance(raw_base_url, str) and raw_base_url.strip():
@@ -174,17 +177,21 @@ def _normalise_base_url(provider: str, base_url: str | None, meta: Dict[str, str
         return target.rstrip("/") if target else None
 
     if provider == "openai":
-        if not cleaned:
-            return default_base
-        lowered = cleaned.lower()
+        target = cleaned or default_base or ""
+        if not target:
+            return None
+        lowered = target.lower()
         # Check for known other providers FIRST to filter them out
         if any(key in lowered for key in ("groq", "generativelanguage.googleapis.com")):
             # Drop stale base URLs pointing to other providers to avoid auth mismatch
             return default_base
+        if "api.openai.com" in lowered and "/v1" not in lowered:
+            target = target.rstrip("/") + "/v1"
+            lowered = target.lower()
         # Then allow valid OpenAI-compatible hosts
         if any(key in lowered for key in ("openai", ".azure.com", "localhost", "127.0.0.1")):
-            return cleaned.rstrip("/")
-        return cleaned.rstrip("/")
+            return target.rstrip("/")
+        return target.rstrip("/")
 
     # Claude and other providers keep the explicit override or default as-is
     target = cleaned or default_base or ""

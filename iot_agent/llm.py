@@ -37,6 +37,24 @@ _IMAGE_DATA_URL_RE = re.compile(
 )
 
 
+def _looks_like_openai_admin_key(api_key: str) -> bool:
+    return isinstance(api_key, str) and api_key.startswith("sk-admin-")
+
+
+def _openai_project_headers(base_url: Optional[str]) -> Dict[str, str]:
+    """Build optional OpenAI org/project headers for the official API host."""
+    if base_url and "api.openai.com" not in base_url.lower():
+        return {}
+    org = os.getenv("OPENAI_ORG_ID") or os.getenv("OPENAI_ORGANIZATION")
+    project = os.getenv("OPENAI_PROJECT_ID") or os.getenv("OPENAI_PROJECT")
+    headers: Dict[str, str] = {}
+    if isinstance(org, str) and org.strip():
+        headers["OpenAI-Organization"] = org.strip()
+    if isinstance(project, str) and project.strip():
+        headers["OpenAI-Project"] = project.strip()
+    return headers
+
+
 def _split_text_and_images(text: str) -> List[Dict[str, Any]]:
     """Split text containing data URLs into a list of text/image_url content parts."""
     parts = []
@@ -680,6 +698,11 @@ class UnifiedClient:
                 f"API key for provider '{self.provider}' is not set. Please set '{expected_key}' in your secrets.env file."
             )
             # We do not raise here to allow app startup; raise on usage.
+        elif self.provider == "openai" and _looks_like_openai_admin_key(self.api_key):
+            self.init_error = RuntimeError(
+                "OPENAI_API_KEY appears to be an Admin API key. "
+                "Use a project/user API key for model calls."
+            )
 
         if self.provider == "claude":
             if AsyncAnthropic is None:
@@ -693,9 +716,14 @@ class UnifiedClient:
                 client_kwargs: Dict[str, Any] = {"api_key": self.api_key}
                 if self.base_url:
                     client_kwargs["base_url"] = self.base_url
+                default_headers: Dict[str, str] = {}
+                if self.provider == "openai":
+                    default_headers.update(_openai_project_headers(self.base_url))
                 if self.provider == "gemini":
                     # Google の OpenAI 互換APIは API key をヘッダーでも受け付ける
-                    client_kwargs["default_headers"] = {"x-goog-api-key": self.api_key}
+                    default_headers["x-goog-api-key"] = self.api_key
+                if default_headers:
+                    client_kwargs["default_headers"] = default_headers
                 self.client = AsyncOpenAI(**client_kwargs)
 
         self.chat = self
