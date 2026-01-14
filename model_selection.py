@@ -177,11 +177,13 @@ def _normalise_base_url(provider: str, base_url: str | None, meta: Dict[str, str
         if not cleaned:
             return default_base
         lowered = cleaned.lower()
-        if any(key in lowered for key in ("openai", ".azure.com", "localhost", "127.0.0.1")):
-            return cleaned.rstrip("/")
+        # Check for known other providers FIRST to filter them out
         if any(key in lowered for key in ("groq", "generativelanguage.googleapis.com")):
             # Drop stale base URLs pointing to other providers to avoid auth mismatch
             return default_base
+        # Then allow valid OpenAI-compatible hosts
+        if any(key in lowered for key in ("openai", ".azure.com", "localhost", "127.0.0.1")):
+            return cleaned.rstrip("/")
         return cleaned.rstrip("/")
 
     # Claude and other providers keep the explicit override or default as-is
