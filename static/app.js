@@ -99,7 +99,7 @@ async function handleModelChange(){
   const [providerRaw, modelRaw] = (modelSelectEl.value || fallbackValue).split(":");
   const provider = providerRaw || DEFAULT_MODEL.provider;
   const model = modelRaw || DEFAULT_MODEL.model;
-  const baseUrl = typeof currentModel.base_url === "string" ? currentModel.base_url : "";
+  const baseUrl = "";
   currentModel = { provider, model, base_url: baseUrl };
 
   try{

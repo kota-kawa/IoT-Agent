@@ -61,7 +61,7 @@ def test_all_models_switching():
             # Verify API Key
             if provider == "openai":
                 assert key == "sk-mock-openai"
-                assert url is None # Default OpenAI has no base_url in our config (implicit)
+                assert url == "https://api.openai.com/v1"  # Default OpenAI base URL
             elif provider == "gemini":
                 assert key == "AI-mock-gemini"
                 expected_url = "https://generativelanguage.googleapis.com/v1beta/openai"
@@ -109,7 +109,7 @@ def test_all_models_switching():
         if url_clean == "https://api.groq.com/openai/v1":
             pytest.fail("Failed to clean up stale Groq Base URL when switching to OpenAI!")
         
-        assert url_clean is None, f"Expected None for OpenAI base_url, got {url_clean}"
+        assert url_clean == "https://api.openai.com/v1", f"Expected OpenAI base_url, got {url_clean}"
         print("PASS: Stale URL was correctly stripped.")
 
         # 3. Third pass: Gemini to OpenAI
@@ -130,7 +130,7 @@ def test_all_models_switching():
         p, m, url_clean_2, k = apply_model_selection("iot")
         
         print(f"Switching from Gemini to OpenAI with stale URL input...")
-        assert url_clean_2 is None, f"Expected None for OpenAI base_url, got {url_clean_2}"
+        assert url_clean_2 == "https://api.openai.com/v1", f"Expected OpenAI base_url, got {url_clean_2}"
         print("PASS: Stale Gemini URL was correctly stripped.")
 
 if __name__ == "__main__":
