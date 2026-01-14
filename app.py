@@ -6,6 +6,7 @@ import queue
 import threading
 import time
 import uuid
+from contextlib import asynccontextmanager
 from importlib import metadata
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -45,24 +46,26 @@ from model_selection import (
     update_override,
 )
 
-app = FastAPI()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    _init_storage()
+    yield
+    _shutdown_storage()
+
+def _init_storage() -> None:
+    get_store()
+
+def _shutdown_storage() -> None:
+    store = get_store()
+    store.close()
+
+app = FastAPI(lifespan=lifespan)
 app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
 
 _BASE_DIR = Path(__file__).resolve().parent
 app.mount("/static", StaticFiles(directory=_BASE_DIR / "static"), name="static")
 
 logger = logging.getLogger("iot-agent")
-
-
-@app.on_event("startup")
-def _init_storage() -> None:
-    get_store()
-
-
-@app.on_event("shutdown")
-def _shutdown_storage() -> None:
-    store = get_store()
-    store.close()
 
 # Default platform base for pushing model changes back to Multi-Agent-Platform
 _PLATFORM_BASE = os.getenv("MULTI_AGENT_PLATFORM_BASE", "http://web:5050").rstrip("/")
