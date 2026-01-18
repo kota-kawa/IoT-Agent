@@ -47,6 +47,7 @@ Create a `secrets.env` file and write your API keys.
 ```env
 OPENAI_API_KEY="sk-..."
 APP_PASSWORD="your_preferred_password"
+IOT_AGENT_API_BASE_URL="https://iot-agent.example.com"
 ```
 
 ### 5. Run!

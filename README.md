@@ -47,6 +47,7 @@ npm run build
 ```env
 OPENAI_API_KEY="sk-..."
 APP_PASSWORD="あなたの好きなパスワード"
+IOT_AGENT_API_BASE_URL="https://iot-agent.example.com"
 ```
 
 ### 5. 実行！

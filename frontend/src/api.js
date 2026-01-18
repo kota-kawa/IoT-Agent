@@ -1,4 +1,6 @@
-const API_BASE = window.location.protocol === 'file:' ? 'http://localhost:5006' : '';
+const appConfig = typeof window !== 'undefined' && window.__APP_CONFIG__ ? window.__APP_CONFIG__ : {};
+const rawBase = typeof appConfig.apiBase === 'string' ? appConfig.apiBase.trim() : '';
+const API_BASE = rawBase ? rawBase.replace(/\/$/, '') : '';
 
 export const apiUrl = (path) => {
   if (!path) return API_BASE || '';
