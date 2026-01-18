@@ -20,7 +20,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . ./
 COPY --from=frontend-builder /app/frontend/dist /app/frontend/dist
+COPY --from=frontend-builder /app/frontend/dist /opt/frontend-dist
 
 EXPOSE 5006
 
-CMD ["gunicorn", "-k", "uvicorn.workers.UvicornWorker", "-b", "0.0.0.0:5006", "app:app"]
+CMD ["sh", "-c", "if [ ! -f /app/frontend/dist/index.html ] && [ -d /opt/frontend-dist ]; then mkdir -p /app/frontend/dist && cp -r /opt/frontend-dist/* /app/frontend/dist/; fi; exec gunicorn -k uvicorn.workers.UvicornWorker -b 0.0.0.0:5006 app:app"]
