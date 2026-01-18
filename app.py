@@ -20,7 +20,7 @@ from mcp.types import JSONRPCMessage
 from pydantic import TypeAdapter
 from starlette.middleware.sessions import SessionMiddleware
 
-from iot_agent.config import APP_PASSWORD, DEVICE_RESULT_TIMEOUT, SECRET_KEY
+from iot_agent.config import APP_PASSWORD, DEVICE_RESULT_TIMEOUT, IOT_AGENT_API_BASE_URL, SECRET_KEY
 from iot_agent.device_utils import (
     _agent_device,
     _await_device_result,
@@ -232,6 +232,13 @@ async def login_get(request: Request):
     if _spa_available():
         return _spa_response()
     return _spa_missing_response()
+
+
+@app.get("/config.js")
+async def frontend_config():
+    payload = {"apiBase": IOT_AGENT_API_BASE_URL} if IOT_AGENT_API_BASE_URL else {"apiBase": ""}
+    content = f"window.__APP_CONFIG__ = {json.dumps(payload)};"
+    return Response(content=content, media_type="application/javascript")
 
 
 @app.post("/login")

@@ -18,6 +18,8 @@ DEVICE_RESULT_TIMEOUT = float(os.getenv("DEVICE_RESULT_TIMEOUT", "300.0"))
 
 SECRET_KEY = os.getenv("FLASK_SECRET_KEY", "change-this-secret")
 
+IOT_AGENT_API_BASE_URL = os.getenv("IOT_AGENT_API_BASE_URL", "").rstrip("/")
+
 DATABASE_URL = os.getenv("DATABASE_URL")
 REDIS_URL = os.getenv("REDIS_URL")
 STORAGE_BACKEND = os.getenv("IOT_AGENT_STORAGE_BACKEND", "auto")
