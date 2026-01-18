@@ -61,6 +61,11 @@ Thumbs.db
 # --- Docker ---
 .docker/
 
+# --- Frontend ---
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
 # --- Logs ---
 *.log
 
@@ -75,4 +80,6 @@ Thumbs.db
 # JSON files (Excluding specific config files)
 *.json
 !pico_capabilities.json
+!package.json
+!package-lock.json
 *.Identifier

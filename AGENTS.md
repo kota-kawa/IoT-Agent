@@ -2,20 +2,21 @@
 
 ## Project Structure & Module Organization
 - `app.py` — FastAPI backend orchestrating chat-driven device jobs.
-- `static/app.js`, `static/styles.css`, `pages/index.html`, `pages/login.html` — dashboard UI and auth screens served as static assets.
+- `frontend/` — Vite + React SPA (`src/`), production build outputs in `frontend/dist/`.
 - `edge_device_code/` — hardware-specific client references; note `jetson/`, `raspberrypi4/`, and `raspberrypi-pico/` with `device_test/` utilities.
 - `Dockerfile` and `docker-compose.yml` define container targets; `requirements.txt` tracks server dependencies.
 
 ## Build, Test, and Development Commands
 - `python3.11 -m venv .venv && . .venv/bin/activate` creates the tested runtime locally.
 - `pip install -r requirements.txt` installs FastAPI, dotenv, and the OpenAI SDK.
+- `cd frontend && npm install && npm run build` produces the SPA bundle in `frontend/dist/`.
 - `uvicorn app:app --host=0.0.0.0 --port=5006 --reload` starts the reloadable dev server.
 - `docker-compose up --build` mirrors the dev setup with hot reload inside a container.
 - `docker build -t iot-agent . && docker run --rm -p 5006:5006 --env-file secrets.env iot-agent` packages and runs the Gunicorn image.
 
 ## Coding Style & Naming Conventions
 - Python follows PEP 8 with 4-space indents, dataclasses for state, and explicit type hints; keep module-level constants in screaming snake case (e.g., `DEVICE_RESULT_TIMEOUT`).
-- JavaScript in `static/app.js` uses `const`/`let`, arrow utilities, and 2-space indents; prefer descriptive functions such as `formatRelativeTime`.
+- React components in `frontend/src/` use `const`/`let`, arrow utilities, and 2-space indents; prefer descriptive functions such as `formatRelativeTime`.
 - Align HTML ids with JS selectors (`#deviceGrid`, `#registerNotice`) and avoid inline styling.
 - Configuration secrets belong in `secrets.env`; do not persist environment-specific values in source.
 
