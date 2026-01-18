@@ -19,6 +19,7 @@
 
 ### 1. 準備するもの
 - **Python 3.11** 以上
+- **Node.js 18+**（フロントエンドのビルド用）
 - **APIキー**: OpenAIなどのAIを使うためのキー
 
 ### 2. セットアップ
@@ -33,7 +34,14 @@ source .venv/bin/activate  # Windowsの場合は .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### 3. 設定
+### 3. フロントエンドのビルド
+```bash
+cd frontend
+npm install
+npm run build
+```
+
+### 4. 設定
 `secrets.env` というファイルを作って、APIキーを書き込みます。
 
 ```env
@@ -41,7 +49,7 @@ OPENAI_API_KEY="sk-..."
 APP_PASSWORD="あなたの好きなパスワード"
 ```
 
-### 4. 実行！
+### 5. 実行！
 さあ、動かしてみましょう。
 
 **ローカルで動かす場合:**

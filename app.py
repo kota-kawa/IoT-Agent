@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import anyio
 import requests
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from mcp.types import JSONRPCMessage
@@ -64,6 +64,11 @@ app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
 
 _BASE_DIR = Path(__file__).resolve().parent
 app.mount("/static", StaticFiles(directory=_BASE_DIR / "static"), name="static")
+_FRONTEND_DIST = _BASE_DIR / "frontend" / "dist"
+_FRONTEND_INDEX = _FRONTEND_DIST / "index.html"
+
+if (_FRONTEND_DIST / "assets").exists():
+    app.mount("/assets", StaticFiles(directory=_FRONTEND_DIST / "assets"), name="spa-assets")
 
 logger = logging.getLogger("iot-agent")
 
@@ -194,11 +199,17 @@ def _json_response(payload: Dict[str, Any], status_code: int = 200) -> JSONRespo
     return JSONResponse(content=payload, status_code=status_code)
 
 
-_PAGES_DIR = _BASE_DIR / "pages"
+def _spa_available() -> bool:
+    return _FRONTEND_INDEX.exists()
 
 
-def _page_response(filename: str) -> FileResponse:
-    return FileResponse(_PAGES_DIR / filename)
+def _spa_response() -> FileResponse:
+    return FileResponse(_FRONTEND_INDEX)
+
+
+def _spa_missing_response() -> Response:
+    message = "SPA build not found. Run `cd frontend && npm install && npm run build`."
+    return Response(content=message, status_code=503)
 
 
 @app.get("/")
@@ -207,7 +218,9 @@ async def index(request: Request):
 
     if not request.session.get("authenticated"):
         return RedirectResponse(url="/login", status_code=302)
-    return _page_response("index.html")
+    if _spa_available():
+        return _spa_response()
+    return _spa_missing_response()
 
 
 @app.get("/login")
@@ -216,7 +229,9 @@ async def login_get(request: Request):
 
     if request.session.get("authenticated"):
         return RedirectResponse(url="/", status_code=302)
-    return _page_response("login.html")
+    if _spa_available():
+        return _spa_response()
+    return _spa_missing_response()
 
 
 @app.post("/login")
@@ -239,17 +254,19 @@ async def logout(request: Request):
 
 @app.get("/app.js")
 async def app_js():
-    return FileResponse(_BASE_DIR / "static" / "app.js")
+    raise HTTPException(status_code=404, detail="Not Found")
 
 
 @app.get("/styles.css")
 async def styles_css():
-    return FileResponse(_BASE_DIR / "static" / "styles.css")
+    raise HTTPException(status_code=404, detail="Not Found")
 
 
 @app.get("/index.html")
 async def index_html():
-    return _page_response("index.html")
+    if _spa_available():
+        return _spa_response()
+    return _spa_missing_response()
 
 
 @app.get("/agent-result")
@@ -257,17 +274,25 @@ async def agent_result(request: Request):
     # 認証済みでなければログインページへリダイレクト
     if not request.session.get("authenticated"):
         return RedirectResponse(url="/login", status_code=302)
-    return _page_response("agent_result.html")
+    if _spa_available():
+        return _spa_response()
+    return _spa_missing_response()
 
 
 @app.get("/agent_result.html")
 async def agent_result_html():
-    return _page_response("agent_result.html")
+    if _spa_available():
+        return _spa_response()
+    return _spa_missing_response()
 
 
 @app.get("/login.html")
 async def login_html():
-    return _page_response("login.html")
+    if _spa_available():
+        return _spa_response()
+    return _spa_missing_response()
+
+
 
 
 @app.get("/api/session")
@@ -1141,6 +1166,15 @@ async def dependencies_status():
     """Return dependency and environment readiness without exposing secrets."""
 
     return _json_response(_dependency_report())
+
+
+@app.get("/{full_path:path}")
+async def spa_fallback(full_path: str):
+    if not _spa_available():
+        raise HTTPException(status_code=404, detail="Not Found")
+    if full_path.startswith(("api", "static", "assets")):
+        raise HTTPException(status_code=404, detail="Not Found")
+    return _spa_response()
 
 
 if __name__ == "__main__":

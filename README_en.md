@@ -19,6 +19,7 @@ Just say "Take a picture" or "Move forward", and the AI will understand and inst
 
 ### 1. Prerequisites
 - **Python 3.11** or higher
+- **Node.js 18+** (for building the frontend)
 - **API Keys**: Keys for using AI such as OpenAI
 
 ### 2. Setup
@@ -33,7 +34,14 @@ source .venv/bin/activate  # For Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### 3. Configuration
+### 3. Build the Frontend
+```bash
+cd frontend
+npm install
+npm run build
+```
+
+### 4. Configuration
 Create a `secrets.env` file and write your API keys.
 
 ```env
@@ -41,7 +49,7 @@ OPENAI_API_KEY="sk-..."
 APP_PASSWORD="your_preferred_password"
 ```
 
-### 4. Run!
+### 5. Run!
 Let's get it moving.
 
 **Running Locally:**
