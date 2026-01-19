@@ -20,7 +20,12 @@ DEVICE_RESULT_TIMEOUT = float(os.getenv("DEVICE_RESULT_TIMEOUT", "300.0"))
 
 SECRET_KEY = os.getenv("FLASK_SECRET_KEY", "change-this-secret")
 
-IOT_AGENT_API_BASE_URL = os.getenv("IOT_AGENT_API_BASE_URL", "").rstrip("/")
+DEFAULT_IOT_AGENT_API_BASE_URL = "http://localhost:5006/"
+_raw_api_base = os.getenv("IOT_AGENT_API_BASE_URL")
+if isinstance(_raw_api_base, str) and _raw_api_base:
+    IOT_AGENT_API_BASE_URL = _raw_api_base.rstrip("/")
+else:
+    IOT_AGENT_API_BASE_URL = DEFAULT_IOT_AGENT_API_BASE_URL.rstrip("/")
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 REDIS_URL = os.getenv("REDIS_URL")

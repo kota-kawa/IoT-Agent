@@ -50,6 +50,8 @@ APP_PASSWORD="あなたの好きなパスワード"
 IOT_AGENT_API_BASE_URL="https://iot-agent.example.com"
 ```
 
+`IOT_AGENT_API_BASE_URL` を空白のままにすると、`http://localhost:5006/` が自動的に使用されます。
+
 ### 5. 実行！
 さあ、動かしてみましょう。
 

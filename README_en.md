@@ -50,6 +50,8 @@ APP_PASSWORD="your_preferred_password"
 IOT_AGENT_API_BASE_URL="https://iot-agent.example.com"
 ```
 
+If you leave `IOT_AGENT_API_BASE_URL` unset, it defaults to `http://localhost:5006/`.
+
 ### 5. Run!
 Let's get it moving.
 
