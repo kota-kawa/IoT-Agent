@@ -39,6 +39,7 @@ from iot_agent.mcp_server import mcp_server
 from iot_agent.models import DeviceState
 from iot_agent.storage import get_store
 from iot_agent.validation import _validate_device_command, _validate_device_command_sequence
+from iot_agent.virtual_device import VirtualDeviceRunner
 from model_selection import (
     apply_model_selection,
     current_available_models,
@@ -46,10 +47,14 @@ from model_selection import (
     update_override,
 )
 
+_virtual_device = VirtualDeviceRunner()
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _init_storage()
+    _virtual_device.start()
     yield
+    _virtual_device.stop()
     _shutdown_storage()
 
 def _init_storage() -> None:
@@ -64,7 +69,7 @@ app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
 
 _BASE_DIR = Path(__file__).resolve().parent
 app.mount("/static", StaticFiles(directory=_BASE_DIR / "static"), name="static")
-_FRONTEND_DIST = _BASE_DIR / "frontend" / "dist"
+_FRONTEND_DIST = _BASE_DIR / "frontend" / "dist_v2"
 _FRONTEND_INDEX = _FRONTEND_DIST / "index.html"
 
 if (_FRONTEND_DIST / "assets").exists():

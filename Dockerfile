@@ -19,8 +19,8 @@ COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . ./
-COPY --from=frontend-builder /app/frontend/dist /app/frontend/dist
-COPY --from=frontend-builder /app/frontend/dist /opt/frontend-dist
+COPY --from=frontend-builder /app/frontend/dist_v2 /app/frontend/dist
+COPY --from=frontend-builder /app/frontend/dist_v2 /opt/frontend-dist
 
 EXPOSE 5006
 

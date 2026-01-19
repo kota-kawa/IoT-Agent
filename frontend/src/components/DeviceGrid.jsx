@@ -1,5 +1,6 @@
 import React from 'react';
 import DeviceCard from './DeviceCard.jsx';
+import VirtualDeviceCard from './VirtualDeviceCard.jsx';
 
 export default function DeviceGrid({ devices, onRename, onClearJobs, onDelete, emptyHint }) {
   const hasDevices = devices.length > 0;
@@ -12,15 +13,28 @@ export default function DeviceGrid({ devices, onRename, onClearJobs, onDelete, e
           {emptyHint && <p className="empty-state__hint">{emptyHint}</p>}
         </div>
       )}
-      {hasDevices && devices.map((device) => (
-        <DeviceCard
-          key={device.device_id}
-          device={device}
-          onRename={onRename}
-          onClearJobs={onClearJobs}
-          onDelete={onDelete}
-        />
-      ))}
+      {hasDevices && devices.map((device) => {
+        if (device.meta && device.meta.virtual) {
+          return (
+            <VirtualDeviceCard
+              key={device.device_id}
+              device={device}
+              onRename={onRename}
+              onClearJobs={onClearJobs}
+              onDelete={onDelete}
+            />
+          );
+        }
+        return (
+          <DeviceCard
+            key={device.device_id}
+            device={device}
+            onRename={onRename}
+            onClearJobs={onClearJobs}
+            onDelete={onDelete}
+          />
+        );
+      })}
     </section>
   );
 }
