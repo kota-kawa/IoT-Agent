@@ -65,7 +65,7 @@ def _shutdown_storage() -> None:
     store.close()
 
 app = FastAPI(lifespan=lifespan)
-app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
+app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY, same_site="none", https_only=True)
 
 _BASE_DIR = Path(__file__).resolve().parent
 app.mount("/static", StaticFiles(directory=_BASE_DIR / "static"), name="static")
