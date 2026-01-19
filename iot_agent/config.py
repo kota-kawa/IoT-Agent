@@ -7,7 +7,9 @@ from dotenv import load_dotenv as loadenv
 _SECRETS_PATH = Path(__file__).resolve().parents[1] / "secrets.env"
 loadenv(_SECRETS_PATH)
 
-APP_PASSWORD = os.getenv("APP_PASSWORD")
+_raw_password = os.getenv("APP_PASSWORD")
+# Avoid CRLF artifacts from secrets.env without stripping intentional spaces.
+APP_PASSWORD = _raw_password.rstrip("\r\n") if isinstance(_raw_password, str) else ""
 
 AGENT_ROLE_VALUE = "raspberrypi-agent"
 AGENT_CAPABILITY_NAME = "agent_instruction"
