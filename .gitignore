@@ -41,6 +41,7 @@ instance/
 env.txt
 secrets.env
 secrets.py
+!secrets.env.example
 
 # --- OS Files ---
 .DS_Store
