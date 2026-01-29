@@ -1,80 +1,104 @@
 # 🤖 IoT Agent
 
-[🇺🇸 English](README_en.md)
-
 <img src="static/README-Logo/IoT-Agent-Logo.png" width="800" alt="IoT Agent Logo">
 
-## 👋 はじめに
-**IoT Agent** へようこそ！
-このプロジェクトは、**チャットをするだけで** あなたの周りのIoTデバイス（ロボットやセンサーなど）を自由に操作できるシステムです。
-「写真を撮って」「前に進んで」と話しかけるだけで、AIが理解してデバイスに指示を出してくれます。
+## 👋 Introduction
+Welcome to **IoT Agent**!
+This project lets you control nearby IoT devices (robots, sensors, and more) just by **chatting**.
+Say things like "Take a picture" or "Move forward" and the AI will understand and instruct your devices.
 
-## ✨ 主な機能
-- **💬 チャットで操作**: 自然な会話でデバイスを動かせます。
-- **💻 見やすいダッシュボード**: ブラウザからデバイスの状態をチェックできます。
-- **📷 カメラ対応**: 「今の様子を見せて」と言えば、写真を撮って送ってくれます。
-- **🧠 賢いAI**: 最新のAI（OpenAI, Geminiなど）があなたの言葉を理解します。
+## ✨ Key Features
+- **💬 Chat Control**: Operate devices with natural conversation.
+- **💻 Clear Dashboard**: Check device status from your browser.
+- **📷 Camera Support**: Ask for a snapshot anytime.
+- **🧠 Smart AI**: Works with modern AI providers (OpenAI, Gemini, etc.).
 
-## 🚀 使い方
+## 🚀 Quick Start (Docker Compose)
 
-### 1. 準備するもの
-- **Python 3.11** 以上
-- **Node.js 18+**（フロントエンドのビルド用）
-- **APIキー**: OpenAIなどのAIを使うためのキー
+### 1. Prerequisites
+- **Docker**
+- **Docker Compose** (Docker Desktop includes it)
 
-### 2. セットアップ
-まずは必要なものをインストールしましょう。
+### 2. Configure secrets
+Create `secrets.env` from the example and set your keys.
 
 ```bash
-# 仮想環境を作って有効化します
-python3.11 -m venv .venv
-source .venv/bin/activate  # Windowsの場合は .venv\Scripts\activate
-
-# 必要なライブラリをインストールします
-pip install -r requirements.txt
+cp secrets.env.example secrets.env
 ```
-
-### 3. フロントエンドのビルド
-```bash
-cd frontend
-npm install
-npm run build
-```
-
-### 4. 設定
-`secrets.env` というファイルを作って、APIキーを書き込みます。
 
 ```env
 OPENAI_API_KEY="sk-..."
-APP_PASSWORD="あなたの好きなパスワード"
+APP_PASSWORD="your_preferred_password"
 IOT_AGENT_API_BASE_URL="https://iot-agent.example.com"
 ```
 
-`IOT_AGENT_API_BASE_URL` を空白のままにすると、`http://localhost:5006/` が自動的に使用されます。
+If `IOT_AGENT_API_BASE_URL` is blank, it defaults to `http://localhost:5006/`.
 
-### 5. 実行！
-さあ、動かしてみましょう。
-
-**ローカルで動かす場合:**
-```bash
-uvicorn app:app --host=0.0.0.0 --port=5006 --reload
-```
-
-**Dockerで動かす場合:**
+### 3. Run
 ```bash
 docker-compose up --build
 ```
 
-ブラウザで `http://localhost:5006` にアクセスすれば、ダッシュボードが表示されます！
+Open `http://localhost:5006` in your browser to see the dashboard.
+
+## 🤖 Supported Devices
+- **NVIDIA Jetson** (AI robots, etc.)
+- **Raspberry Pi 4** (sensors, cameras)
+- **Raspberry Pi Pico W** (small projects)
+
+## 📄 License
+This project is licensed under the **MIT License**. Feel free to modify and share.
+See [LICENSE.md](LICENSE.md) for details.
+
+<details>
+<summary>日本語</summary>
+
+## 👋 はじめに
+**IoT Agent** へようこそ！
+このプロジェクトは、**チャットをするだけで** 周りのIoTデバイス（ロボットやセンサーなど）を操作できるシステムです。
+「写真を撮って」「前に進んで」と話しかけるだけで、AIが理解してデバイスに指示を出してくれます。
+
+## ✨ 主な機能
+- **💬 チャットで操作**: 自然な会話でデバイスを動かせます。
+- **💻 見やすいダッシュボード**: ブラウザから状態を確認できます。
+- **📷 カメラ対応**: いつでも写真を撮って送ってくれます。
+- **🧠 賢いAI**: OpenAIやGeminiなどのAIに対応しています。
+
+## 🚀 はじめ方（Docker Compose）
+
+### 1. 必要なもの
+- **Docker**
+- **Docker Compose**（Docker Desktopに同梱）
+
+### 2. 設定
+`secrets.env` を例から作成し、キーを設定します。
+
+```bash
+cp secrets.env.example secrets.env
+```
+
+```env
+OPENAI_API_KEY="sk-..."
+APP_PASSWORD="好きなパスワード"
+IOT_AGENT_API_BASE_URL="https://iot-agent.example.com"
+```
+
+`IOT_AGENT_API_BASE_URL` を空にすると `http://localhost:5006/` が使われます。
+
+### 3. 起動
+```bash
+docker-compose up --build
+```
+
+ブラウザで `http://localhost:5006` を開くとダッシュボードが表示されます。
 
 ## 🤖 対応デバイス
-以下のデバイスですぐに使えます：
-- **NVIDIA Jetson** (AIロボットなどに)
-- **Raspberry Pi 4** (センサーやカメラに)
-- **Raspberry Pi Pico W** (小さな工作に)
+- **NVIDIA Jetson**（AIロボットなど）
+- **Raspberry Pi 4**（センサーやカメラ）
+- **Raspberry Pi Pico W**（小さな工作向け）
 
 ## 📄 ライセンス
 このプロジェクトは **MITライセンス** です。自由に改造して遊んでください！
-詳細は [LICENSE.md](LICENSE.md) を見てね。
+詳細は [LICENSE.md](LICENSE.md) をご覧ください。
 
-個人、企業を問わず、使いたい方は自由にダウンロードして、カスタマイズして活用してください！ 🛠️
+</details>
