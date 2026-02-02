@@ -1,17 +1,17 @@
-import React, { useEffect } from 'react';
+import { useEffect } from 'react';
 import { Route, Routes, useLocation } from 'react-router-dom';
-import Dashboard from './pages/Dashboard.jsx';
-import AgentResult from './pages/AgentResult.jsx';
-import Login from './pages/Login.jsx';
+import Dashboard from './pages/Dashboard';
+import AgentResult from './pages/AgentResult';
+import Login from './pages/Login';
 
-const bodyClassMap = {
+const bodyClassMap: Record<string, string> = {
   '/login': 'login-view',
   '/login.html': 'login-view',
   '/agent-result': 'standalone-view',
   '/agent_result.html': 'standalone-view'
 };
 
-export default function App() {
+export default function App(): JSX.Element {
   const location = useLocation();
 
   useEffect(() => {

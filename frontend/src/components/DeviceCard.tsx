@@ -1,8 +1,8 @@
-import React from 'react';
-import CollapsibleText from './CollapsibleText.jsx';
-import { displayName, formatMetaValue, formatRelativeTime, formatTimestamp } from '../utils.js';
+import type { Device, DeviceCapability, DeviceResult } from '../types';
+import CollapsibleText from './CollapsibleText';
+import { displayName, formatMetaValue, formatRelativeTime, formatTimestamp } from '../utils';
 
-function DeviceIcon() {
+function DeviceIcon(): JSX.Element {
   return (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
       <rect x="3" y="5" width="18" height="14" rx="3" stroke="currentColor" strokeWidth="2" />
@@ -11,7 +11,12 @@ function DeviceIcon() {
   );
 }
 
-function Stat({ label, value }) {
+type StatProps = {
+  label: string;
+  value: string | number | null | undefined;
+};
+
+function Stat({ label, value }: StatProps): JSX.Element {
   const textValue = value == null ? '-' : String(value);
   return (
     <div className="device-stat">
@@ -23,13 +28,17 @@ function Stat({ label, value }) {
   );
 }
 
-function Capabilities({ capabilities }) {
+type CapabilitiesProps = {
+  capabilities?: DeviceCapability[];
+};
+
+function Capabilities({ capabilities }: CapabilitiesProps): JSX.Element | null {
   if (!Array.isArray(capabilities) || capabilities.length === 0) {
     return null;
   }
   const names = capabilities
     .filter((cap) => cap && typeof cap.name === 'string' && cap.name.trim())
-    .map((cap) => cap.name.trim());
+    .map((cap) => (cap.name || '').trim());
   if (!names.length) return null;
 
   const maxChips = 6;
@@ -53,7 +62,11 @@ function Capabilities({ capabilities }) {
   );
 }
 
-function LastResult({ result }) {
+type LastResultProps = {
+  result?: DeviceResult | null;
+};
+
+function LastResult({ result }: LastResultProps): JSX.Element | null {
   if (!result || typeof result !== 'object') {
     return null;
   }
@@ -91,7 +104,14 @@ function LastResult({ result }) {
   );
 }
 
-export default function DeviceCard({ device, onRename, onClearJobs, onDelete }) {
+type DeviceCardProps = {
+  device: Device;
+  onRename: (device: Device) => void;
+  onClearJobs: (device: Device) => void;
+  onDelete: (device: Device) => void;
+};
+
+export default function DeviceCard({ device, onRename, onClearJobs, onDelete }: DeviceCardProps): JSX.Element {
   const label = displayName(device) || device.device_id;
   const queueRaw = Number(device.queue_depth);
   const queueCount = Number.isFinite(queueRaw) ? queueRaw : 0;
@@ -143,7 +163,7 @@ export default function DeviceCard({ device, onRename, onClearJobs, onDelete }) 
           <Stat label="待機ジョブ" value={`${queueCount}件`} />
         </div>
         <Capabilities capabilities={device.capabilities} />
-        <LastResult result={device.last_result} />
+        <LastResult result={device.last_result || undefined} />
       </div>
     </article>
   );

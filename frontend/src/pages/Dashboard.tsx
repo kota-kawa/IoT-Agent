@@ -1,22 +1,31 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { fetchJson } from '../api.js';
-import { displayName } from '../utils.js';
-import { useRequireAuth } from '../hooks.js';
-import ChatSidebar from '../components/ChatSidebar.jsx';
-import DeviceGrid from '../components/DeviceGrid.jsx';
-import Notice from '../components/Notice.jsx';
-import RegisterDialog from '../components/RegisterDialog.jsx';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { fetchJson } from '../api';
+import { displayName } from '../utils';
+import { useRequireAuth } from '../hooks/useRequireAuth';
+import ChatSidebar from '../components/ChatSidebar';
+import DeviceGrid from '../components/DeviceGrid';
+import Notice from '../components/Notice';
+import RegisterDialog from '../components/RegisterDialog';
+import type {
+  Device,
+  DeviceListResponse,
+  DeviceUpdateResponse,
+  GenericResponse,
+  NoticeKind,
+  NoticeState,
+  RegisterSuccess
+} from '../types';
 
 const FETCH_DEVICES_INTERVAL_MS = 5000;
 
-export default function Dashboard() {
+export default function Dashboard(): JSX.Element | null {
   const ready = useRequireAuth();
-  const [devices, setDevices] = useState([]);
-  const [notice, setNotice] = useState({ message: '', kind: 'info', visible: false });
+  const [devices, setDevices] = useState<Device[]>([]);
+  const [notice, setNotice] = useState<NoticeState>({ message: '', kind: 'info', visible: false });
   const [dialogOpen, setDialogOpen] = useState(false);
   const isFetchingRef = useRef(false);
 
-  const showNotice = (message, kind = 'info') => {
+  const showNotice = (message: string, kind: NoticeKind = 'info') => {
     setNotice({ message, kind, visible: true });
   };
 
@@ -24,12 +33,12 @@ export default function Dashboard() {
     setNotice({ message: '', kind: 'info', visible: false });
   };
 
-  const fetchDevices = useCallback(async ({ silent = false } = {}) => {
+  const fetchDevices = useCallback(async ({ silent = false }: { silent?: boolean } = {}) => {
     if (isFetchingRef.current) return;
     isFetchingRef.current = true;
 
     try {
-      const { response, data, text } = await fetchJson('/api/devices');
+      const { response, data, text } = await fetchJson<DeviceListResponse>('/api/devices');
       if (!response.ok) {
         throw new Error(text || `HTTP ${response.status}`);
       }
@@ -40,7 +49,11 @@ export default function Dashboard() {
       }
     } catch (err) {
       if (!silent) {
-        showNotice(`デバイス一覧の取得に失敗しました: ${err.message}`, 'error');
+        if (err instanceof Error) {
+          showNotice(`デバイス一覧の取得に失敗しました: ${err.message}`, 'error');
+        } else {
+          showNotice('デバイス一覧の取得に失敗しました。', 'error');
+        }
       }
     } finally {
       isFetchingRef.current = false;
@@ -56,13 +69,16 @@ export default function Dashboard() {
     return () => clearInterval(timer);
   }, [fetchDevices, ready]);
 
-  const updateDeviceDisplayName = async (deviceId, displayNameInput) => {
+  const updateDeviceDisplayName = async (deviceId: string, displayNameInput: string) => {
     const payload = { display_name: displayNameInput || null };
-    const { response, data, text } = await fetchJson(`/api/devices/${encodeURIComponent(deviceId)}/name`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
+    const { response, data, text } = await fetchJson<DeviceUpdateResponse>(
+      `/api/devices/${encodeURIComponent(deviceId)}/name`,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      }
+    );
 
     if (!response.ok) {
       const message = data?.error || data?.message || text || `HTTP ${response.status}`;
@@ -72,10 +88,13 @@ export default function Dashboard() {
     return data?.device || null;
   };
 
-  const clearDeviceJobs = async (deviceId) => {
-    const { response, data, text } = await fetchJson(`/api/devices/${encodeURIComponent(deviceId)}/jobs`, {
-      method: 'DELETE'
-    });
+  const clearDeviceJobs = async (deviceId: string) => {
+    const { response, data, text } = await fetchJson<GenericResponse>(
+      `/api/devices/${encodeURIComponent(deviceId)}/jobs`,
+      {
+        method: 'DELETE'
+      }
+    );
 
     if (!response.ok) {
       const message = data?.error || data?.message || text || `HTTP ${response.status}`;
@@ -84,10 +103,13 @@ export default function Dashboard() {
     return data;
   };
 
-  const deleteDevice = async (deviceId) => {
-    const { response, data, text } = await fetchJson(`/api/devices/${encodeURIComponent(deviceId)}`, {
-      method: 'DELETE'
-    });
+  const deleteDevice = async (deviceId: string) => {
+    const { response, data, text } = await fetchJson<GenericResponse>(
+      `/api/devices/${encodeURIComponent(deviceId)}`,
+      {
+        method: 'DELETE'
+      }
+    );
 
     if (!response.ok) {
       const message = data?.error || data?.message || text || `HTTP ${response.status}`;
@@ -96,7 +118,7 @@ export default function Dashboard() {
     return data;
   };
 
-  const handleRename = async (device) => {
+  const handleRename = async (device: Device) => {
     const currentName = typeof device?.meta?.display_name === 'string'
       ? device.meta.display_name
       : '';
@@ -119,11 +141,15 @@ export default function Dashboard() {
         throw new Error('サーバーから更新後のデバイス情報が取得できませんでした。');
       }
     } catch (err) {
-      showNotice(`名前の更新に失敗しました: ${err.message}`, 'error');
+      if (err instanceof Error) {
+        showNotice(`名前の更新に失敗しました: ${err.message}`, 'error');
+      } else {
+        showNotice('名前の更新に失敗しました。', 'error');
+      }
     }
   };
 
-  const handleClearJobs = async (device) => {
+  const handleClearJobs = async (device: Device) => {
     const label = displayName(device) || device.device_id;
     const confirmed = window.confirm(`デバイス「${label}」の待機ジョブをすべて削除しますか？\n未実行のコマンドはキャンセルされます。`);
     if (!confirmed) return;
@@ -133,11 +159,15 @@ export default function Dashboard() {
       showNotice(`デバイス「${label}」の待機ジョブをクリアしました。`, 'success');
       fetchDevices({ silent: true });
     } catch (err) {
-      showNotice(`ジョブのクリアに失敗しました: ${err.message}`, 'error');
+      if (err instanceof Error) {
+        showNotice(`ジョブのクリアに失敗しました: ${err.message}`, 'error');
+      } else {
+        showNotice('ジョブのクリアに失敗しました。', 'error');
+      }
     }
   };
 
-  const handleDelete = async (device) => {
+  const handleDelete = async (device: Device) => {
     const label = displayName(device) || device.device_id;
     const confirmed = window.confirm(`デバイス「${label}」を削除しますか？\nジョブキューや履歴も失われます。`);
     if (!confirmed) return;
@@ -148,11 +178,15 @@ export default function Dashboard() {
       showNotice(`デバイス「${label}」を削除しました。`, 'success');
       fetchDevices({ silent: true });
     } catch (err) {
-      showNotice(`デバイスの削除に失敗しました: ${err.message}`, 'error');
+      if (err instanceof Error) {
+        showNotice(`デバイスの削除に失敗しました: ${err.message}`, 'error');
+      } else {
+        showNotice('デバイスの削除に失敗しました。', 'error');
+      }
     }
   };
 
-  const handleRegisterSuccess = ({ deviceId, label }) => {
+  const handleRegisterSuccess = ({ deviceId, label }: RegisterSuccess) => {
     const displayLabel = label || deviceId;
     const idSuffix = label ? ` (ID: ${deviceId})` : '';
     showNotice(

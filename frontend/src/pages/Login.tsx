@@ -1,8 +1,9 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { fetchJson } from '../api.js';
+import { fetchJson } from '../api';
+import type { SessionResponse } from '../types';
 
-export default function Login() {
+export default function Login(): JSX.Element {
   const navigate = useNavigate();
   const location = useLocation();
   const [password, setPassword] = useState('');
@@ -20,12 +21,12 @@ export default function Login() {
     let active = true;
     const checkSession = async () => {
       try {
-        const { response, data } = await fetchJson('/api/session');
+        const { response, data } = await fetchJson<SessionResponse>('/api/session');
         if (!active) return;
         if (response.ok && data?.authenticated) {
           navigate('/', { replace: true });
         }
-      } catch (_err) {
+      } catch {
         if (!active) return;
       }
     };
@@ -35,14 +36,14 @@ export default function Login() {
     };
   }, [navigate]);
 
-  const handleSubmit = async (event) => {
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!password || submitting) return;
     setSubmitting(true);
     setError(false);
 
     try {
-      const { response, data } = await fetchJson('/api/session', {
+      const { response, data } = await fetchJson<SessionResponse>('/api/session', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ password })
@@ -53,7 +54,7 @@ export default function Login() {
         return;
       }
       setError(true);
-    } catch (_err) {
+    } catch {
       setError(true);
     } finally {
       setSubmitting(false);

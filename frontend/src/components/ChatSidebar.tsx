@@ -1,21 +1,40 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { fetchJson } from '../api.js';
-import { DEFAULT_MODEL, applyDeviceCommand, nowTime } from '../utils.js';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { fetchJson } from '../api';
+import { DEFAULT_MODEL, applyDeviceCommand, nowTime } from '../utils';
+import type {
+  ChatImage,
+  ChatMessage,
+  ChatRole,
+  ChatResponse,
+  Device,
+  ModelOption,
+  ModelSettingsPayload,
+  ModelsResponse
+} from '../types';
 
 const INITIAL_GREETING = 'こんにちは！登録済みデバイスの状況を確認したり、チャットで質問できます。';
 
-export default function ChatSidebar({ devices }) {
-  const [messages, setMessages] = useState(() => [
+type ChatSidebarProps = {
+  devices: Device[];
+};
+
+const isModelOption = (value: unknown): value is ModelOption => {
+  if (!value || typeof value !== 'object') return false;
+  const record = value as Record<string, unknown>;
+  return typeof record.provider === 'string' && typeof record.model === 'string';
+};
+
+export default function ChatSidebar({ devices }: ChatSidebarProps): JSX.Element {
+  const [messages, setMessages] = useState<ChatMessage[]>(() => [
     { role: 'assistant', content: INITIAL_GREETING, time: nowTime(), images: [] }
   ]);
   const [input, setInput] = useState('');
   const [isPaused, setIsPaused] = useState(false);
   const [isSending, setIsSending] = useState(false);
-  const [availableModels, setAvailableModels] = useState([]);
-  const [currentModel, setCurrentModel] = useState(DEFAULT_MODEL);
+  const [availableModels, setAvailableModels] = useState<ModelOption[]>([]);
   const [selectedModel, setSelectedModel] = useState(`${DEFAULT_MODEL.provider}:${DEFAULT_MODEL.model}`);
   const [modelsLoaded, setModelsLoaded] = useState(false);
-  const logRef = useRef(null);
+  const logRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const logEl = logRef.current;
@@ -27,32 +46,30 @@ export default function ChatSidebar({ devices }) {
     let active = true;
     const loadModelOptions = async () => {
       try {
-        const { response, data } = await fetchJson('/api/models');
+        const { response, data } = await fetchJson<ModelsResponse>('/api/models');
         if (!response.ok) {
           throw new Error(`HTTP ${response.status}`);
         }
         if (Array.isArray(data?.models)) {
-          const sanitized = data.models.filter((model) => model?.provider && model?.model);
+          const sanitized = data.models.filter(isModelOption);
           if (active) {
             setAvailableModels(sanitized);
           }
         }
         const current = data?.current;
-        if (current?.provider && current?.model) {
-          const nextModel = {
+        if (isModelOption(current)) {
+          const nextModel: ModelOption = {
             provider: current.provider,
             model: current.model,
             base_url: typeof current.base_url === 'string' ? current.base_url : ''
           };
           if (active) {
-            setCurrentModel(nextModel);
             setSelectedModel(`${nextModel.provider}:${nextModel.model}`);
           }
         }
-      } catch (_err) {
+      } catch {
         if (active) {
           setAvailableModels([]);
-          setCurrentModel({ ...DEFAULT_MODEL });
           setSelectedModel(`${DEFAULT_MODEL.provider}:${DEFAULT_MODEL.model}`);
         }
       } finally {
@@ -70,12 +87,11 @@ export default function ChatSidebar({ devices }) {
   useEffect(() => {
     if (!modelsLoaded) return;
     const [providerRaw, modelRaw] = (selectedModel || `${DEFAULT_MODEL.provider}:${DEFAULT_MODEL.model}`).split(':');
-    const payload = {
+    const payload: ModelSettingsPayload = {
       provider: providerRaw || DEFAULT_MODEL.provider,
       model: modelRaw || DEFAULT_MODEL.model,
       base_url: ''
     };
-    setCurrentModel(payload);
 
     const update = async () => {
       try {
@@ -88,40 +104,38 @@ export default function ChatSidebar({ devices }) {
           throw new Error(`HTTP ${response.status}`);
         }
       } catch (err) {
-        window.alert(`モデルの更新に失敗しました: ${err.message}`);
+        if (err instanceof Error) {
+          window.alert(`モデルの更新に失敗しました: ${err.message}`);
+        } else {
+          window.alert('モデルの更新に失敗しました。');
+        }
       }
     };
 
     update();
   }, [modelsLoaded, selectedModel]);
 
-  const options = useMemo(() => {
+  const options = useMemo<ModelOption[]>(() => {
     if (availableModels.length) return availableModels;
     return [{ ...DEFAULT_MODEL, label: 'Default (Groq GPT-OSS)' }];
   }, [availableModels]);
 
-  const updateChatControls = () => {
-    return {
-      disableSend: isPaused || isSending,
-      disableInput: isPaused
-    };
-  };
+  const disableSend = isPaused || isSending;
+  const disableInput = isPaused;
 
-  const { disableSend, disableInput } = updateChatControls();
-
-  const pushMessage = (role, text, images = []) => {
+  const pushMessage = (role: ChatRole, text: string, images: ChatImage[] = []) => {
     setMessages((prev) => [
       ...prev,
       { role, content: text, time: nowTime(), images }
     ]);
   };
 
-  const requestAssistantResponse = async (history) => {
+  const requestAssistantResponse = async (history: ChatMessage[]) => {
     const payload = {
       messages: history.map(({ role, content }) => ({ role, content }))
     };
 
-    const { response, data, text } = await fetchJson('/api/chat', {
+    const { response, data, text } = await fetchJson<ChatResponse>('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
@@ -133,13 +147,16 @@ export default function ChatSidebar({ devices }) {
     return data;
   };
 
-  const handleSubmit = async (event) => {
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (isPaused || isSending) return;
     const text = input.trim();
     if (!text) return;
 
-    const nextHistory = [...messages, { role: 'user', content: text }];
+    const nextHistory: ChatMessage[] = [
+      ...messages,
+      { role: 'user', content: text, time: nowTime(), images: [] }
+    ];
     pushMessage('user', text);
     setInput('');
     setIsSending(true);
@@ -162,8 +179,10 @@ export default function ChatSidebar({ devices }) {
     } catch (err) {
       if (localFallback) {
         pushMessage('assistant', localFallback);
-      } else {
+      } else if (err instanceof Error) {
         pushMessage('assistant', `エラーが発生しました: ${err.message}`);
+      } else {
+        pushMessage('assistant', 'エラーが発生しました。');
       }
     } finally {
       setIsSending(false);
@@ -236,7 +255,7 @@ export default function ChatSidebar({ devices }) {
           <textarea
             id="chatInput"
             className="chat-controller__input"
-            rows="2"
+            rows={2}
             placeholder="ブラウザに指示したい内容を入力してください。"
             value={input}
             onChange={(event) => setInput(event.target.value)}

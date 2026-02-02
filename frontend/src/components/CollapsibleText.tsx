@@ -1,6 +1,11 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
-export default function CollapsibleText({ text, maxLength = 180 }) {
+type CollapsibleTextProps = {
+  text: string;
+  maxLength?: number;
+};
+
+export default function CollapsibleText({ text, maxLength = 180 }: CollapsibleTextProps): JSX.Element {
   const safeText = text == null ? '' : String(text);
   const shouldCollapse = safeText.length > maxLength;
   const [collapsed, setCollapsed] = useState(shouldCollapse);
