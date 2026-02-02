@@ -1,13 +1,19 @@
-export const DEFAULT_MODEL = { provider: 'groq', model: 'openai/gpt-oss-20b', base_url: '' };
+import type { Device, ModelOption } from '../types';
 
-export const nowTime = () => {
+export const DEFAULT_MODEL: ModelOption = {
+  provider: 'groq',
+  model: 'openai/gpt-oss-20b',
+  base_url: ''
+};
+
+export const nowTime = (): string => {
   const d = new Date();
   const hh = String(d.getHours()).padStart(2, '0');
   const mm = String(d.getMinutes()).padStart(2, '0');
   return `${hh}:${mm}`;
 };
 
-export function displayName(device) {
+export function displayName(device?: Device | null): string {
   if (!device) return '';
   const meta = device.meta || {};
   if (typeof meta.display_name === 'string' && meta.display_name.trim()) {
@@ -25,9 +31,10 @@ export function displayName(device) {
   return device.device_id;
 }
 
-export function formatTimestamp(ts) {
+export function formatTimestamp(ts?: number | string | null): string {
   if (!ts && ts !== 0) return '-';
-  const date = new Date(ts * 1000);
+  const numeric = typeof ts === 'number' ? ts : Number(ts);
+  const date = new Date(numeric * 1000);
   if (Number.isNaN(date.getTime())) {
     return String(ts);
   }
@@ -42,9 +49,10 @@ export function formatTimestamp(ts) {
   });
 }
 
-export function formatRelativeTime(ts) {
+export function formatRelativeTime(ts?: number | string | null): string {
   if (!ts && ts !== 0) return '未記録';
-  const date = new Date(ts * 1000);
+  const numeric = typeof ts === 'number' ? ts : Number(ts);
+  const date = new Date(numeric * 1000);
   if (Number.isNaN(date.getTime())) {
     return String(ts);
   }
@@ -64,7 +72,7 @@ export function formatRelativeTime(ts) {
   return formatTimestamp(ts);
 }
 
-export function formatMetaValue(value) {
+export function formatMetaValue(value: unknown): string {
   if (value === null) return 'null';
   if (value === undefined) return '-';
   if (typeof value === 'boolean') return value ? 'true' : 'false';
@@ -72,12 +80,12 @@ export function formatMetaValue(value) {
   if (typeof value === 'string') return value;
   try {
     return JSON.stringify(value);
-  } catch (_err) {
+  } catch {
     return String(value);
   }
 }
 
-export function summarizeDevices(devices) {
+export function summarizeDevices(devices: Device[]): string {
   if (!devices.length) {
     return '登録済みのデバイスはありません。';
   }
@@ -91,7 +99,7 @@ export function summarizeDevices(devices) {
   return summaries.join(' / ');
 }
 
-export function applyDeviceCommand(text, devices) {
+export function applyDeviceCommand(text: string, devices: Device[]): string | null {
   const t = text.trim();
   if (!t) return null;
   if (/状態|ステータス|確認|教えて/.test(t)) {

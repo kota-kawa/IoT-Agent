@@ -853,3 +853,105 @@ body.standalone-view{
 .app-standalone .grid{
   padding-bottom: 40px;
 }
+
+/* Virtual device card */
+.virtual-device-card{
+  border: 2px solid #3b82f6;
+  --led-color: #444;
+  --led-shadow: none;
+}
+
+.virtual-badge{
+  width: auto;
+  padding: 0 8px;
+  color: #fff;
+  background: #3b82f6;
+  border-color: rgba(59,130,246,.6);
+}
+
+.virtual-board{
+  background: #2a2a2a;
+  padding: 1rem;
+  border-radius: 8px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  color: #fff;
+  font-family: monospace;
+  margin-top: 1rem;
+}
+
+.v-component{
+  background: #1a1a1a;
+  padding: 0.5rem;
+  border-radius: 4px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 80px;
+}
+
+.v-component--display{
+  grid-column: 1 / -1;
+}
+
+.v-led{
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background-color: #444;
+  background-color: var(--led-color, #444);
+  margin-bottom: 0.5rem;
+  border: 2px solid #555;
+  transition: background-color 0.3s, box-shadow 0.3s;
+  box-shadow: none;
+}
+
+.v-led.v-led--lit{
+  box-shadow: var(--led-shadow, none);
+}
+
+.v-display{
+  background: #000;
+  color: #33ff33;
+  font-family: "Courier New", Courier, monospace;
+  padding: 4px 8px;
+  border: 1px solid #555;
+  width: 100%;
+  min-height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.8rem;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.v-label{
+  font-size: 0.7rem;
+  color: #888;
+  margin-top: 4px;
+}
+
+.v-motor{
+  display: inline-block;
+  font-size: 2rem;
+  transition: transform 0.5s ease;
+}
+
+.v-motor--running{
+  animation: spin 1s linear infinite;
+}
+
+.virtual-result{
+  margin-top: 0.5rem;
+  font-size: 0.8rem;
+  color: #666;
+}
+
+@keyframes spin {
+  100% { transform: rotate(360deg); }
+}

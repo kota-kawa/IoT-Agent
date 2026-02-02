@@ -1,18 +1,29 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { fetchJson } from '../api.js';
-import { displayName } from '../utils.js';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { fetchJson } from '../api';
+import { displayName } from '../utils';
+import type {
+  DeviceRegisterPayload,
+  DeviceRegisterResponse,
+  RegisterSuccess
+} from '../types';
 
 const DEFAULT_MESSAGE =
   'エッジデバイスで使用する識別子を入力し、必要に応じて表示名やメモを設定します。';
 
-export default function RegisterDialog({ open, onClose, onSuccess }) {
-  const dialogRef = useRef(null);
-  const deviceIdRef = useRef(null);
+type RegisterDialogProps = {
+  open: boolean;
+  onClose?: (result: string) => void;
+  onSuccess?: (payload: RegisterSuccess) => void;
+};
+
+export default function RegisterDialog({ open, onClose, onSuccess }: RegisterDialogProps): JSX.Element {
+  const dialogRef = useRef<HTMLDialogElement | null>(null);
+  const deviceIdRef = useRef<HTMLInputElement | null>(null);
   const [deviceId, setDeviceId] = useState('');
   const [displayNameInput, setDisplayNameInput] = useState('');
   const [note, setNote] = useState('');
   const [message, setMessage] = useState(DEFAULT_MESSAGE);
-  const [messageKind, setMessageKind] = useState('info');
+  const [messageKind, setMessageKind] = useState<'info' | 'error' | 'success'>('info');
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
@@ -41,12 +52,12 @@ export default function RegisterDialog({ open, onClose, onSuccess }) {
     onClose?.(dialogRef.current?.returnValue || '');
   };
 
-  const setDialogMessage = (text, kind = 'info') => {
+  const setDialogMessage = (text: string, kind: 'info' | 'error' | 'success' = 'info') => {
     setMessage(text);
     setMessageKind(kind);
   };
 
-  const handleSubmit = async (event) => {
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (submitting) return;
     const trimmedId = deviceId.trim();
@@ -59,7 +70,7 @@ export default function RegisterDialog({ open, onClose, onSuccess }) {
     setSubmitting(true);
     setDialogMessage('サーバーへ登録しています…');
 
-    const payload = {
+    const payload: DeviceRegisterPayload = {
       device_id: trimmedId,
       capabilities: [],
       meta: {
@@ -76,7 +87,7 @@ export default function RegisterDialog({ open, onClose, onSuccess }) {
     }
 
     try {
-      const { response, data, text } = await fetchJson('/api/devices/register', {
+      const { response, data, text } = await fetchJson<DeviceRegisterResponse>('/api/devices/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -98,7 +109,11 @@ export default function RegisterDialog({ open, onClose, onSuccess }) {
       onSuccess?.({ deviceId: registeredId, label, displayName: label });
       dialogRef.current?.close('success');
     } catch (err) {
-      setDialogMessage(`登録に失敗しました: ${err.message}`, 'error');
+      if (err instanceof Error) {
+        setDialogMessage(`登録に失敗しました: ${err.message}`, 'error');
+      } else {
+        setDialogMessage('登録に失敗しました。', 'error');
+      }
     } finally {
       setSubmitting(false);
     }

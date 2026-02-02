@@ -1,6 +1,12 @@
-import React from 'react';
+import type { NoticeKind } from '../types';
 
-export default function Notice({ message, kind = 'info', hidden = false }) {
+type NoticeProps = {
+  message: string;
+  kind?: NoticeKind;
+  hidden?: boolean;
+};
+
+export default function Notice({ message, kind = 'info', hidden = false }: NoticeProps): JSX.Element {
   if (!message && hidden) {
     return (
       <div className="main__notice" id="registerNotice" role="status" aria-live="polite" hidden />

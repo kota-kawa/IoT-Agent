@@ -1,8 +1,22 @@
-import React from 'react';
-import DeviceCard from './DeviceCard.jsx';
-import VirtualDeviceCard from './VirtualDeviceCard.jsx';
+import type { Device } from '../types';
+import DeviceCard from './DeviceCard';
+import VirtualDeviceCard from './VirtualDeviceCard';
 
-export default function DeviceGrid({ devices, onRename, onClearJobs, onDelete, emptyHint }) {
+type DeviceGridProps = {
+  devices: Device[];
+  onRename: (device: Device) => void;
+  onClearJobs: (device: Device) => void;
+  onDelete: (device: Device) => void;
+  emptyHint?: string;
+};
+
+export default function DeviceGrid({
+  devices,
+  onRename,
+  onClearJobs,
+  onDelete,
+  emptyHint
+}: DeviceGridProps): JSX.Element {
   const hasDevices = devices.length > 0;
 
   return (
