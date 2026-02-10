@@ -193,10 +193,6 @@ export default function Dashboard(): JSX.Element | null {
     fetchDevices();
   };
 
-  if (!ready) {
-    return null;
-  }
-
   return (
     <div className="app">
       <ChatSidebar devices={devices} />

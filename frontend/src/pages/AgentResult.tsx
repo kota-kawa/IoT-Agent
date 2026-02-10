@@ -179,10 +179,6 @@ export default function AgentResult(): JSX.Element | null {
     }
   };
 
-  if (!ready) {
-    return null;
-  }
-
   return (
     <div className="app-standalone">
       <main className="main">
