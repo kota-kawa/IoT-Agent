@@ -102,12 +102,6 @@ export type ModelsResponse = {
   message?: string;
 };
 
-export type SessionResponse = {
-  authenticated?: boolean;
-  error?: string;
-  message?: string;
-};
-
 export type ModelSettingsPayload = {
   provider: string;
   model: string;
