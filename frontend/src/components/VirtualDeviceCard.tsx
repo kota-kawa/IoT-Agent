@@ -75,6 +75,16 @@ const extractCapabilityLabel = (raw: unknown): string => {
   return name;
 };
 
+function InfoIcon(): JSX.Element {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="12" cy="12" r="10" />
+      <path d="M12 16v-4" />
+      <path d="M12 8h.01" />
+    </svg>
+  );
+}
+
 /**
  * A specialized card for the Virtual Device.
  * It renders simulated hardware components (LED, Display, Motor)
@@ -155,7 +165,7 @@ export default function VirtualDeviceCard({ device, onRename, onClearJobs, onDel
             aria-controls={infoPanelId}
             onClick={() => setShowInfo((prev) => !prev)}
           >
-            <span className="iconbtn__text" aria-hidden="true">ⓘ</span>
+            <InfoIcon />
           </button>
           <button
             type="button"
@@ -228,36 +238,37 @@ export default function VirtualDeviceCard({ device, onRename, onClearJobs, onDel
           </div>
         </div>
 
-        <section
-          className="virtual-info"
-          id={infoPanelId}
-          aria-label="仮想デモデバイスの使い方"
-          hidden={!showInfo}
-        >
-            <div className="virtual-info__header">
-              <div className="virtual-info__title">仮想デモデバイスでできること</div>
-              <div className="virtual-info__hint">チャットに入力すると、上のボードに結果が反映されます。</div>
-            </div>
-            <div className="virtual-info__grid">
-              <div className="virtual-info__block">
-                <div className="virtual-info__label">できること</div>
-                <ul className="virtual-info__list">
-                  {capabilityList.map((item) => (
-                    <li key={item}>{item}</li>
-                  ))}
-                </ul>
+        {showInfo && (
+          <section
+            className="virtual-info"
+            id={infoPanelId}
+            aria-label="仮想デモデバイスの使い方"
+          >
+              <div className="virtual-info__header">
+                <div className="virtual-info__title">仮想デモデバイスでできること</div>
+                <div className="virtual-info__hint">チャットに入力すると、上のボードに結果が反映されます。</div>
               </div>
-              <div className="virtual-info__block">
-                <div className="virtual-info__label">プロンプト例</div>
-                <ul className="virtual-info__list">
-                  {PROMPT_EXAMPLES.map((item) => (
-                    <li key={item}>{item}</li>
-                  ))}
-                </ul>
+              <div className="virtual-info__grid">
+                <div className="virtual-info__block">
+                  <div className="virtual-info__label">できること</div>
+                  <ul className="virtual-info__list">
+                    {capabilityList.map((item) => (
+                      <li key={item}>{item}</li>
+                    ))}
+                  </ul>
+                </div>
+                <div className="virtual-info__block">
+                  <div className="virtual-info__label">プロンプト例</div>
+                  <ul className="virtual-info__list">
+                    {PROMPT_EXAMPLES.map((item) => (
+                      <li key={item}>{item}</li>
+                    ))}
+                  </ul>
+                </div>
               </div>
-            </div>
-            <div className="virtual-info__note">※実機ではなく画面上のシミュレーションです。</div>
-          </section>
+              <div className="virtual-info__note">※実機ではなく画面上のシミュレーションです。</div>
+            </section>
+        )}
 
         {typeof returnValue.message === 'string' && returnValue.message && (
           <div className="virtual-result">

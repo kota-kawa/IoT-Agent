@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import type { Device, DeviceCapability, DeviceResult } from '../types';
 import CollapsibleText from './CollapsibleText';
 import { displayName, formatMetaValue, formatRelativeTime, formatTimestamp } from '../utils';
@@ -7,6 +8,16 @@ function DeviceIcon(): JSX.Element {
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
       <rect x="3" y="5" width="18" height="14" rx="3" stroke="currentColor" strokeWidth="2" />
       <path d="M7 9h10M7 13h6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function InfoIcon(): JSX.Element {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="12" cy="12" r="10" />
+      <path d="M12 16v-4" />
+      <path d="M12 8h.01" />
     </svg>
   );
 }
@@ -112,9 +123,11 @@ type DeviceCardProps = {
 };
 
 export default function DeviceCard({ device, onRename, onClearJobs, onDelete }: DeviceCardProps): JSX.Element {
+  const [showInfo, setShowInfo] = useState(false);
   const label = displayName(device) || device.device_id;
   const queueRaw = Number(device.queue_depth);
   const queueCount = Number.isFinite(queueRaw) ? queueRaw : 0;
+  const infoPanelId = `info-${device.device_id.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
 
   return (
     <article className="card">
@@ -127,6 +140,16 @@ export default function DeviceCard({ device, onRename, onClearJobs, onDelete }: 
           </div>
         </div>
         <div className="card__tools">
+          <button
+            type="button"
+            className={`iconbtn iconbtn--info${showInfo ? ' is-active' : ''}`}
+            title="デバイス情報"
+            aria-expanded={showInfo}
+            aria-controls={infoPanelId}
+            onClick={() => setShowInfo((prev) => !prev)}
+          >
+            <InfoIcon />
+          </button>
           <button
             type="button"
             className="iconbtn"
@@ -162,6 +185,36 @@ export default function DeviceCard({ device, onRename, onClearJobs, onDelete }: 
           <Stat label="登録日時" value={formatTimestamp(device.registered_at)} />
           <Stat label="待機ジョブ" value={`${queueCount}件`} />
         </div>
+
+        {showInfo && (
+          <section
+            className="virtual-info"
+            id={infoPanelId}
+            aria-label="デバイスの詳細情報"
+            style={{ borderStyle: 'dashed', borderColor: 'rgba(255,255,255,0.1)', background: 'rgba(255,255,255,0.03)' }}
+          >
+            <div className="virtual-info__header">
+              <div className="virtual-info__title" style={{ color: 'var(--text-dim)' }}>デバイス仕様</div>
+              <div className="virtual-info__hint">このデバイスに命令できる内容の詳細は以下の通りです。</div>
+            </div>
+            <div className="virtual-info__block">
+              <div className="virtual-info__label">利用可能な能力</div>
+              <ul className="virtual-info__list" style={{ color: 'var(--text-dim)' }}>
+                {device.capabilities && device.capabilities.length > 0 ? (
+                  device.capabilities.map((cap, i) => (
+                    <li key={i}>
+                      <strong>{cap.name}</strong>
+                      {cap.description && <span>: {cap.description}</span>}
+                    </li>
+                  ))
+                ) : (
+                  <li>登録された機能はありません</li>
+                )}
+              </ul>
+            </div>
+          </section>
+        )}
+
         <Capabilities capabilities={device.capabilities} />
         <LastResult result={device.last_result || undefined} />
       </div>
