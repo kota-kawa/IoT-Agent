@@ -106,9 +106,8 @@ class VirtualDeviceRunner:
         message = ""
         
         if cmd_name == "turn_on":
-            # User requested to keep status always 'off'
-            self.state["power"] = "off"
-            message = "電源をオンにしました (仮想ステータスはOFF維持)"
+            self.state["power"] = "on"
+            message = "電源をオンにしました"
         elif cmd_name == "turn_off":
             self.state["power"] = "off"
             self.state["motor_status"] = "stopped"  # Power off kills motor too usually
