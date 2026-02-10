@@ -4,7 +4,6 @@ import httpx
 import pytest
 
 from app import app
-from iot_agent.config import APP_PASSWORD
 from iot_agent.storage import reset_store
 
 
@@ -20,43 +19,25 @@ async def _with_client(assertions):
         return await assertions(client)
 
 
-def test_root_redirects_when_unauthenticated():
+def test_root_returns_spa_or_missing_notice():
     async def run(client):
         response = await client.get("/", follow_redirects=False)
-        assert response.status_code == 302
-        assert response.headers.get("location") == "/login"
+        assert response.status_code in {200, 503}
 
     asyncio.run(_with_client(run))
 
 
-def test_session_login_logout_flow():
+def test_session_endpoints_return_authenticated():
     async def run(client):
-        response = await client.post("/api/session", json={"password": APP_PASSWORD})
+        response = await client.get("/api/session")
         assert response.status_code == 200
         assert response.json() == {"authenticated": True}
 
-        response = await client.get("/api/session")
+        response = await client.post("/api/session", json={"password": "ignored"})
         assert response.status_code == 200
         assert response.json() == {"authenticated": True}
 
         response = await client.delete("/api/session")
-        assert response.status_code == 200
-        assert response.json() == {"authenticated": False}
-
-        response = await client.get("/api/session")
-        assert response.status_code == 200
-        assert response.json() == {"authenticated": False}
-
-    asyncio.run(_with_client(run))
-
-
-def test_login_form_sets_session():
-    async def run(client):
-        response = await client.post("/login", data={"password": APP_PASSWORD}, follow_redirects=False)
-        assert response.status_code == 302
-        assert response.headers.get("location") == "/"
-
-        response = await client.get("/api/session")
         assert response.status_code == 200
         assert response.json() == {"authenticated": True}
 

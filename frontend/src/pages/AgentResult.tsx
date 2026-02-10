@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { fetchJson } from '../api';
 import { displayName } from '../utils';
-import { useRequireAuth } from '../hooks/useRequireAuth';
 import DeviceGrid from '../components/DeviceGrid';
 import Notice from '../components/Notice';
 import type {
@@ -16,7 +15,6 @@ import type {
 const FETCH_DEVICES_INTERVAL_MS = 5000;
 
 export default function AgentResult(): JSX.Element | null {
-  const ready = useRequireAuth();
   const [devices, setDevices] = useState<Device[]>([]);
   const [notice, setNotice] = useState<NoticeState>({ message: '', kind: 'info', visible: false });
   const isFetchingRef = useRef(false);
@@ -64,13 +62,12 @@ export default function AgentResult(): JSX.Element | null {
   }, []);
 
   useEffect(() => {
-    if (!ready) return;
     fetchDevices();
     const timer = setInterval(() => {
       fetchDevices({ silent: true });
     }, FETCH_DEVICES_INTERVAL_MS);
     return () => clearInterval(timer);
-  }, [fetchDevices, ready]);
+  }, [fetchDevices]);
 
   const updateDeviceDisplayName = async (deviceId: string, displayNameInput: string) => {
     const payload = { display_name: displayNameInput || null };

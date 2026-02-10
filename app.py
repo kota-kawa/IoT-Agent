@@ -18,9 +18,8 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.staticfiles import StaticFiles
 from mcp.types import JSONRPCMessage
 from pydantic import TypeAdapter
-from starlette.middleware.sessions import SessionMiddleware
 
-from iot_agent.config import APP_PASSWORD, DEVICE_RESULT_TIMEOUT, IOT_AGENT_API_BASE_URL, SECRET_KEY
+from iot_agent.config import DEVICE_RESULT_TIMEOUT, IOT_AGENT_API_BASE_URL
 from iot_agent.device_utils import (
     _agent_device,
     _await_device_result,
@@ -65,7 +64,6 @@ def _shutdown_storage() -> None:
     store.close()
 
 app = FastAPI(lifespan=lifespan)
-app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY, same_site="none", https_only=True)
 
 _BASE_DIR = Path(__file__).resolve().parent
 app.mount("/static", StaticFiles(directory=_BASE_DIR / "static"), name="static")
@@ -219,10 +217,6 @@ def _spa_missing_response() -> Response:
 
 @app.get("/")
 async def index(request: Request):
-    # 認証済みでなければログインページへリダイレクト
-
-    if not request.session.get("authenticated"):
-        return RedirectResponse(url="/login", status_code=302)
     if _spa_available():
         return _spa_response()
     return _spa_missing_response()
@@ -230,10 +224,6 @@ async def index(request: Request):
 
 @app.get("/login")
 async def login_get(request: Request):
-    # シンプルなパスワード認証を行い、成功時にセッションを確立
-
-    if request.session.get("authenticated"):
-        return RedirectResponse(url="/", status_code=302)
     if _spa_available():
         return _spa_response()
     return _spa_missing_response()
@@ -248,20 +238,12 @@ async def frontend_config():
 
 @app.post("/login")
 async def login_post(request: Request):
-    form = await request.form()
-    password = form.get("password", "") if form else ""
-    if password == APP_PASSWORD:
-        request.session["authenticated"] = True
-        return RedirectResponse(url="/", status_code=302)
-    return RedirectResponse(url="/login?error=1", status_code=302)
+    return RedirectResponse(url="/", status_code=302)
 
 
 @app.post("/logout")
 async def logout(request: Request):
-    # セッション情報を破棄してログイン画面へ戻す
-
-    request.session.clear()
-    return RedirectResponse(url="/login", status_code=302)
+    return RedirectResponse(url="/", status_code=302)
 
 
 @app.get("/app.js")
@@ -283,9 +265,6 @@ async def index_html():
 
 @app.get("/agent-result")
 async def agent_result(request: Request):
-    # 認証済みでなければログインページへリダイレクト
-    if not request.session.get("authenticated"):
-        return RedirectResponse(url="/login", status_code=302)
     if _spa_available():
         return _spa_response()
     return _spa_missing_response()
@@ -309,37 +288,17 @@ async def login_html():
 
 @app.get("/api/session")
 async def session_status(request: Request):
-    # 現在のセッションが認証済みかどうかを返す API
-
-    return _json_response({"authenticated": bool(request.session.get("authenticated"))})
+    return _json_response({"authenticated": True})
 
 
 @app.post("/api/session")
 async def session_login(request: Request):
-    # JSON 経由でのログイン要求を処理し、成功時にセッションを確立
-
-    try:
-        payload = await request.json()
-    except Exception:
-        payload = {}
-
-    payload = payload if isinstance(payload, dict) else {}
-    password = payload.get("password")
-
-    if isinstance(password, str) and password == APP_PASSWORD:
-        request.session["authenticated"] = True
-        return _json_response({"authenticated": True})
-
-    request.session.pop("authenticated", None)
-    return _json_response({"authenticated": False, "error": "invalid credentials"}, status_code=401)
+    return _json_response({"authenticated": True})
 
 
 @app.delete("/api/session")
 async def session_logout(request: Request):
-    # API 経由でのログアウト要求。セッションを破棄して応答
-
-    request.session.clear()
-    return _json_response({"authenticated": False})
+    return _json_response({"authenticated": True})
 
 
 def _notify_platform(selection: dict) -> None:

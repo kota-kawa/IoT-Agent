@@ -28,11 +28,12 @@ cp secrets.env.example secrets.env
 
 ```env
 OPENAI_API_KEY="sk-..."
-APP_PASSWORD="your_preferred_password"
+LLM_DAILY_API_LIMIT="1000"
 IOT_AGENT_API_BASE_URL="https://iot-agent.example.com"
 ```
 
 If `IOT_AGENT_API_BASE_URL` is blank, it defaults to `http://localhost:5006/`.
+`LLM_DAILY_API_LIMIT=0` disables the daily limit.
 
 ### 3. Run
 ```bash
@@ -79,11 +80,12 @@ cp secrets.env.example secrets.env
 
 ```env
 OPENAI_API_KEY="sk-..."
-APP_PASSWORD="好きなパスワード"
+LLM_DAILY_API_LIMIT="1000"
 IOT_AGENT_API_BASE_URL="https://iot-agent.example.com"
 ```
 
 `IOT_AGENT_API_BASE_URL` を空にすると `http://localhost:5006/` が使われます。
+`LLM_DAILY_API_LIMIT=0` で日次制限を無効化できます。
 
 ### 3. 起動
 ```bash

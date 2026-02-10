@@ -32,7 +32,7 @@
 - Request early review for schema or API shifts so edge client owners can adapt.
 
 ## Security & Configuration Tips
-- Update `APP_PASSWORD` and other secrets before deploying; store overrides in `secrets.env` or platform secret managers.
+- Update LLM provider keys and `LLM_DAILY_API_LIMIT` before deploying; store overrides in `secrets.env` or platform secret managers.
 - Rotate OpenAI credentials regularly and document fallbacks in `app.py` when adding new providers.
 - Validate device capability schemas via `_normalise_capabilities` before exposing new agent actions.
 

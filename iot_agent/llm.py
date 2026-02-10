@@ -23,7 +23,7 @@ except ImportError:
 from mcp.types import Tool
 from iot_agent.mcp_server import list_tools, call_tool
 
-from .config import AGENT_ROLE_VALUE
+from .config import AGENT_ROLE_VALUE, LLM_DAILY_API_LIMIT
 from .device_utils import _build_device_context, _format_result_for_prompt
 from model_selection import (
     PROVIDER_DEFAULTS,
@@ -35,6 +35,47 @@ from model_selection import (
 _IMAGE_DATA_URL_RE = re.compile(
     r"data:image/[a-zA-Z0-9.+-]+;base64,[a-zA-Z0-9+/=\n\r]+", re.IGNORECASE
 )
+
+
+class LLMDailyLimitError(RuntimeError):
+    def __init__(self, limit: int, count: int) -> None:
+        super().__init__(f"LLM daily limit reached ({count}/{limit})")
+        self.limit = limit
+        self.count = count
+
+
+class _LLMDailyUsage:
+    def __init__(self, limit: int) -> None:
+        self.limit = max(0, limit)
+        self._lock = threading.Lock()
+        self._date_key = self._current_date_key()
+        self._count = 0
+
+    def _current_date_key(self) -> str:
+        return datetime.now().strftime("%Y-%m-%d")
+
+    def _rollover_if_needed(self) -> None:
+        today = self._current_date_key()
+        if today != self._date_key:
+            self._date_key = today
+            self._count = 0
+
+    def consume(self) -> Optional[LLMDailyLimitError]:
+        if self.limit <= 0:
+            return None
+        with self._lock:
+            self._rollover_if_needed()
+            if self._count >= self.limit:
+                return LLMDailyLimitError(self.limit, self._count)
+            self._count += 1
+            return None
+
+
+_LLM_DAILY_USAGE = _LLMDailyUsage(LLM_DAILY_API_LIMIT)
+
+
+def _consume_llm_daily_budget() -> Optional[LLMDailyLimitError]:
+    return _LLM_DAILY_USAGE.consume()
 
 
 def _looks_like_openai_admin_key(api_key: str) -> bool:
@@ -528,6 +569,9 @@ async def _responses_text_from_messages_async(
         responses_input = _convert_messages_to_responses_input(messages)
         if not responses_input:
             return "", True
+        limit_error = _consume_llm_daily_budget()
+        if limit_error:
+            return "", True
         response = await responses_client.create(model=model, input=responses_input)
         text = _response_output_to_text(response)
         return text.strip() if isinstance(text, str) else "", True
@@ -651,6 +695,12 @@ def _provider_error_message(exc: Optional[Exception]) -> str:
     if not exc:
         return base
 
+    if isinstance(exc, LLMDailyLimitError):
+        return (
+            f"本日のLLM利用上限（{exc.limit}回）に達しました。"
+            "日付が変わってから再度お試しください。"
+        )
+
     msg_str = str(exc)
     if "404" in msg_str or "not found" in msg_str.lower():
         base = "指定されたAIモデルが見つかりません。設定画面からモデルを変更してください。"
@@ -678,6 +728,9 @@ async def _chat_completion_with_retries_async(
 
     for attempt in range(1, attempts + 1):
         try:
+            limit_error = _consume_llm_daily_budget()
+            if limit_error:
+                return None, limit_error
             return await client.chat.completions.create(**call_kwargs), None
         except Exception as exc:
             last_error = exc
@@ -1283,6 +1336,9 @@ def _call_llm_text(client: UnifiedClient, payload: Dict[str, Any]) -> str:
                     # Assuming client.client is async, responses_client should support await if it follows the pattern.
                     # However, typical OpenAI AsyncClient uses 'await client.chat.completions.create'
                     # We assume responses_client.create is awaitable.
+                    limit_error = _consume_llm_daily_budget()
+                    if limit_error:
+                        return ""
                     response = await responses_client.create(model=model, input=responses_input)
                     text = _response_output_to_text(response)
                     if text:
