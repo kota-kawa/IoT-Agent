@@ -17,6 +17,10 @@ from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from mcp.types import JSONRPCMessage
+try:
+    from mcp.shared.message import SessionMessage
+except Exception:  # pragma: no cover - optional dependency shape varies by mcp version
+    SessionMessage = None
 from pydantic import TypeAdapter
 
 from iot_agent.config import (
@@ -1074,7 +1078,10 @@ async def mcp_sse_endpoint():
                             break
                         try:
                             parsed = TypeAdapter(JSONRPCMessage).validate_python(msg)
-                            await read_stream_send.send(parsed)
+                            if SessionMessage is not None:
+                                await read_stream_send.send(SessionMessage(message=parsed))
+                            else:
+                                await read_stream_send.send(parsed)
                         except Exception as exc:
                             print(f"MCP Parse Error: {exc}")
                     except Exception:
@@ -1084,10 +1091,15 @@ async def mcp_sse_endpoint():
             async def consume_output():
                 async with write_stream_recv:
                     async for msg in write_stream_recv:
-                        if hasattr(msg, "model_dump_json"):
-                            data = msg.model_dump_json()
+                        payload = msg
+                        if SessionMessage is not None and isinstance(msg, SessionMessage):
+                            payload = msg.message
+                        if isinstance(payload, Exception):
+                            data = json.dumps({"error": str(payload)})
+                        elif hasattr(payload, "model_dump_json"):
+                            data = payload.model_dump_json()
                         else:
-                            data = json.dumps(msg)
+                            data = json.dumps(payload)
                         output_queue.put(f"event: message\ndata: {data}\n\n")
                 output_queue.put(None)
 
