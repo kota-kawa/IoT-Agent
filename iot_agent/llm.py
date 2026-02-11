@@ -112,6 +112,36 @@ def _coerce_violation(value: Any) -> Optional[bool]:
     return None
 
 
+def _prompt_guard_supports_json_mode(provider: str, base_url: Optional[str]) -> bool:
+    if isinstance(provider, str) and provider.strip().lower() == "openai":
+        return True
+    if isinstance(base_url, str) and "api.openai.com" in base_url.lower():
+        return True
+    return False
+
+
+def _looks_like_json_mode_error(exc: Exception) -> bool:
+    message = str(exc).lower() if exc else ""
+    if "json_validate_failed" in message or "failed to validate json" in message:
+        return True
+    if "response_format" in message and "json" in message:
+        if any(keyword in message for keyword in ("unsupported", "invalid", "not available", "unknown")):
+            return True
+
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict):
+        error = body.get("error")
+        if isinstance(error, dict):
+            code = error.get("code")
+            if isinstance(code, str) and code.lower() in {"json_validate_failed", "invalid_response_format"}:
+                return True
+            msg = error.get("message")
+            if isinstance(msg, str) and "validate json" in msg.lower():
+                return True
+
+    return False
+
+
 async def _prompt_guard_check(messages: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     """Run prompt injection guard on the latest user message.
 
@@ -133,7 +163,7 @@ async def _prompt_guard_check(messages: List[Dict[str, Any]]) -> Optional[Dict[s
         return None
 
     # Force Groq model selection for the guard.
-    _, _, base_url, api_key = apply_model_selection(
+    provider, _, base_url, api_key = apply_model_selection(
         "iot", override={"provider": "groq", "model": PROMPT_GUARD_MODEL}
     )
 
@@ -147,13 +177,25 @@ async def _prompt_guard_check(messages: List[Dict[str, Any]]) -> Optional[Dict[s
     ]
 
     try:
-        response = await client.chat.completions.create(
-            model=PROMPT_GUARD_MODEL,
-            messages=guard_messages,
-            temperature=0,
-            max_tokens=200,
-            response_format={"type": "json_object"},
-        )
+        request_kwargs: Dict[str, Any] = {
+            "model": PROMPT_GUARD_MODEL,
+            "messages": guard_messages,
+            "temperature": 0,
+            "max_tokens": 200,
+        }
+        use_json_mode = _prompt_guard_supports_json_mode(provider, base_url)
+        if use_json_mode:
+            request_kwargs["response_format"] = {"type": "json_object"}
+
+        try:
+            response = await client.chat.completions.create(**request_kwargs)
+        except BadRequestError as exc:
+            if use_json_mode and _looks_like_json_mode_error(exc):
+                request_kwargs.pop("response_format", None)
+                response = await client.chat.completions.create(**request_kwargs)
+            else:
+                raise
+
         choice = response.choices[0] if response and response.choices else None
         content = choice.message.content if choice and choice.message else None
         text = _content_to_text(content)
