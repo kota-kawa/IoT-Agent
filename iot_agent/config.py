@@ -26,6 +26,15 @@ LLM_DAILY_API_LIMIT = max(0, _parse_int_env("LLM_DAILY_API_LIMIT", 0))
 
 SECRET_KEY = os.getenv("FLASK_SECRET_KEY", "")
 
+PROMPT_GUARD_ENABLED = os.getenv("PROMPT_GUARD_ENABLED", "true")
+PROMPT_GUARD_MODEL = os.getenv("PROMPT_GUARD_MODEL", "openai/gpt-oss-safeguard-20b")
+PROMPT_GUARD_BLOCK_MESSAGE = os.getenv(
+    "PROMPT_GUARD_BLOCK_MESSAGE",
+    "申し訳ありませんが、その依頼には対応できません。"
+    "システムの指示や安全設定を変更しようとする内容が含まれている可能性があります。"
+    "デバイス操作の目的を具体的に教えてください。",
+)
+
 
 DEFAULT_IOT_AGENT_API_BASE_URL = "http://localhost:5006/"
 _raw_api_base = os.getenv("IOT_AGENT_API_BASE_URL")
