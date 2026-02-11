@@ -19,7 +19,11 @@ from fastapi.staticfiles import StaticFiles
 from mcp.types import JSONRPCMessage
 from pydantic import TypeAdapter
 
-from iot_agent.config import DEVICE_RESULT_TIMEOUT, IOT_AGENT_API_BASE_URL
+from iot_agent.config import (
+    DEVICE_RESULT_TIMEOUT,
+    IOT_AGENT_API_BASE_URL,
+    PROMPT_GUARD_BLOCK_MESSAGE,
+)
 from iot_agent.device_utils import (
     _agent_device,
     _await_device_result,
@@ -33,6 +37,7 @@ from iot_agent.llm import (
     _call_llm_and_parse_async,
     _client,
     _latest_user_turn,
+    _prompt_guard_check,
 )
 from iot_agent.mcp_server import mcp_server
 from iot_agent.models import DeviceState
@@ -410,6 +415,11 @@ async def chat(request: Request):
 
     if not formatted_messages or formatted_messages[-1]["role"] != "user":
         return _json_response({"error": "last message must be from user"}, status_code=400)
+
+    guard_decision = await _prompt_guard_check(formatted_messages)
+    if guard_decision and guard_decision.get("blocked"):
+        logger.warning("Prompt guard blocked request: %s", guard_decision)
+        return _json_response({"reply": PROMPT_GUARD_BLOCK_MESSAGE}, status_code=200)
 
     agent_device = _agent_device()
     provider, _, _, _ = apply_model_selection("iot")
