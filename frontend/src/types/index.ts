@@ -17,11 +17,19 @@ export type ChatImage = {
   label?: string;
 };
 
+export type ExecutionLogStatus = 'success' | 'error';
+
+export type MessageExecutionLog = {
+  status: ExecutionLogStatus;
+  steps: string[];
+};
+
 export type ChatMessage = {
   role: ChatRole;
   content: string;
   time: string;
   images: ChatImage[];
+  executionLog?: MessageExecutionLog | null;
 };
 
 export type ModelOption = {
