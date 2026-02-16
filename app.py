@@ -9,7 +9,7 @@ import uuid
 from contextlib import asynccontextmanager
 from importlib import metadata
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Tuple
 
 import anyio
 import requests
@@ -384,22 +384,25 @@ async def device_ping():
     return _json_response({"message": "ok"})
 
 
-@app.post("/api/chat")
-async def chat(request: Request):
-    # チャット API のメインエントリーポイントで、LLM 連携とデバイス制御を仲介
+_ChatProgressCallback = Optional[Callable[[Dict[str, Any]], None]]
 
+
+async def _read_json_payload(request: Request) -> Dict[str, Any]:
     try:
         payload = await request.json()
     except Exception:
         payload = {}
+    return payload if isinstance(payload, dict) else {}
 
-    payload = payload if isinstance(payload, dict) else {}
+
+def _normalise_chat_messages(
+    payload: Dict[str, Any],
+) -> Tuple[List[Dict[str, Any]], Optional[Tuple[Dict[str, Any], int]]]:
     messages = payload.get("messages", [])
-
     if not isinstance(messages, list):
-        return _json_response({"error": "messages must be a list"}, status_code=400)
+        return [], ({"error": "messages must be a list"}, 400)
 
-    formatted_messages = []
+    formatted_messages: List[Dict[str, Any]] = []
     for msg in messages:
         if not isinstance(msg, dict):
             continue
@@ -415,15 +418,46 @@ async def chat(request: Request):
     formatted_messages = _latest_user_turn(formatted_messages)
 
     if not formatted_messages:
-        return _json_response({"error": "no user message found"}, status_code=400)
+        return [], ({"error": "no user message found"}, 400)
+    if formatted_messages[-1]["role"] != "user":
+        return [], ({"error": "last message must be from user"}, 400)
 
-    if not formatted_messages or formatted_messages[-1]["role"] != "user":
-        return _json_response({"error": "last message must be from user"}, status_code=400)
+    return formatted_messages, None
 
+
+def _emit_chat_progress(
+    callback: _ChatProgressCallback,
+    stage: str,
+    message: str,
+    **extra: Any,
+) -> None:
+    if callback is None:
+        return
+    payload: Dict[str, Any] = {"stage": stage, "message": message}
+    for key, value in extra.items():
+        if value is None:
+            continue
+        payload[key] = value
+    try:
+        callback(payload)
+    except Exception:
+        return
+
+
+def _stream_line(payload: Dict[str, Any]) -> str:
+    return json.dumps(payload, ensure_ascii=False) + "\n"
+
+
+async def _process_chat_request(
+    formatted_messages: List[Dict[str, Any]],
+    progress_callback: _ChatProgressCallback = None,
+) -> Tuple[Dict[str, Any], int]:
+    _emit_chat_progress(progress_callback, "prompt_guard", "プロンプト安全チェックを実行しています")
     guard_decision = await _prompt_guard_check(formatted_messages)
     if guard_decision and guard_decision.get("blocked"):
         logger.warning("Prompt guard blocked request: %s", guard_decision)
-        return _json_response({"reply": PROMPT_GUARD_BLOCK_MESSAGE}, status_code=200)
+        _emit_chat_progress(progress_callback, "prompt_guard_blocked", "安全ポリシーにより処理を停止しました")
+        return {"reply": PROMPT_GUARD_BLOCK_MESSAGE}, 200
 
     agent_device = _agent_device()
     provider, _, _, _ = apply_model_selection("iot")
@@ -438,6 +472,7 @@ async def chat(request: Request):
 
     try:
         if agent_device:
+            _emit_chat_progress(progress_callback, "llm_parsing", "LLMで実行内容を解析しています")
             client = _client()
             parsed_response = await _call_llm_and_parse_async(client, formatted_messages)
 
@@ -445,6 +480,7 @@ async def chat(request: Request):
             if not isinstance(reply_message, str):
                 reply_message = parsed_response.get("raw", "").strip()
 
+            _emit_chat_progress(progress_callback, "command_validation", "実行コマンドを検証しています")
             validated_commands, validation_errors = _validate_device_command_sequence(
                 parsed_response.get("device_commands")
             )
@@ -486,21 +522,110 @@ async def chat(request: Request):
                 notice = "\n".join(f"(システム通知: {error})" for error in validation_errors)
                 response_payload["reply"] = (reply_message + "\n" if reply_message else "") + notice
             elif validated_commands:
+                _emit_chat_progress(
+                    progress_callback,
+                    "device_execution",
+                    f"{len(validated_commands)} 件のデバイス操作を実行しています",
+                    total_commands=len(validated_commands),
+                )
                 final_reply, status, images = await asyncio.to_thread(
                     _execute_device_command_sequence,
-                    client, formatted_messages, reply_message, validated_commands
+                    client,
+                    formatted_messages,
+                    reply_message,
+                    validated_commands,
+                    progress_callback,
                 )
                 response_payload = {"reply": final_reply, "images": images}
+            else:
+                _emit_chat_progress(progress_callback, "response_ready", "応答を整形しています")
         else:
-            response_payload, status = await _chat_via_legacy(formatted_messages)
+            response_payload, status = await _chat_via_legacy(
+                formatted_messages, progress_callback=progress_callback
+            )
     except Exception as exc:
+        _emit_chat_progress(progress_callback, "chat_failed", "LLM処理に失敗しました")
         response_payload, status = _llm_unavailable_response(exc)
+
+    _emit_chat_progress(progress_callback, "chat_complete", "応答生成が完了しました")
+    return response_payload, status
+
+
+@app.post("/api/chat")
+async def chat(request: Request):
+    # チャット API のメインエントリーポイントで、LLM 連携とデバイス制御を仲介
+
+    payload = await _read_json_payload(request)
+    formatted_messages, error = _normalise_chat_messages(payload)
+    if error:
+        error_payload, status_code = error
+        return _json_response(error_payload, status_code=status_code)
+
+    response_payload, status = await _process_chat_request(formatted_messages)
 
     # Multi-Agent-Platform (requests) からのアクセスの場合は画像を削除する
     if "python-requests" in request.headers.get("User-Agent", ""):
         response_payload.pop("images", None)
 
     return _json_response(response_payload, status_code=status)
+
+
+@app.post("/api/chat/stream")
+async def chat_stream(request: Request):
+    payload = await _read_json_payload(request)
+    formatted_messages, error = _normalise_chat_messages(payload)
+    if error:
+        error_payload, status_code = error
+        return _json_response(error_payload, status_code=status_code)
+
+    event_queue: asyncio.Queue[Dict[str, Any]] = asyncio.Queue()
+    loop = asyncio.get_running_loop()
+    user_agent = request.headers.get("User-Agent", "")
+
+    def progress_callback(event: Dict[str, Any]) -> None:
+        payload = {"type": "status", "timestamp": time.time(), **event}
+        try:
+            loop.call_soon_threadsafe(event_queue.put_nowait, payload)
+        except RuntimeError:
+            return
+
+    task = asyncio.create_task(
+        _process_chat_request(formatted_messages, progress_callback=progress_callback)
+    )
+
+    async def generate() -> AsyncIterator[str]:
+        while True:
+            if task.done() and event_queue.empty():
+                break
+            try:
+                event = await asyncio.wait_for(event_queue.get(), timeout=0.2)
+            except asyncio.TimeoutError:
+                continue
+            yield _stream_line(event)
+
+        try:
+            response_payload, status = await task
+            if "python-requests" in user_agent:
+                response_payload.pop("images", None)
+            yield _stream_line(
+                {
+                    "type": "result",
+                    "timestamp": time.time(),
+                    "status": status,
+                    "payload": response_payload,
+                }
+            )
+        except Exception as exc:
+            logger.exception("Chat stream failed", exc_info=exc)
+            yield _stream_line(
+                {
+                    "type": "error",
+                    "timestamp": time.time(),
+                    "message": str(exc),
+                }
+            )
+
+    return StreamingResponse(generate(), media_type="application/x-ndjson")
 
 
 @app.post("/api/devices/register")

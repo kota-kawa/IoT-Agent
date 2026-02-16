@@ -2,7 +2,7 @@ import json
 import os
 import threading
 import asyncio
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from openai import OpenAI
 
@@ -26,6 +26,29 @@ from .models import DeviceState, _CommandExecutionSummary
 from .storage import get_store
 from .validation import _validate_device_command_sequence
 from model_selection import apply_model_selection, provider_supports_vision
+
+
+_ProgressCallback = Optional[Callable[[Dict[str, Any]], None]]
+
+
+def _emit_execution_progress(
+    callback: _ProgressCallback,
+    stage: str,
+    message: str,
+    **extra: Any,
+) -> None:
+    if callback is None:
+        return
+    payload: Dict[str, Any] = {"stage": stage, "message": message}
+    for key, value in extra.items():
+        if value is None:
+            continue
+        payload[key] = value
+    try:
+        callback(payload)
+    except Exception:
+        # Progress notifications must never break command execution.
+        return
 
 
 def _format_return_value_for_user(value: Any) -> str:
@@ -230,6 +253,9 @@ def _execute_standard_device_command(
     messages: List[Dict[str, str]],
     initial_reply: str,
     command: Dict[str, Any],
+    progress_callback: _ProgressCallback = None,
+    command_index: Optional[int] = None,
+    total_commands: Optional[int] = None,
 ) -> _CommandExecutionSummary:
     # 通常デバイスに対して単発コマンドを送り、結果をまとめる
 
@@ -238,10 +264,30 @@ def _execute_standard_device_command(
         str(command.get("name")) if isinstance(command.get("name"), str) else "不明なコマンド"
     )
     args_dict = command.get("args") if isinstance(command.get("args"), dict) else {}
+    device_label = _device_label_for_prompt(device_id) if device_id else "対象デバイス"
+
+    _emit_execution_progress(
+        progress_callback,
+        "device_command_queueing",
+        f"{device_label} に「{command_name}」を送信しています",
+        device_id=device_id,
+        command_name=command_name,
+        command_index=command_index,
+        total_commands=total_commands,
+    )
 
     command_payload = {"name": command_name, "args": args_dict}
     job_id = _enqueue_device_command(device_id, command_payload, source="llm")
     if job_id is None:
+        _emit_execution_progress(
+            progress_callback,
+            "device_command_failed",
+            f"{device_label} へのコマンド送信に失敗しました",
+            device_id=device_id,
+            command_name=command_name,
+            command_index=command_index,
+            total_commands=total_commands,
+        )
         notice = "(注意: デバイスにコマンドを送信できませんでした。)"
         combined = (initial_reply + "\n" if initial_reply else "") + notice
         return _CommandExecutionSummary(
@@ -254,10 +300,29 @@ def _execute_standard_device_command(
             status=404,
         )
 
+    _emit_execution_progress(
+        progress_callback,
+        "device_command_waiting",
+        f"{device_label} の実行結果を待っています",
+        device_id=device_id,
+        command_name=command_name,
+        job_id=job_id,
+        command_index=command_index,
+        total_commands=total_commands,
+    )
     result = _await_device_result(device_id, job_id, timeout=DEVICE_RESULT_TIMEOUT)
-    device_label = _device_label_for_prompt(device_id) if device_id else "対象デバイス"
 
     if result:
+        _emit_execution_progress(
+            progress_callback,
+            "device_command_completed",
+            f"{device_label} から実行結果を受信しました",
+            device_id=device_id,
+            command_name=command_name,
+            job_id=job_id,
+            command_index=command_index,
+            total_commands=total_commands,
+        )
         manual_reply = _manual_result_reply(device_label, command_name, result)
         return _CommandExecutionSummary(
             device_id=device_id,
@@ -271,6 +336,16 @@ def _execute_standard_device_command(
     timeout_reply = _timeout_reply(
         {"device_id": device_id, "name": command_name, "args": args_dict},
         DEVICE_RESULT_TIMEOUT,
+    )
+    _emit_execution_progress(
+        progress_callback,
+        "device_command_timeout",
+        f"{device_label} からの応答がタイムアウトしました",
+        device_id=device_id,
+        command_name=command_name,
+        job_id=job_id,
+        command_index=command_index,
+        total_commands=total_commands,
     )
     return _CommandExecutionSummary(
         device_id=device_id,
@@ -288,11 +363,20 @@ def _execute_device_command_sequence(
     messages: List[Dict[str, str]],
     initial_reply: str,
     commands: List[Dict[str, Any]],
+    progress_callback: _ProgressCallback = None,
 ) -> Tuple[str, int, List[Dict[str, Any]]]:
     # 連続コマンドを sequence_group ごとに並列実行し、グループ間は順次処理する
 
     if not commands:
         return initial_reply, 200, []
+
+    total_commands = len(commands)
+    _emit_execution_progress(
+        progress_callback,
+        "device_command_sequence_start",
+        f"{total_commands} 件のデバイス操作を開始します",
+        total_commands=total_commands,
+    )
 
     summaries: List[Optional[_CommandExecutionSummary]] = [None] * len(commands)
 
@@ -309,6 +393,19 @@ def _execute_device_command_sequence(
     def _run_command(index: int, command: Dict[str, Any]) -> None:
         device_id = command.get("device_id")
         device = get_store().get_device(device_id) if isinstance(device_id, str) else None
+        command_name = str(command.get("name") or "不明なコマンド")
+        device_label = _device_label_for_prompt(device_id) if device_id else "対象デバイス"
+        command_no = index + 1
+
+        _emit_execution_progress(
+            progress_callback,
+            "device_command_start",
+            f"({command_no}/{total_commands}) {device_label} で「{command_name}」を実行中です",
+            device_id=device_id,
+            command_name=command_name,
+            command_index=command_no,
+            total_commands=total_commands,
+        )
 
         try:
             if device and _device_is_agent(device):
@@ -318,18 +415,47 @@ def _execute_device_command_sequence(
                 command_name = command_name_raw.strip() if isinstance(command_name_raw, str) else None
                 if command_name and command_name != AGENT_COMMAND_NAME:
                     summary = _execute_standard_device_command(
-                        client, messages, initial_reply, command
+                        client,
+                        messages,
+                        initial_reply,
+                        command,
+                        progress_callback=progress_callback,
+                        command_index=command_no,
+                        total_commands=total_commands,
                     )
                 else:
                     summary = _execute_agent_device_command(
-                        client, device, messages, initial_reply, command
+                        client,
+                        device,
+                        messages,
+                        initial_reply,
+                        command,
+                        progress_callback=progress_callback,
+                        command_index=command_no,
+                        total_commands=total_commands,
                     )
             else:
                 summary = _execute_standard_device_command(
-                    client, messages, initial_reply, command
+                    client,
+                    messages,
+                    initial_reply,
+                    command,
+                    progress_callback=progress_callback,
+                    command_index=command_no,
+                    total_commands=total_commands,
                 )
         except Exception as exc:  # pragma: no cover - defensive guard
             message = str(exc)
+            _emit_execution_progress(
+                progress_callback,
+                "device_command_failed",
+                f"({command_no}/{total_commands}) {device_label} の実行中にエラーが発生しました",
+                device_id=device_id,
+                command_name=command_name,
+                command_index=command_no,
+                total_commands=total_commands,
+                error=message,
+            )
             summary = _CommandExecutionSummary(
                 device_id=device_id,
                 command_name=str(command.get("name") or "不明なコマンド"),
@@ -347,6 +473,13 @@ def _execute_device_command_sequence(
         grouped_commands.setdefault(group_no, []).append((index, command))
 
     for _, grouped in sorted(grouped_commands.items(), key=lambda item: item[0]):
+        group_no = _sequence_group_for_command(grouped[0][1]) if grouped else 1
+        _emit_execution_progress(
+            progress_callback,
+            "device_command_group_start",
+            f"シーケンスグループ {group_no} の処理を開始します",
+            sequence_group=group_no,
+        )
         threads: List[threading.Thread] = []
         for index, command in grouped:
             worker = threading.Thread(target=_run_command, args=(index, command))
@@ -356,6 +489,13 @@ def _execute_device_command_sequence(
 
         for worker in threads:
             worker.join()
+
+        _emit_execution_progress(
+            progress_callback,
+            "device_command_group_complete",
+            f"シーケンスグループ {group_no} が完了しました",
+            sequence_group=group_no,
+        )
 
     completed_summaries: List[_CommandExecutionSummary] = [
         summary for summary in summaries if isinstance(summary, _CommandExecutionSummary)
@@ -389,10 +529,28 @@ def _execute_device_command_sequence(
     if failure_messages:
         # 失敗時も画像が含まれている可能性があるなら抽出してもよいが、
         # 通常はエラーで画像はないため空リストを返す
+        _emit_execution_progress(
+            progress_callback,
+            "device_command_sequence_failed",
+            "デバイス操作の一部が失敗しました",
+            total_commands=total_commands,
+        )
         return "\n\n".join(failure_messages), failure_status or 500, []
 
+    _emit_execution_progress(
+        progress_callback,
+        "device_result_summarizing",
+        "デバイス実行結果を要約しています",
+        total_commands=total_commands,
+    )
     final_reply, images = _summarize_device_command_sequence(
         client, messages, initial_reply, completed_summaries
+    )
+    _emit_execution_progress(
+        progress_callback,
+        "device_command_sequence_complete",
+        "デバイス操作が完了しました",
+        total_commands=total_commands,
     )
     return final_reply, 200, images
 
@@ -403,6 +561,9 @@ def _execute_agent_device_command(
     messages: List[Dict[str, str]],
     initial_reply: str,
     command: Dict[str, Any],
+    progress_callback: _ProgressCallback = None,
+    command_index: Optional[int] = None,
+    total_commands: Optional[int] = None,
 ) -> _CommandExecutionSummary:
     # エージェント役デバイスに英語指示を生成して送信し、結果を整理
 
@@ -414,6 +575,15 @@ def _execute_agent_device_command(
     if isinstance(raw_instruction, str) and raw_instruction.strip():
         english_instruction = raw_instruction.strip()
     else:
+        _emit_execution_progress(
+            progress_callback,
+            "agent_instruction_generating",
+            f"{_device_label_for_prompt(agent.device_id)} 向け指示を生成しています",
+            device_id=agent.device_id,
+            command_name=AGENT_COMMAND_NAME,
+            command_index=command_index,
+            total_commands=total_commands,
+        )
         target_role = None
         if isinstance(agent.meta, dict):
             target_role = agent.meta.get("role")
@@ -424,6 +594,16 @@ def _execute_agent_device_command(
             ).strip()
         except Exception as exc:  # pragma: no cover - network/SDK errors
             message = str(exc)
+            _emit_execution_progress(
+                progress_callback,
+                "agent_instruction_failed",
+                f"{_device_label_for_prompt(agent.device_id)} 向け指示の生成に失敗しました",
+                device_id=agent.device_id,
+                command_name=AGENT_COMMAND_NAME,
+                command_index=command_index,
+                total_commands=total_commands,
+                error=message,
+            )
             return _CommandExecutionSummary(
                 device_id=agent.device_id,
                 command_name=AGENT_COMMAND_NAME,
@@ -437,6 +617,16 @@ def _execute_agent_device_command(
 
         if not english_instruction:
             message = "デバイスへの指示の生成に失敗しました。"
+            _emit_execution_progress(
+                progress_callback,
+                "agent_instruction_failed",
+                f"{_device_label_for_prompt(agent.device_id)} 向け指示の生成に失敗しました",
+                device_id=agent.device_id,
+                command_name=AGENT_COMMAND_NAME,
+                command_index=command_index,
+                total_commands=total_commands,
+                error=message,
+            )
             return _CommandExecutionSummary(
                 device_id=agent.device_id,
                 command_name=AGENT_COMMAND_NAME,
@@ -456,9 +646,27 @@ def _execute_agent_device_command(
         "args": command_args,
     }
 
+    _emit_execution_progress(
+        progress_callback,
+        "device_command_queueing",
+        f"{_device_label_for_prompt(agent.device_id)} に指示を送信しています",
+        device_id=agent.device_id,
+        command_name=AGENT_COMMAND_NAME,
+        command_index=command_index,
+        total_commands=total_commands,
+    )
     job_id = _enqueue_device_command(agent.device_id, command_payload, source="agent")
     if job_id is None:
         failure_message = "指示を送信できませんでした。デバイスの接続状態を確認してください。"
+        _emit_execution_progress(
+            progress_callback,
+            "device_command_failed",
+            f"{_device_label_for_prompt(agent.device_id)} への指示送信に失敗しました",
+            device_id=agent.device_id,
+            command_name=AGENT_COMMAND_NAME,
+            command_index=command_index,
+            total_commands=total_commands,
+        )
         combined = (initial_reply + "\n" if initial_reply else "") + failure_message
         return _CommandExecutionSummary(
             device_id=agent.device_id,
@@ -472,9 +680,29 @@ def _execute_agent_device_command(
             status=500,
         )
 
+    _emit_execution_progress(
+        progress_callback,
+        "device_command_waiting",
+        f"{_device_label_for_prompt(agent.device_id)} の実行結果を待っています",
+        device_id=agent.device_id,
+        command_name=AGENT_COMMAND_NAME,
+        job_id=job_id,
+        command_index=command_index,
+        total_commands=total_commands,
+    )
     result = _await_device_result(agent.device_id, job_id, timeout=DEVICE_RESULT_TIMEOUT)
     device_label = _device_label_for_prompt(agent.device_id)
     if result:
+        _emit_execution_progress(
+            progress_callback,
+            "device_command_completed",
+            f"{device_label} から実行結果を受信しました",
+            device_id=agent.device_id,
+            command_name=AGENT_COMMAND_NAME,
+            job_id=job_id,
+            command_index=command_index,
+            total_commands=total_commands,
+        )
         manual_reply = _manual_result_reply(
             device_label,
             english_instruction or command_payload["name"],
@@ -498,6 +726,16 @@ def _execute_agent_device_command(
             "args": command_args,
         },
         DEVICE_RESULT_TIMEOUT,
+    )
+    _emit_execution_progress(
+        progress_callback,
+        "device_command_timeout",
+        f"{device_label} からの応答がタイムアウトしました",
+        device_id=agent.device_id,
+        command_name=AGENT_COMMAND_NAME,
+        job_id=job_id,
+        command_index=command_index,
+        total_commands=total_commands,
     )
     return _CommandExecutionSummary(
         device_id=agent.device_id,
@@ -846,9 +1084,17 @@ def _structured_multi_command_followup_prompt(
     return {"model": resolved_model, "input": messages}
 
 
-async def _chat_via_legacy(messages: List[Dict[str, str]]) -> Tuple[Dict[str, Any], int]:
+async def _chat_via_legacy(
+    messages: List[Dict[str, str]],
+    progress_callback: _ProgressCallback = None,
+) -> Tuple[Dict[str, Any], int]:
     # エージェントデバイス不在時にレガシーフローでチャットを処理
 
+    _emit_execution_progress(
+        progress_callback,
+        "llm_parsing",
+        "LLMで実行内容を解析しています",
+    )
     client = _client()
     parsed_response = await _call_llm_and_parse_async(client, messages)
 
@@ -856,6 +1102,11 @@ async def _chat_via_legacy(messages: List[Dict[str, str]]) -> Tuple[Dict[str, An
     if not isinstance(reply_message, str):
         reply_message = parsed_response.get("raw", "").strip()
 
+    _emit_execution_progress(
+        progress_callback,
+        "command_validation",
+        "実行コマンドを検証しています",
+    )
     validated_commands, validation_errors = _validate_device_command_sequence(
         parsed_response.get("device_commands")
     )
@@ -868,10 +1119,25 @@ async def _chat_via_legacy(messages: List[Dict[str, str]]) -> Tuple[Dict[str, An
         return {"reply": final_reply}, 200
 
     if validated_commands:
+        _emit_execution_progress(
+            progress_callback,
+            "device_execution",
+            f"{len(validated_commands)} 件のデバイス操作を実行しています",
+            total_commands=len(validated_commands),
+        )
         final_reply, status, images = await asyncio.to_thread(
             _execute_device_command_sequence,
-            client, messages, reply_message, validated_commands
+            client,
+            messages,
+            reply_message,
+            validated_commands,
+            progress_callback,
         )
         return {"reply": final_reply, "images": images}, status
 
+    _emit_execution_progress(
+        progress_callback,
+        "response_ready",
+        "応答を整形しています",
+    )
     return {"reply": final_reply}, 200
