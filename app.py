@@ -643,7 +643,17 @@ async def chat_stream(request: Request):
                 }
             )
 
-    return StreamingResponse(generate(), media_type="application/x-ndjson")
+    stream_headers = {
+        # Hint reverse proxies (e.g., nginx) not to buffer streamed chunks.
+        "Cache-Control": "no-cache, no-transform",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",
+    }
+    return StreamingResponse(
+        generate(),
+        media_type="application/x-ndjson",
+        headers=stream_headers,
+    )
 
 
 @app.post("/api/devices/register")
