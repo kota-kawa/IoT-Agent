@@ -585,6 +585,20 @@ async def chat_stream(request: Request):
     def progress_callback(event: Dict[str, Any]) -> None:
         payload = {"type": "status", "timestamp": time.time(), **event}
         try:
+            current_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            current_loop = None
+
+        # Same-loop emissions should be queued immediately to avoid race
+        # conditions with the stream generator's completion check.
+        if current_loop is loop:
+            try:
+                event_queue.put_nowait(payload)
+            except Exception:
+                return
+            return
+
+        try:
             loop.call_soon_threadsafe(event_queue.put_nowait, payload)
         except RuntimeError:
             return
@@ -596,7 +610,11 @@ async def chat_stream(request: Request):
     async def generate() -> AsyncIterator[str]:
         while True:
             if task.done() and event_queue.empty():
-                break
+                # Allow call_soon_threadsafe callbacks to flush into the queue
+                # before deciding the stream is complete.
+                await asyncio.sleep(0)
+                if task.done() and event_queue.empty():
+                    break
             try:
                 event = await asyncio.wait_for(event_queue.get(), timeout=0.2)
             except asyncio.TimeoutError:
