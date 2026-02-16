@@ -40,7 +40,7 @@ export default function ChatSidebar({ devices }: ChatSidebarProps): JSX.Element 
     const logEl = logRef.current;
     if (!logEl) return;
     logEl.scrollTop = logEl.scrollHeight;
-  }, [messages]);
+  }, [messages, isSending]);
 
   useEffect(() => {
     let active = true;
@@ -220,7 +220,15 @@ export default function ChatSidebar({ devices }: ChatSidebarProps): JSX.Element 
       </header>
 
       <section className="chat" id="chat">
-        <div className="chat__log" id="chatLog" role="log" aria-live="polite" aria-relevant="additions" ref={logRef}>
+        <div
+          className="chat__log"
+          id="chatLog"
+          role="log"
+          aria-live="polite"
+          aria-relevant="additions"
+          aria-busy={isSending}
+          ref={logRef}
+        >
           {messages.map((msg, index) => (
             <div className={`message message--${msg.role}`} key={`${msg.role}-${index}-${msg.time}`}>
               <div className="message__avatar">{msg.role === 'user' ? '👤' : '🤖'}</div>
@@ -246,6 +254,27 @@ export default function ChatSidebar({ devices }: ChatSidebarProps): JSX.Element 
               </div>
             </div>
           ))}
+          {isSending && (
+            <div className="message message--assistant message--thinking" key="assistant-thinking">
+              <div className="message__avatar" aria-hidden="true">🤖</div>
+              <div>
+                <div className="message__bubble message__bubble--thinking">
+                  <span
+                    className="thinking-indicator"
+                    role="status"
+                    aria-live="polite"
+                    aria-label="LLM が応答を生成中です"
+                  >
+                    <span className="thinking-indicator__dot" />
+                    <span className="thinking-indicator__dot" />
+                    <span className="thinking-indicator__dot" />
+                    <span className="thinking-indicator__label">Thinking...</span>
+                  </span>
+                </div>
+                <div className="message__meta">LLM ・ 応答を生成中</div>
+              </div>
+            </div>
+          )}
         </div>
       </section>
 
