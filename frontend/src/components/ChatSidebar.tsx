@@ -3,10 +3,12 @@ import { apiUrl, fetchJson } from '../api';
 import { DEFAULT_MODEL, applyDeviceCommand, nowTime } from '../utils';
 import type {
   ChatImage,
+  ExecutionLogStatus,
   ChatMessage,
   ChatRole,
   ChatResponse,
   Device,
+  MessageExecutionLog,
   ModelOption,
   ModelSettingsPayload,
   ModelsResponse
@@ -16,16 +18,6 @@ const INITIAL_GREETING = 'こんにちは！登録済みデバイスの状況を
 
 type ChatSidebarProps = {
   devices: Device[];
-};
-
-type ExecutionLogStatus = 'running' | 'success' | 'error';
-
-type ExecutionLogEntry = {
-  id: string;
-  prompt: string;
-  startedAt: string;
-  steps: string[];
-  status: ExecutionLogStatus;
 };
 
 type ChatStreamEvent = {
@@ -44,26 +36,6 @@ type ChatStatusUpdate = {
   timestamp?: number;
 };
 
-const EXECUTION_LOG_STORAGE_KEY = 'iot-agent.execution-log.v1';
-const MAX_EXECUTION_LOGS = 40;
-
-const isExecutionLogStatus = (value: unknown): value is ExecutionLogStatus => (
-  value === 'running' || value === 'success' || value === 'error'
-);
-
-const isExecutionLogEntry = (value: unknown): value is ExecutionLogEntry => {
-  if (!value || typeof value !== 'object') return false;
-  const record = value as Record<string, unknown>;
-  return (
-    typeof record.id === 'string'
-    && typeof record.prompt === 'string'
-    && typeof record.startedAt === 'string'
-    && Array.isArray(record.steps)
-    && record.steps.every((step) => typeof step === 'string')
-    && isExecutionLogStatus(record.status)
-  );
-};
-
 const isModelOption = (value: unknown): value is ModelOption => {
   if (!value || typeof value !== 'object') return false;
   const record = value as Record<string, unknown>;
@@ -78,9 +50,6 @@ export default function ChatSidebar({ devices }: ChatSidebarProps): JSX.Element 
   const [isPaused, setIsPaused] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [currentStatus, setCurrentStatus] = useState('');
-  const [executionLogs, setExecutionLogs] = useState<ExecutionLogEntry[]>([]);
-  const [isLogOpen, setIsLogOpen] = useState(true);
-  const [logsLoaded, setLogsLoaded] = useState(false);
   const [availableModels, setAvailableModels] = useState<ModelOption[]>([]);
   const [selectedModel, setSelectedModel] = useState(`${DEFAULT_MODEL.provider}:${DEFAULT_MODEL.model}`);
   const [modelsLoaded, setModelsLoaded] = useState(false);
@@ -91,34 +60,6 @@ export default function ChatSidebar({ devices }: ChatSidebarProps): JSX.Element 
     if (!logEl) return;
     logEl.scrollTop = logEl.scrollHeight;
   }, [messages, isSending, currentStatus]);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    try {
-      const raw = window.localStorage.getItem(EXECUTION_LOG_STORAGE_KEY);
-      if (!raw) return;
-      const parsed = JSON.parse(raw) as unknown;
-      if (!Array.isArray(parsed)) return;
-      const sanitized = parsed.filter(isExecutionLogEntry).slice(0, MAX_EXECUTION_LOGS);
-      if (sanitized.length) {
-        setExecutionLogs(sanitized);
-      }
-    } catch {
-      return;
-    } finally {
-      setLogsLoaded(true);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!logsLoaded) return;
-    if (typeof window === 'undefined') return;
-    try {
-      window.localStorage.setItem(EXECUTION_LOG_STORAGE_KEY, JSON.stringify(executionLogs));
-    } catch {
-      return;
-    }
-  }, [executionLogs, logsLoaded]);
 
   useEffect(() => {
     let active = true;
@@ -201,62 +142,39 @@ export default function ChatSidebar({ devices }: ChatSidebarProps): JSX.Element 
   const disableSend = isPaused || isSending;
   const disableInput = isPaused;
 
-  const pushMessage = (role: ChatRole, text: string, images: ChatImage[] = []) => {
+  const pushMessage = (
+    role: ChatRole,
+    text: string,
+    images: ChatImage[] = [],
+    executionLog: MessageExecutionLog | null = null
+  ) => {
     setMessages((prev) => [
       ...prev,
-      { role, content: text, time: nowTime(), images }
+      { role, content: text, time: nowTime(), images, executionLog }
     ]);
   };
 
-  const createExecutionLog = (prompt: string) => {
-    const id = `log-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-    const next: ExecutionLogEntry = {
-      id,
-      prompt,
-      startedAt: nowTime(),
-      steps: ['リクエストを送信しています'],
-      status: 'running'
-    };
-    setExecutionLogs((prev) => [next, ...prev].slice(0, MAX_EXECUTION_LOGS));
-    return id;
-  };
-
-  const appendExecutionLogStep = (logId: string, step: string) => {
+  const appendStep = (steps: string[], step: string) => {
     const text = step.trim();
-    if (!text) return;
-    setExecutionLogs((prev) => prev.map((entry) => {
-      if (entry.id !== logId) return entry;
-      const lastStep = entry.steps[entry.steps.length - 1];
-      if (lastStep === text) {
-        return entry;
-      }
-      return {
-        ...entry,
-        steps: [...entry.steps, text]
-      };
-    }));
+    if (!text) return steps;
+    if (steps[steps.length - 1] === text) return steps;
+    return [...steps, text];
   };
 
-  const completeExecutionLog = (logId: string, status: ExecutionLogStatus, tailMessage?: string) => {
-    const message = typeof tailMessage === 'string' ? tailMessage.trim() : '';
-    setExecutionLogs((prev) => prev.map((entry) => {
-      if (entry.id !== logId) return entry;
-      const steps = message && entry.steps[entry.steps.length - 1] !== message
-        ? [...entry.steps, message]
-        : entry.steps;
-      return {
-        ...entry,
-        steps,
-        status
-      };
-    }));
+  const toMessageExecutionLog = (
+    steps: string[],
+    status: ExecutionLogStatus
+  ): MessageExecutionLog | null => {
+    if (!steps.length) return null;
+    return {
+      status,
+      steps
+    };
   };
 
-  const statusLabel = (status: ExecutionLogStatus) => {
-    if (status === 'running') return '実行中';
-    if (status === 'success') return '完了';
-    return 'エラー';
-  };
+  const messageLogStatusLabel = (status: ExecutionLogStatus) => (
+    status === 'success' ? '完了' : 'エラー'
+  );
 
   const requestAssistantResponseLegacy = async (history: ChatMessage[]) => {
     const payload = {
@@ -393,37 +311,41 @@ export default function ChatSidebar({ devices }: ChatSidebarProps): JSX.Element 
     setInput('');
     setIsSending(true);
     setCurrentStatus('リクエストを送信しています');
-    const executionLogId = createExecutionLog(text);
+    let executionSteps = ['リクエストを送信しています'];
 
     const localFallback = applyDeviceCommand(text, devices);
+    const addExecutionStep = (step: string) => {
+      executionSteps = appendStep(executionSteps, step);
+    };
 
     try {
       const data = await requestAssistantResponseStream(nextHistory, ({ message }) => {
         setCurrentStatus(message);
-        appendExecutionLogStep(executionLogId, message);
+        addExecutionStep(message);
       });
       const reply = typeof data?.reply === 'string' ? data.reply : '';
       const images = Array.isArray(data?.images) ? data.images : [];
       const cleanReply = reply.trim();
+      addExecutionStep('応答を返しました');
+      const messageExecutionLog = toMessageExecutionLog(executionSteps, 'success');
 
       if (cleanReply || images.length > 0) {
-        pushMessage('assistant', cleanReply, images);
+        pushMessage('assistant', cleanReply, images, messageExecutionLog);
       } else if (localFallback) {
-        pushMessage('assistant', localFallback);
+        pushMessage('assistant', localFallback, [], messageExecutionLog);
       } else {
-        pushMessage('assistant', '了解しました。');
+        pushMessage('assistant', '了解しました。', [], messageExecutionLog);
       }
-      completeExecutionLog(executionLogId, 'success', '応答を返しました');
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'エラーが発生しました。';
-      appendExecutionLogStep(executionLogId, `エラー: ${errorMessage}`);
-      completeExecutionLog(executionLogId, 'error');
+      addExecutionStep(`エラー: ${errorMessage}`);
+      const messageExecutionLog = toMessageExecutionLog(executionSteps, 'error');
       if (localFallback) {
-        pushMessage('assistant', localFallback);
+        pushMessage('assistant', localFallback, [], messageExecutionLog);
       } else if (err instanceof Error) {
-        pushMessage('assistant', `エラーが発生しました: ${err.message}`);
+        pushMessage('assistant', `エラーが発生しました: ${err.message}`, [], messageExecutionLog);
       } else {
-        pushMessage('assistant', 'エラーが発生しました。');
+        pushMessage('assistant', 'エラーが発生しました。', [], messageExecutionLog);
       }
     } finally {
       setIsSending(false);
@@ -462,44 +384,6 @@ export default function ChatSidebar({ devices }: ChatSidebarProps): JSX.Element 
         </div>
       </header>
 
-      <section className="execution-log-panel" aria-label="実行ログ">
-        <details
-          className="execution-log-panel__details"
-          open={isLogOpen}
-          onToggle={(event) => {
-            setIsLogOpen((event.currentTarget as HTMLDetailsElement).open);
-          }}
-        >
-          <summary className="execution-log-panel__summary">
-            実行ログ ({executionLogs.length})
-          </summary>
-          <div className="execution-log-panel__body">
-            {executionLogs.length === 0 ? (
-              <p className="execution-log-panel__empty">まだ実行ログはありません。</p>
-            ) : (
-              <ul className="execution-log-panel__list">
-                {executionLogs.map((entry) => (
-                  <li className="execution-log-panel__item" key={entry.id}>
-                    <div className="execution-log-panel__item-header">
-                      <span className="execution-log-panel__item-time">{entry.startedAt}</span>
-                      <span className={`execution-log-panel__item-status execution-log-panel__item-status--${entry.status}`}>
-                        {statusLabel(entry.status)}
-                      </span>
-                    </div>
-                    <p className="execution-log-panel__item-prompt">{entry.prompt}</p>
-                    <ol className="execution-log-panel__item-steps">
-                      {entry.steps.map((step, index) => (
-                        <li key={`${entry.id}-${index}`}>{step}</li>
-                      ))}
-                    </ol>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        </details>
-      </section>
-
       <section className="chat" id="chat">
         <div
           className="chat__log"
@@ -515,6 +399,18 @@ export default function ChatSidebar({ devices }: ChatSidebarProps): JSX.Element 
               <div className="message__avatar">{msg.role === 'user' ? '👤' : '🤖'}</div>
               <div>
                 <div className="message__bubble">
+                  {msg.role === 'assistant' && msg.executionLog?.steps?.length ? (
+                    <details className="message-execution-log">
+                      <summary className="message-execution-log__summary">
+                        実行ログ ({messageLogStatusLabel(msg.executionLog.status)})
+                      </summary>
+                      <ol className="message-execution-log__steps">
+                        {msg.executionLog.steps.map((step, stepIndex) => (
+                          <li key={`${msg.time}-exec-${stepIndex}`}>{step}</li>
+                        ))}
+                      </ol>
+                    </details>
+                  ) : null}
                   {msg.content}
                   {Array.isArray(msg.images) && msg.images.length > 0 && (
                     <div className="message__images">
