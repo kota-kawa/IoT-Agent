@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import { fetchJson } from '../api';
+import { apiUrl, fetchJson } from '../api';
 import { DEFAULT_MODEL, applyDeviceCommand, nowTime } from '../utils';
 import type {
   ChatImage,
@@ -18,6 +18,52 @@ type ChatSidebarProps = {
   devices: Device[];
 };
 
+type ExecutionLogStatus = 'running' | 'success' | 'error';
+
+type ExecutionLogEntry = {
+  id: string;
+  prompt: string;
+  startedAt: string;
+  steps: string[];
+  status: ExecutionLogStatus;
+};
+
+type ChatStreamEvent = {
+  type?: string;
+  stage?: string;
+  message?: string;
+  timestamp?: number;
+  payload?: ChatResponse;
+  status?: number;
+  [key: string]: unknown;
+};
+
+type ChatStatusUpdate = {
+  stage: string;
+  message: string;
+  timestamp?: number;
+};
+
+const EXECUTION_LOG_STORAGE_KEY = 'iot-agent.execution-log.v1';
+const MAX_EXECUTION_LOGS = 40;
+
+const isExecutionLogStatus = (value: unknown): value is ExecutionLogStatus => (
+  value === 'running' || value === 'success' || value === 'error'
+);
+
+const isExecutionLogEntry = (value: unknown): value is ExecutionLogEntry => {
+  if (!value || typeof value !== 'object') return false;
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.id === 'string'
+    && typeof record.prompt === 'string'
+    && typeof record.startedAt === 'string'
+    && Array.isArray(record.steps)
+    && record.steps.every((step) => typeof step === 'string')
+    && isExecutionLogStatus(record.status)
+  );
+};
+
 const isModelOption = (value: unknown): value is ModelOption => {
   if (!value || typeof value !== 'object') return false;
   const record = value as Record<string, unknown>;
@@ -31,6 +77,10 @@ export default function ChatSidebar({ devices }: ChatSidebarProps): JSX.Element 
   const [input, setInput] = useState('');
   const [isPaused, setIsPaused] = useState(false);
   const [isSending, setIsSending] = useState(false);
+  const [currentStatus, setCurrentStatus] = useState('');
+  const [executionLogs, setExecutionLogs] = useState<ExecutionLogEntry[]>([]);
+  const [isLogOpen, setIsLogOpen] = useState(true);
+  const [logsLoaded, setLogsLoaded] = useState(false);
   const [availableModels, setAvailableModels] = useState<ModelOption[]>([]);
   const [selectedModel, setSelectedModel] = useState(`${DEFAULT_MODEL.provider}:${DEFAULT_MODEL.model}`);
   const [modelsLoaded, setModelsLoaded] = useState(false);
@@ -40,7 +90,35 @@ export default function ChatSidebar({ devices }: ChatSidebarProps): JSX.Element 
     const logEl = logRef.current;
     if (!logEl) return;
     logEl.scrollTop = logEl.scrollHeight;
-  }, [messages, isSending]);
+  }, [messages, isSending, currentStatus]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const raw = window.localStorage.getItem(EXECUTION_LOG_STORAGE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as unknown;
+      if (!Array.isArray(parsed)) return;
+      const sanitized = parsed.filter(isExecutionLogEntry).slice(0, MAX_EXECUTION_LOGS);
+      if (sanitized.length) {
+        setExecutionLogs(sanitized);
+      }
+    } catch {
+      return;
+    } finally {
+      setLogsLoaded(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!logsLoaded) return;
+    if (typeof window === 'undefined') return;
+    try {
+      window.localStorage.setItem(EXECUTION_LOG_STORAGE_KEY, JSON.stringify(executionLogs));
+    } catch {
+      return;
+    }
+  }, [executionLogs, logsLoaded]);
 
   useEffect(() => {
     let active = true;
@@ -130,7 +208,57 @@ export default function ChatSidebar({ devices }: ChatSidebarProps): JSX.Element 
     ]);
   };
 
-  const requestAssistantResponse = async (history: ChatMessage[]) => {
+  const createExecutionLog = (prompt: string) => {
+    const id = `log-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    const next: ExecutionLogEntry = {
+      id,
+      prompt,
+      startedAt: nowTime(),
+      steps: ['リクエストを送信しています'],
+      status: 'running'
+    };
+    setExecutionLogs((prev) => [next, ...prev].slice(0, MAX_EXECUTION_LOGS));
+    return id;
+  };
+
+  const appendExecutionLogStep = (logId: string, step: string) => {
+    const text = step.trim();
+    if (!text) return;
+    setExecutionLogs((prev) => prev.map((entry) => {
+      if (entry.id !== logId) return entry;
+      const lastStep = entry.steps[entry.steps.length - 1];
+      if (lastStep === text) {
+        return entry;
+      }
+      return {
+        ...entry,
+        steps: [...entry.steps, text]
+      };
+    }));
+  };
+
+  const completeExecutionLog = (logId: string, status: ExecutionLogStatus, tailMessage?: string) => {
+    const message = typeof tailMessage === 'string' ? tailMessage.trim() : '';
+    setExecutionLogs((prev) => prev.map((entry) => {
+      if (entry.id !== logId) return entry;
+      const steps = message && entry.steps[entry.steps.length - 1] !== message
+        ? [...entry.steps, message]
+        : entry.steps;
+      return {
+        ...entry,
+        steps,
+        status
+      };
+    }));
+  };
+
+  const statusLabel = (status: ExecutionLogStatus) => {
+    if (status === 'running') return '実行中';
+    if (status === 'success') return '完了';
+    return 'エラー';
+  };
+
+  const requestAssistantResponseLegacy = async (history: ChatMessage[]) => {
     const payload = {
       messages: history.map(({ role, content }) => ({ role, content }))
     };
@@ -147,6 +275,110 @@ export default function ChatSidebar({ devices }: ChatSidebarProps): JSX.Element 
     return data;
   };
 
+  const requestAssistantResponseStream = async (
+    history: ChatMessage[],
+    onStatus: (event: ChatStatusUpdate) => void
+  ) => {
+    const payload = {
+      messages: history.map(({ role, content }) => ({ role, content }))
+    };
+
+    const response = await fetch(apiUrl('/api/chat/stream'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      cache: 'no-store',
+      body: JSON.stringify(payload)
+    });
+
+    if (response.status === 404 || !response.body) {
+      return requestAssistantResponseLegacy(history);
+    }
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(text || `HTTP ${response.status}`);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let finalPayload: ChatResponse | null = null;
+    let streamErrorMessage = '';
+
+    const consumeLine = (rawLine: string) => {
+      const line = rawLine.trim();
+      if (!line) return;
+
+      let event: ChatStreamEvent | null = null;
+      try {
+        const parsed = JSON.parse(line) as unknown;
+        if (parsed && typeof parsed === 'object') {
+          event = parsed as ChatStreamEvent;
+        }
+      } catch {
+        return;
+      }
+      if (!event) return;
+
+      const type = typeof event.type === 'string' ? event.type : '';
+      const stage = typeof event.stage === 'string' ? event.stage : '';
+      const message = typeof event.message === 'string' ? event.message.trim() : '';
+      const timestamp = typeof event.timestamp === 'number' ? event.timestamp : undefined;
+
+      if (type === 'status' && message) {
+        onStatus({ stage, message, timestamp });
+        return;
+      }
+
+      if (type === 'result') {
+        if (event.payload && typeof event.payload === 'object') {
+          finalPayload = event.payload;
+        } else {
+          finalPayload = {};
+        }
+        const statusCode = typeof event.status === 'number' ? event.status : 200;
+        if (statusCode >= 400) {
+          streamErrorMessage = message || `HTTP ${statusCode}`;
+        }
+        return;
+      }
+
+      if (type === 'error') {
+        streamErrorMessage = message || 'ストリーム応答でエラーが発生しました。';
+      }
+    };
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      let lineBreakIndex = buffer.indexOf('\n');
+      while (lineBreakIndex >= 0) {
+        const line = buffer.slice(0, lineBreakIndex);
+        buffer = buffer.slice(lineBreakIndex + 1);
+        consumeLine(line);
+        lineBreakIndex = buffer.indexOf('\n');
+      }
+    }
+
+    buffer += decoder.decode();
+    if (buffer.trim()) {
+      consumeLine(buffer);
+    }
+
+    if (streamErrorMessage) {
+      throw new Error(streamErrorMessage);
+    }
+
+    if (finalPayload) {
+      return finalPayload;
+    }
+
+    throw new Error('ストリーム応答が不完全でした。');
+  };
+
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (isPaused || isSending) return;
@@ -160,11 +392,16 @@ export default function ChatSidebar({ devices }: ChatSidebarProps): JSX.Element 
     pushMessage('user', text);
     setInput('');
     setIsSending(true);
+    setCurrentStatus('リクエストを送信しています');
+    const executionLogId = createExecutionLog(text);
 
     const localFallback = applyDeviceCommand(text, devices);
 
     try {
-      const data = await requestAssistantResponse(nextHistory);
+      const data = await requestAssistantResponseStream(nextHistory, ({ message }) => {
+        setCurrentStatus(message);
+        appendExecutionLogStep(executionLogId, message);
+      });
       const reply = typeof data?.reply === 'string' ? data.reply : '';
       const images = Array.isArray(data?.images) ? data.images : [];
       const cleanReply = reply.trim();
@@ -176,7 +413,11 @@ export default function ChatSidebar({ devices }: ChatSidebarProps): JSX.Element 
       } else {
         pushMessage('assistant', '了解しました。');
       }
+      completeExecutionLog(executionLogId, 'success', '応答を返しました');
     } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'エラーが発生しました。';
+      appendExecutionLogStep(executionLogId, `エラー: ${errorMessage}`);
+      completeExecutionLog(executionLogId, 'error');
       if (localFallback) {
         pushMessage('assistant', localFallback);
       } else if (err instanceof Error) {
@@ -186,6 +427,7 @@ export default function ChatSidebar({ devices }: ChatSidebarProps): JSX.Element 
       }
     } finally {
       setIsSending(false);
+      setCurrentStatus('');
     }
   };
 
@@ -193,6 +435,7 @@ export default function ChatSidebar({ devices }: ChatSidebarProps): JSX.Element 
     setMessages([{ role: 'assistant', content: INITIAL_GREETING, time: nowTime(), images: [] }]);
     setIsPaused(false);
     setIsSending(false);
+    setCurrentStatus('');
   };
 
   return (
@@ -218,6 +461,44 @@ export default function ChatSidebar({ devices }: ChatSidebarProps): JSX.Element 
           </div>
         </div>
       </header>
+
+      <section className="execution-log-panel" aria-label="実行ログ">
+        <details
+          className="execution-log-panel__details"
+          open={isLogOpen}
+          onToggle={(event) => {
+            setIsLogOpen((event.currentTarget as HTMLDetailsElement).open);
+          }}
+        >
+          <summary className="execution-log-panel__summary">
+            実行ログ ({executionLogs.length})
+          </summary>
+          <div className="execution-log-panel__body">
+            {executionLogs.length === 0 ? (
+              <p className="execution-log-panel__empty">まだ実行ログはありません。</p>
+            ) : (
+              <ul className="execution-log-panel__list">
+                {executionLogs.map((entry) => (
+                  <li className="execution-log-panel__item" key={entry.id}>
+                    <div className="execution-log-panel__item-header">
+                      <span className="execution-log-panel__item-time">{entry.startedAt}</span>
+                      <span className={`execution-log-panel__item-status execution-log-panel__item-status--${entry.status}`}>
+                        {statusLabel(entry.status)}
+                      </span>
+                    </div>
+                    <p className="execution-log-panel__item-prompt">{entry.prompt}</p>
+                    <ol className="execution-log-panel__item-steps">
+                      {entry.steps.map((step, index) => (
+                        <li key={`${entry.id}-${index}`}>{step}</li>
+                      ))}
+                    </ol>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </details>
+      </section>
 
       <section className="chat" id="chat">
         <div
@@ -263,15 +544,17 @@ export default function ChatSidebar({ devices }: ChatSidebarProps): JSX.Element 
                     className="thinking-indicator"
                     role="status"
                     aria-live="polite"
-                    aria-label="LLM が応答を生成中です"
+                    aria-label={currentStatus ? `LLM が処理中です: ${currentStatus}` : 'LLM が応答を生成中です'}
                   >
-                    <span className="thinking-indicator__dot" />
-                    <span className="thinking-indicator__dot" />
-                    <span className="thinking-indicator__dot" />
-                    <span className="thinking-indicator__label">Thinking...</span>
+                    <span className="thinking-indicator__dots" aria-hidden="true">
+                      <span className="thinking-indicator__dot" />
+                      <span className="thinking-indicator__dot" />
+                      <span className="thinking-indicator__dot" />
+                    </span>
+                    <span className="thinking-indicator__label">{currentStatus || 'Thinking...'}</span>
                   </span>
                 </div>
-                <div className="message__meta">LLM ・ 応答を生成中</div>
+                <div className="message__meta">LLM ・ {currentStatus || '応答を生成中'}</div>
               </div>
             </div>
           )}
