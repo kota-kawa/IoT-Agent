@@ -2,7 +2,9 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
-.env
+*.env
+*.MOV
+*.mp4
 .git
 .gitignore
 frontend/node_modules
