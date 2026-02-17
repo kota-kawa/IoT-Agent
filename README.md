@@ -48,8 +48,16 @@ Open `http://localhost:5006` in your browser to see the dashboard.
 - **Raspberry Pi Pico W** (small projects)
 
 ## 🎬 Demo Videos
-[![Demo Video 1](https://img.youtube.com/vi/RnNsK7jrAZI/hqdefault.jpg)](https://youtu.be/RnNsK7jrAZI)
-[![Demo Video 2](https://img.youtube.com/vi/nN1FbHb85XQ/hqdefault.jpg)](https://youtu.be/nN1FbHb85XQ)
+Click a thumbnail to open the video on YouTube.
+
+<p align="center">
+  <a href="https://youtu.be/RnNsK7jrAZI">
+    <img src="https://img.youtube.com/vi/RnNsK7jrAZI/hqdefault.jpg" alt="Demo Video 1 on YouTube" width="420">
+  </a>
+  <a href="https://youtu.be/nN1FbHb85XQ">
+    <img src="https://img.youtube.com/vi/nN1FbHb85XQ/hqdefault.jpg" alt="Demo Video 2 on YouTube" width="420">
+  </a>
+</p>
 
 ## 📄 License
 This project is licensed under the **MIT License**. Feel free to modify and share.
@@ -104,8 +112,16 @@ docker-compose up --build
 - **Raspberry Pi Pico W**（小さな工作向け）
 
 ## 🎬 デモ動画
-[![デモ動画 1](https://img.youtube.com/vi/RnNsK7jrAZI/hqdefault.jpg)](https://youtu.be/RnNsK7jrAZI)
-[![デモ動画 2](https://img.youtube.com/vi/nN1FbHb85XQ/hqdefault.jpg)](https://youtu.be/nN1FbHb85XQ)
+サムネイルをクリックすると、YouTubeに移動して動画を再生できます。
+
+<p align="center">
+  <a href="https://youtu.be/RnNsK7jrAZI">
+    <img src="https://img.youtube.com/vi/RnNsK7jrAZI/hqdefault.jpg" alt="デモ動画 1 (YouTube)" width="420">
+  </a>
+  <a href="https://youtu.be/nN1FbHb85XQ">
+    <img src="https://img.youtube.com/vi/nN1FbHb85XQ/hqdefault.jpg" alt="デモ動画 2 (YouTube)" width="420">
+  </a>
+</p>
 
 ## 📄 ライセンス
 このプロジェクトは **MITライセンス** です。自由に改造して遊んでください！
