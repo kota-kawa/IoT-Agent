@@ -47,6 +47,10 @@ Open `http://localhost:5006` in your browser to see the dashboard.
 - **Raspberry Pi 4** (sensors, cameras)
 - **Raspberry Pi Pico W** (small projects)
 
+## 🎬 Demo Videos
+[![Demo Video 1](https://img.youtube.com/vi/RnNsK7jrAZI/hqdefault.jpg)](https://youtu.be/RnNsK7jrAZI)
+[![Demo Video 2](https://img.youtube.com/vi/nN1FbHb85XQ/hqdefault.jpg)](https://youtu.be/nN1FbHb85XQ)
+
 ## 📄 License
 This project is licensed under the **MIT License**. Feel free to modify and share.
 See [LICENSE.md](LICENSE.md) for details.
@@ -98,6 +102,10 @@ docker-compose up --build
 - **NVIDIA Jetson**（AIロボットなど）
 - **Raspberry Pi 4**（センサーやカメラ）
 - **Raspberry Pi Pico W**（小さな工作向け）
+
+## 🎬 デモ動画
+[![デモ動画 1](https://img.youtube.com/vi/RnNsK7jrAZI/hqdefault.jpg)](https://youtu.be/RnNsK7jrAZI)
+[![デモ動画 2](https://img.youtube.com/vi/nN1FbHb85XQ/hqdefault.jpg)](https://youtu.be/nN1FbHb85XQ)
 
 ## 📄 ライセンス
 このプロジェクトは **MITライセンス** です。自由に改造して遊んでください！
