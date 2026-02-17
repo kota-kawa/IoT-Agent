@@ -50,21 +50,9 @@ Open `http://localhost:5006` in your browser to see the dashboard.
 ## 🎬 Demo Videos
 Click a thumbnail to open the video on YouTube.
 
-<p align="center">
-  <a href="https://youtu.be/sbWKMEcJsyg">
-    <img src="https://img.youtube.com/vi/sbWKMEcJsyg/hqdefault.jpg" alt="Demo Video 1: UI example and chat system operation demo" width="420">
-  </a>
-  <a href="https://youtu.be/RnNsK7jrAZI">
-    <img src="https://img.youtube.com/vi/RnNsK7jrAZI/hqdefault.jpg" alt="Demo Video 2: Measure distance and display the result" width="420">
-  </a>
-  <a href="https://youtu.be/nN1FbHb85XQ">
-    <img src="https://img.youtube.com/vi/nN1FbHb85XQ/hqdefault.jpg" alt="Demo Video 3: Move motors on all devices" width="420">
-  </a>
-</p>
-
-1. UI example and chat system operation demo
-2. Measure distance and display the result
-3. Move motors on all devices
+| [![Demo Video 1: UI example and chat system operation demo](https://img.youtube.com/vi/sbWKMEcJsyg/hqdefault.jpg)](https://youtu.be/sbWKMEcJsyg) | [![Demo Video 2: Measure distance and display the result](https://img.youtube.com/vi/RnNsK7jrAZI/hqdefault.jpg)](https://youtu.be/RnNsK7jrAZI) | [![Demo Video 3: Move motors on all devices](https://img.youtube.com/vi/nN1FbHb85XQ/hqdefault.jpg)](https://youtu.be/nN1FbHb85XQ) |
+| --- | --- | --- |
+| UI example and chat system operation demo | Measure distance and display the result | Move motors on all devices |
 
 ## 📄 License
 This project is licensed under the **MIT License**. Feel free to modify and share.
@@ -121,21 +109,9 @@ docker-compose up --build
 ## 🎬 デモ動画
 サムネイルをクリックすると、YouTubeに移動して動画を再生できます。
 
-<p align="center">
-  <a href="https://youtu.be/sbWKMEcJsyg">
-    <img src="https://img.youtube.com/vi/sbWKMEcJsyg/hqdefault.jpg" alt="デモ動画 1: UIの例で、チャットシステムの動作例" width="420">
-  </a>
-  <a href="https://youtu.be/RnNsK7jrAZI">
-    <img src="https://img.youtube.com/vi/RnNsK7jrAZI/hqdefault.jpg" alt="デモ動画 2: 距離を測った後に、その結果をディスプレイに表示" width="420">
-  </a>
-  <a href="https://youtu.be/nN1FbHb85XQ">
-    <img src="https://img.youtube.com/vi/nN1FbHb85XQ/hqdefault.jpg" alt="デモ動画 3: すべてのデバイスのモーターを動かした" width="420">
-  </a>
-</p>
-
-1. UIの例で、チャットシステムの動作例
-2. 距離を測った後に、その結果をディスプレイに表示
-3. すべてのデバイスのモーターを動かした
+| [![デモ動画 1: UIの例で、チャットシステムの動作例](https://img.youtube.com/vi/sbWKMEcJsyg/hqdefault.jpg)](https://youtu.be/sbWKMEcJsyg) | [![デモ動画 2: 距離を測った後に、その結果をディスプレイに表示](https://img.youtube.com/vi/RnNsK7jrAZI/hqdefault.jpg)](https://youtu.be/RnNsK7jrAZI) | [![デモ動画 3: すべてのデバイスのモーターを動かした](https://img.youtube.com/vi/nN1FbHb85XQ/hqdefault.jpg)](https://youtu.be/nN1FbHb85XQ) |
+| --- | --- | --- |
+| UIの例で、チャットシステムの動作例 | 距離を測った後に、その結果をディスプレイに表示 | すべてのデバイスのモーターを動かした |
 
 ## 📄 ライセンス
 このプロジェクトは **MITライセンス** です。自由に改造して遊んでください！
