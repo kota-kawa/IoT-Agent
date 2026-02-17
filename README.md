@@ -2,6 +2,9 @@
 
 <img src="static/README-Logo/IoT-Agent-Logo.png" width="800" alt="IoT Agent Logo">
 
+## 🖼️ UI Preview
+<img src="assets/images/iot-agent-page.png" width="100%" alt="IoT Agent Dashboard UI Preview">
+
 ## 👋 Introduction
 Welcome to **IoT Agent**!
 This project lets you control nearby IoT devices (robots, sensors, and more) just by **chatting**.
@@ -60,6 +63,9 @@ See [LICENSE.md](LICENSE.md) for details.
 
 <details>
 <summary>日本語</summary>
+
+## 🖼️ UIプレビュー
+<img src="assets/images/iot-agent-page.png" width="100%" alt="IoT Agent ダッシュボード UI プレビュー">
 
 ## 👋 はじめに
 **IoT Agent** へようこそ！
