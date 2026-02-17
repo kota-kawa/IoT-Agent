@@ -988,6 +988,8 @@ def _structured_multi_command_followup_prompt_with_images(
                 "推測を避け、自然な方法で見えるものを説明してください。"
                 "機械的なログ、ジョブID、生のエラーコードなどは避け、ユーザーに話しかけるように会話してください。"
                 "入力に「Suggested phrasing（提案された言い回し）」がある場合、それは生のログとして扱い、親しみやすく分かりやすい説明に言い換えてください。"
+                "返答は見やすいMarkdownで整理し、必要に応じて短い見出しや箇条書きを使ってください。"
+                "見出し・本文・箇条書き・表の各行は必ず改行で分け、1行に詰め込まないでください。"
             ),
         },
     ]
@@ -1060,13 +1062,18 @@ def _structured_multi_command_followup_prompt(
         "段落の間には空行を入れてください。\n"
         "各ステップについて、どのデバイスで何を試み、どのような結果になったのかを役立つように明確に言及してください。\n"
         "ユーザーから明示的に要求されない限り、新しいステップを勝手に作ったり、さらなるアクションを要求したりしないでください。"
+        "返答は読みやすいMarkdown形式とし、必要なら短い見出しや箇条書きを使ってください。"
+        "Markdownの見出し、段落、表の各行は改行で分離し、1行に詰め込まないでください。"
     )
 
     if initial_reply:
         guidance += f"\nThe assistant previously told the user: {initial_reply}"
 
     messages: List[Dict[str, str]] = [
-        {"role": "system", "content": "あなたはIoTデバイスをサポートする親切なアシスタントです。"},
+        {
+            "role": "system",
+            "content": "あなたはIoTデバイスをサポートする親切なアシスタントです。返答は見やすいMarkdownで整理してください。",
+        },
     ]
     if device_context:
         messages.append({"role": "system", "content": "利用可能なデバイス情報:\n" + device_context})
@@ -1078,7 +1085,12 @@ def _structured_multi_command_followup_prompt(
 
     messages.append({"role": "system", "content": guidance})
     messages.append({"role": "system", "content": "ステップサマリ:\n" + step_block})
-    messages.append({"role": "system", "content": "今すぐ最終的な日本語の返答を返してください。"})
+    messages.append(
+        {
+            "role": "system",
+            "content": "今すぐ最終的な日本語の返答を、見やすいMarkdown形式で返してください。",
+        }
+    )
 
     resolved_model = model_name or apply_model_selection("iot")[1]
     return {"model": resolved_model, "input": messages}

@@ -203,8 +203,10 @@ export default function DeviceCard({ device, onRename, onClearJobs, onDelete }: 
                 {device.capabilities && device.capabilities.length > 0 ? (
                   device.capabilities.map((cap, i) => (
                     <li key={i}>
-                      <strong>{cap.name}</strong>
-                      {cap.description && <span>: {cap.description}</span>}
+                      <strong>{typeof cap.name === 'string' ? cap.name : 'unknown'}</strong>
+                      {typeof cap.description === 'string' && cap.description ? (
+                        <span>: {cap.description}</span>
+                      ) : null}
                     </li>
                   ))
                 ) : (

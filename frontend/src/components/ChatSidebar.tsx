@@ -1,4 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import remarkBreaks from 'remark-breaks';
 import { apiUrl, fetchJson } from '../api';
 import { DEFAULT_MODEL, applyDeviceCommand, nowTime } from '../utils';
 import type {
@@ -35,6 +38,54 @@ type ChatStatusUpdate = {
   message: string;
   timestamp?: number;
 };
+
+const MARKDOWN_REMARK_PLUGINS = [remarkGfm, remarkBreaks];
+const MARKDOWN_HINT_PATTERN = /#{1,6}\s|\|\s*[-:]+\s*\||(^|\s)-\s|(^|\s)\d+\.\s|`[^`]+`/m;
+
+function normalizeAssistantMarkdown(raw: string): string {
+  if (!raw) return '';
+
+  let text = raw.replace(/\r\n?/g, '\n').trim();
+  if (!text) return '';
+
+  if (text.includes('\n')) {
+    return text;
+  }
+
+  if (!MARKDOWN_HINT_PATTERN.test(text)) {
+    return text;
+  }
+
+  text = text.replace(/([^\n])\s(#{1,6}\s+)/g, '$1\n\n$2');
+  text = text.replace(/([^\n])\s(-\s+)/g, '$1\n$2');
+  text = text.replace(/([^\n])\s(\d+\.\s+)/g, '$1\n$2');
+
+  if (text.includes('|') && /\|[\-: ]+\|/.test(text)) {
+    text = text.replace(/\|\s+\|/g, '|\n|');
+    text = text.replace(/([。.!?：:])\s+\|/g, '$1\n\n|');
+    text = text.replace(/(^\|.*\|)\s+([^\n|][^\n|]*)$/gm, '$1\n\n$2');
+  }
+
+  return text;
+}
+
+function AssistantMarkdown({ content }: { content: string }): JSX.Element {
+  const prepared = normalizeAssistantMarkdown(content);
+  return (
+    <div className="message__markdown">
+      <ReactMarkdown
+        remarkPlugins={MARKDOWN_REMARK_PLUGINS}
+        components={{
+          a: ({ node: _node, ...props }) => (
+            <a {...props} target="_blank" rel="noreferrer noopener" />
+          )
+        }}
+      >
+        {prepared}
+      </ReactMarkdown>
+    </div>
+  );
+}
 
 const isModelOption = (value: unknown): value is ModelOption => {
   if (!value || typeof value !== 'object') return false;
@@ -411,7 +462,11 @@ export default function ChatSidebar({ devices }: ChatSidebarProps): JSX.Element 
                       </ol>
                     </details>
                   ) : null}
-                  {msg.content}
+                  {msg.role === 'assistant' ? (
+                    <AssistantMarkdown content={msg.content} />
+                  ) : (
+                    <div className="message__plaintext">{msg.content}</div>
+                  )}
                   {Array.isArray(msg.images) && msg.images.length > 0 && (
                     <div className="message__images">
                       {msg.images.map((img, imgIndex) => (

@@ -182,6 +182,92 @@ body{
   line-height: 1.6;
   word-break: break-word;
 }
+.message__plaintext{
+  white-space: pre-wrap;
+}
+.message__markdown{
+  color: inherit;
+}
+.message__markdown > :first-child{
+  margin-top: 0;
+}
+.message__markdown > :last-child{
+  margin-bottom: 0;
+}
+.message__markdown p{
+  margin: 0 0 .8em;
+}
+.message__markdown h1,
+.message__markdown h2,
+.message__markdown h3,
+.message__markdown h4,
+.message__markdown h5,
+.message__markdown h6{
+  margin: 1em 0 .45em;
+  line-height: 1.35;
+}
+.message__markdown h1{ font-size: 1.15em; }
+.message__markdown h2{ font-size: 1.08em; }
+.message__markdown h3{ font-size: 1.02em; }
+.message__markdown ul,
+.message__markdown ol{
+  margin: 0 0 .85em;
+  padding-left: 1.35em;
+}
+.message__markdown li{
+  margin: .2em 0;
+}
+.message__markdown blockquote{
+  margin: 0 0 .85em;
+  padding: .1em 0 .1em .8em;
+  border-left: 3px solid rgba(53,208,134,.5);
+  color: var(--text-dim);
+}
+.message__markdown hr{
+  border: 0;
+  border-top: 1px solid rgba(255,255,255,.14);
+  margin: .95em 0;
+}
+.message__markdown a{
+  color: #9ff2ca;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  word-break: break-all;
+}
+.message__markdown table{
+  width: 100%;
+  border-collapse: collapse;
+  margin: .9em 0;
+  font-size: 12px;
+}
+.message__markdown th,
+.message__markdown td{
+  border: 1px solid rgba(255,255,255,.14);
+  padding: 6px 8px;
+  text-align: left;
+  vertical-align: top;
+}
+.message__markdown th{
+  background: rgba(9,31,21,.82);
+}
+.message__markdown pre{
+  margin: .9em 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,.12);
+  background: rgba(6,24,16,.85);
+  overflow-x: auto;
+}
+.message__markdown pre code{
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+  font-size: 12px;
+  line-height: 1.55;
+}
+.message__markdown :not(pre) > code{
+  font-size: .92em;
+}
 .message--user .message__bubble{
   background: linear-gradient(180deg, #18452f, #143924);
   border-color: rgba(53,208,134,.35);
