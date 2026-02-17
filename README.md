@@ -51,11 +51,14 @@ Open `http://localhost:5006` in your browser to see the dashboard.
 Click a thumbnail to open the video on YouTube.
 
 <p align="center">
+  <a href="https://youtu.be/sbWKMEcJsyg">
+    <img src="https://img.youtube.com/vi/sbWKMEcJsyg/hqdefault.jpg" alt="Demo Video 1 on YouTube" width="420">
+  </a>
   <a href="https://youtu.be/RnNsK7jrAZI">
-    <img src="https://img.youtube.com/vi/RnNsK7jrAZI/hqdefault.jpg" alt="Demo Video 1 on YouTube" width="420">
+    <img src="https://img.youtube.com/vi/RnNsK7jrAZI/hqdefault.jpg" alt="Demo Video 2 on YouTube" width="420">
   </a>
   <a href="https://youtu.be/nN1FbHb85XQ">
-    <img src="https://img.youtube.com/vi/nN1FbHb85XQ/hqdefault.jpg" alt="Demo Video 2 on YouTube" width="420">
+    <img src="https://img.youtube.com/vi/nN1FbHb85XQ/hqdefault.jpg" alt="Demo Video 3 on YouTube" width="420">
   </a>
 </p>
 
@@ -115,11 +118,14 @@ docker-compose up --build
 サムネイルをクリックすると、YouTubeに移動して動画を再生できます。
 
 <p align="center">
+  <a href="https://youtu.be/sbWKMEcJsyg">
+    <img src="https://img.youtube.com/vi/sbWKMEcJsyg/hqdefault.jpg" alt="デモ動画 1 (YouTube)" width="420">
+  </a>
   <a href="https://youtu.be/RnNsK7jrAZI">
-    <img src="https://img.youtube.com/vi/RnNsK7jrAZI/hqdefault.jpg" alt="デモ動画 1 (YouTube)" width="420">
+    <img src="https://img.youtube.com/vi/RnNsK7jrAZI/hqdefault.jpg" alt="デモ動画 2 (YouTube)" width="420">
   </a>
   <a href="https://youtu.be/nN1FbHb85XQ">
-    <img src="https://img.youtube.com/vi/nN1FbHb85XQ/hqdefault.jpg" alt="デモ動画 2 (YouTube)" width="420">
+    <img src="https://img.youtube.com/vi/nN1FbHb85XQ/hqdefault.jpg" alt="デモ動画 3 (YouTube)" width="420">
   </a>
 </p>
 
