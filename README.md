@@ -17,6 +17,13 @@
 ## 🖼️ UI Preview
 <img src="assets/images/iot-agent-page.png" width="100%" alt="IoT Agent Dashboard UI Preview">
 
+## 🎬 Demo Videos
+Click a thumbnail to open the video on YouTube.
+
+| [![Demo Video 1: UI example and chat system operation demo](https://img.youtube.com/vi/sbWKMEcJsyg/hqdefault.jpg)](https://youtu.be/sbWKMEcJsyg) | [![Demo Video 2: Measure distance and display the result](https://img.youtube.com/vi/RnNsK7jrAZI/hqdefault.jpg)](https://youtu.be/RnNsK7jrAZI) | [![Demo Video 3: Move motors on all devices](https://img.youtube.com/vi/nN1FbHb85XQ/hqdefault.jpg)](https://youtu.be/nN1FbHb85XQ) |
+| --- | --- | --- |
+| UI example and chat system operation demo | Measure distance and display the result | Move motors on all devices |
+
 ## 👋 Introduction
 Welcome to **IoT Agent**!
 This project lets you control nearby IoT devices (robots, sensors, and more) just by **chatting**.
@@ -62,13 +69,6 @@ Open `http://localhost:5006` in your browser to see the dashboard.
 - **Raspberry Pi 4** (sensors, cameras)
 - **Raspberry Pi Pico W** (small projects)
 
-## 🎬 Demo Videos
-Click a thumbnail to open the video on YouTube.
-
-| [![Demo Video 1: UI example and chat system operation demo](https://img.youtube.com/vi/sbWKMEcJsyg/hqdefault.jpg)](https://youtu.be/sbWKMEcJsyg) | [![Demo Video 2: Measure distance and display the result](https://img.youtube.com/vi/RnNsK7jrAZI/hqdefault.jpg)](https://youtu.be/RnNsK7jrAZI) | [![Demo Video 3: Move motors on all devices](https://img.youtube.com/vi/nN1FbHb85XQ/hqdefault.jpg)](https://youtu.be/nN1FbHb85XQ) |
-| --- | --- | --- |
-| UI example and chat system operation demo | Measure distance and display the result | Move motors on all devices |
-
 ## 📄 License
 This project is licensed under the **MIT License**. Feel free to modify and share.
 See [LICENSE.md](LICENSE.md) for details.
@@ -78,6 +78,13 @@ See [LICENSE.md](LICENSE.md) for details.
 
 ## 🖼️ UIプレビュー
 <img src="assets/images/iot-agent-page.png" width="100%" alt="IoT Agent ダッシュボード UI プレビュー">
+
+## 🎬 デモ動画
+サムネイルをクリックすると、YouTubeに移動して動画を再生できます。
+
+| [![デモ動画 1: UIの例で、チャットシステムの動作例](https://img.youtube.com/vi/sbWKMEcJsyg/hqdefault.jpg)](https://youtu.be/sbWKMEcJsyg) | [![デモ動画 2: 距離を測った後に、その結果をディスプレイに表示](https://img.youtube.com/vi/RnNsK7jrAZI/hqdefault.jpg)](https://youtu.be/RnNsK7jrAZI) | [![デモ動画 3: すべてのデバイスのモーターを動かした](https://img.youtube.com/vi/nN1FbHb85XQ/hqdefault.jpg)](https://youtu.be/nN1FbHb85XQ) |
+| --- | --- | --- |
+| UIの例で、チャットシステムの動作例 | 距離を測った後に、その結果をディスプレイに表示 | すべてのデバイスのモーターを動かした |
 
 ## 👋 はじめに
 **IoT Agent** へようこそ！
@@ -123,13 +130,6 @@ docker-compose up --build
 - **NVIDIA Jetson**（AIロボットなど）
 - **Raspberry Pi 4**（センサーやカメラ）
 - **Raspberry Pi Pico W**（小さな工作向け）
-
-## 🎬 デモ動画
-サムネイルをクリックすると、YouTubeに移動して動画を再生できます。
-
-| [![デモ動画 1: UIの例で、チャットシステムの動作例](https://img.youtube.com/vi/sbWKMEcJsyg/hqdefault.jpg)](https://youtu.be/sbWKMEcJsyg) | [![デモ動画 2: 距離を測った後に、その結果をディスプレイに表示](https://img.youtube.com/vi/RnNsK7jrAZI/hqdefault.jpg)](https://youtu.be/RnNsK7jrAZI) | [![デモ動画 3: すべてのデバイスのモーターを動かした](https://img.youtube.com/vi/nN1FbHb85XQ/hqdefault.jpg)](https://youtu.be/nN1FbHb85XQ) |
-| --- | --- | --- |
-| UIの例で、チャットシステムの動作例 | 距離を測った後に、その結果をディスプレイに表示 | すべてのデバイスのモーターを動かした |
 
 ## 📄 ライセンス
 このプロジェクトは **MITライセンス** です。自由に改造して遊んでください！
