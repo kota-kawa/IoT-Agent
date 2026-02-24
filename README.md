@@ -20,17 +20,11 @@
 ## 🎬 Demo Videos
 Click a thumbnail to open the video on YouTube.
 
-<a href="https://youtu.be/sbWKMEcJsyg"><img src="https://img.youtube.com/vi/sbWKMEcJsyg/hqdefault.jpg" width="100%" alt="Demo Video 1: UI example and chat system operation demo"></a>
-
-**UI example and chat system operation demo**
-
-<a href="https://youtu.be/RnNsK7jrAZI"><img src="https://img.youtube.com/vi/RnNsK7jrAZI/hqdefault.jpg" width="100%" alt="Demo Video 2: Measure distance and display the result"></a>
-
-**Measure distance and display the result**
-
-<a href="https://youtu.be/nN1FbHb85XQ"><img src="https://img.youtube.com/vi/nN1FbHb85XQ/hqdefault.jpg" width="100%" alt="Demo Video 3: Move motors on all devices"></a>
-
-**Move motors on all devices**
+<table width="100%"><tr>
+<td width="33%" align="center"><a href="https://youtu.be/sbWKMEcJsyg"><img src="https://img.youtube.com/vi/sbWKMEcJsyg/hqdefault.jpg" width="100%" alt="Demo Video 1: UI example and chat system operation demo"></a><br><b>UI example and chat system operation demo</b></td>
+<td width="33%" align="center"><a href="https://youtu.be/RnNsK7jrAZI"><img src="https://img.youtube.com/vi/RnNsK7jrAZI/hqdefault.jpg" width="100%" alt="Demo Video 2: Measure distance and display the result"></a><br><b>Measure distance and display the result</b></td>
+<td width="33%" align="center"><a href="https://youtu.be/nN1FbHb85XQ"><img src="https://img.youtube.com/vi/nN1FbHb85XQ/hqdefault.jpg" width="100%" alt="Demo Video 3: Move motors on all devices"></a><br><b>Move motors on all devices</b></td>
+</tr></table>
 
 ## 👋 Introduction
 Welcome to **IoT Agent**!
@@ -90,17 +84,11 @@ See [LICENSE.md](LICENSE.md) for details.
 ## 🎬 デモ動画
 サムネイルをクリックすると、YouTubeに移動して動画を再生できます。
 
-<a href="https://youtu.be/sbWKMEcJsyg"><img src="https://img.youtube.com/vi/sbWKMEcJsyg/hqdefault.jpg" width="100%" alt="デモ動画 1: UIの例で、チャットシステムの動作例"></a>
-
-**UIの例で、チャットシステムの動作例**
-
-<a href="https://youtu.be/RnNsK7jrAZI"><img src="https://img.youtube.com/vi/RnNsK7jrAZI/hqdefault.jpg" width="100%" alt="デモ動画 2: 距離を測った後に、その結果をディスプレイに表示"></a>
-
-**距離を測った後に、その結果をディスプレイに表示**
-
-<a href="https://youtu.be/nN1FbHb85XQ"><img src="https://img.youtube.com/vi/nN1FbHb85XQ/hqdefault.jpg" width="100%" alt="デモ動画 3: すべてのデバイスのモーターを動かした"></a>
-
-**すべてのデバイスのモーターを動かした**
+<table width="100%"><tr>
+<td width="33%" align="center"><a href="https://youtu.be/sbWKMEcJsyg"><img src="https://img.youtube.com/vi/sbWKMEcJsyg/hqdefault.jpg" width="100%" alt="デモ動画 1: UIの例で、チャットシステムの動作例"></a><br><b>UIの例で、チャットシステムの動作例</b></td>
+<td width="33%" align="center"><a href="https://youtu.be/RnNsK7jrAZI"><img src="https://img.youtube.com/vi/RnNsK7jrAZI/hqdefault.jpg" width="100%" alt="デモ動画 2: 距離を測った後に、その結果をディスプレイに表示"></a><br><b>距離を測った後に、その結果をディスプレイに表示</b></td>
+<td width="33%" align="center"><a href="https://youtu.be/nN1FbHb85XQ"><img src="https://img.youtube.com/vi/nN1FbHb85XQ/hqdefault.jpg" width="100%" alt="デモ動画 3: すべてのデバイスのモーターを動かした"></a><br><b>すべてのデバイスのモーターを動かした</b></td>
+</tr></table>
 
 ## 👋 はじめに
 **IoT Agent** へようこそ！
