@@ -75,30 +75,55 @@ Open `http://localhost:5006` in your browser to see the dashboard.
 
 ### IoT Agent
 
-**Role**
-The IoT Agent translates natural-language requests into executable device-control commands across heterogeneous edge devices.
+The IoT Agent was evaluated on **10 tasks** designed to test natural-language-to-command translation and visual situational judgment.
+Tasks span single-device control, multi-device coordination across Jetson / Raspberry Pi 4 / Pico W, and abstract instructions.
 
-**Evaluation Protocol**
-I designed 10 tasks ranging from:
-- single-device control
-- multi-device coordination
-- context-aware actions
-- visually grounded interaction
+**Scoring criteria**
 
-Each task was evaluated with a three-level outcome:
-- **○** full success
-- **△** partial success
-- **×** failure
+| Symbol | Meaning |
+|:------:|---------|
+| ○ | All device operations completed |
+| △ | At least one device operated (partial success) |
+| × | All operations failed |
 
-**Result**
-High-capability models such as **Claude Opus 4.5** and **Gemini 3 Pro** showed strong robustness, including on abstract requests.
-At the same time, the experiments also showed that **small edge LLMs can still execute practical device-control tasks reliably** when function schemas and system prompts are carefully designed.
+**Task list**
 
-**Failure Analysis**
-Some failures were caused not by raw reasoning weakness, but by mismatches in tool invocation, timeout handling, and device-specific branching.
+| # | Task |
+|:-:|------|
+| 1 | Check for motion for 3 seconds |
+| 2 | Assess surroundings; beep a success tone when done |
+| 3 | Move Jetson forward 3 s; display "Arrived" on stop |
+| 4 | Display "funny" on Pi4 robot; shake arm (servo) vertically |
+| 5 | Room survey: measure temperature with Pico, run propeller fan |
+| 6 | Welcome performance: happy face on Pico screen, play "startup" melody from Pi4 |
+| 7 | Liveness check: Jetson → "Ready", Pi4 → "I'm here", Pico → yellow LED |
+| 8 | Dark-room check: measure wall distance, light all LEDs simultaneously |
+| 9 | Intruder alert: Jetson → "alert", Pi4 → police-style LED flash, Pico → buzzer |
+| 10 | Entertain children: any creative action on all devices |
 
-**Why this matters**
-This supports a **hierarchical cloud-edge architecture**: high-level planning in the cloud, low-latency/private execution on edge devices.
+**Results**
+
+| Task | GPT-5.1 | Gemini 3 Pro | Claude Opus 4.5 | Claude Haiku 4.5 | Llama 3.3 70B | Qwen 3 32B | Gemini 2.5 Flash-Lite | Llama 3.1 8B | GPT-OSS 20B |
+|:----:|:-------:|:------------:|:---------------:|:----------------:|:-------------:|:----------:|:---------------------:|:------------:|:-----------:|
+| 1 | ○ | ○ | ○ | ○ | ○ | ○ | ○ | × | × |
+| 2 | ○ | ○ | ○ | ○ | ○ | ○ | ○ | ○ | ○ |
+| 3 | ○ | ○ | ○ | ○ | × | ○ | ○ | ○ | ○ |
+| 4 | △ | ○ | ○ | ○ | △ | ○ | ○ | ○ | ○ |
+| 5 | ○ | △ | ○ | ○ | △ | △ | △ | ○ | ○ |
+| 6 | ○ | ○ | ○ | ○ | ○ | ○ | ○ | △ | ○ |
+| 7 | △ | ○ | ○ | △ | ○ | ○ | ○ | △ | ○ |
+| 8 | △ | △ | ○ | ○ | ○ | ○ | ○ | △ | △ |
+| 9 | ○ | ○ | ○ | ○ | △ | ○ | ○ | ○ | ○ |
+| 10 | ○ | ○ | ○ | ○ | ○ | △ | △ | ○ | △ |
+
+**Key findings**
+
+- **Large models handle abstraction well** — Claude Opus 4.5 and Gemini 3 Pro completed all 10 tasks, including Task 10 ("entertain children"), with creative responses such as "hello kids" messages and emoji faces.
+- **Even large models can stumble on physical-device quirks** — GPT-5.1 and Claude Haiku 4.5 failed on Tasks 7 and 8 due to incorrect LED color output and processing timeouts in complex branching conditions.
+- **Small models have an edge for low-latency control** — Llama 3.1 8B completed straightforward tasks (e.g., Tasks 3 and 10) faster and more reliably than some larger models, suggesting that bigger is not always better for latency-sensitive edge control.
+- **Tool-schema mismatch causes failures independent of model quality** — Failures in Gemini 2.5 Flash-Lite and Llama 3.3 70B (Tasks 4 and 5) stemmed from incompatibilities between model behavior and tool definitions, not from reasoning limitations alone.
+
+**Takeaway**: IoT control benefits from matching model size to task requirements — large models for context-heavy tasks, small well-prompted LLMs for responsive edge execution.
 
 ## 📄 License
 This project is licensed under the **MIT License**. Feel free to modify and share.
@@ -168,30 +193,55 @@ docker-compose up --build
 
 ### IoT Agent
 
-**役割**
-IoT Agentは、自然言語によるリクエストを、異種エッジデバイス上で実行可能なデバイス制御コマンドに変換します。
+自然言語指示がデバイス制御コマンドに正しく変換されるかを検証するため、**10タスク**を設計しました。
+タスクは単一デバイス操作から、Jetson・Raspberry Pi 4・Pico W を連携させる複合操作、「暗闇」「子供を楽しませる」といった抽象的な指示まで多岐にわたります。
 
-**評価プロトコル**
-以下の内容を含む10タスクを設計しました：
-- 単一デバイス制御
-- 複数デバイスの連携操作
-- コンテキストに応じた動作
-- 視覚情報を活用したインタラクション
+**評価基準**
 
-各タスクは3段階の結果で評価しました：
-- **○** 完全成功
-- **△** 部分的成功
-- **×** 失敗
+| 記号 | 意味 |
+|:----:|------|
+| ○ | すべてのデバイス操作が完了 |
+| △ | 1つ以上のデバイスが操作された（部分成功） |
+| × | すべての操作が失敗 |
 
-**結果**
-**Claude Opus 4.5** や **Gemini 3 Pro** などの高性能モデルは、抽象的なリクエストに対しても高い堅牢性を示しました。
-同時に、**関数スキーマとシステムプロンプトを適切に設計すれば、小規模なエッジLLMでも実用的なデバイス制御タスクを安定して実行できる**ことが実験から示されました。
+**タスク一覧**
 
-**失敗分析**
-一部の失敗は、推論能力の低さではなく、ツール呼び出しの不一致・タイムアウト処理・デバイス固有の分岐処理におけるミスマッチが原因でした。
+| # | タスク内容 |
+|:-:|-----------|
+| 1 | 動きがあるか3秒間確認する |
+| 2 | 周囲の状況を確認し、撮影後にブザーで成功音を鳴らす |
+| 3 | Jetsonを3秒間前進させ、停止後にディスプレイへ「Arrived」を表示 |
+| 4 | Pi4のロボットに「funny」を表示し、サーボを縦に振る |
+| 5 | Picoで温度を測りつつ、プロペラで風を送る |
+| 6 | Picoの画面を笑顔（happy）にし、Pi4から歓迎メロディ（startup）を再生 |
+| 7 | 生存確認：Jetson→「Ready」、Pi4→「I'm here」、Pico→黄色LED点灯 |
+| 8 | 壁までの距離を測り、すべてのLEDを同時に点灯させる |
+| 9 | 侵入者警戒：Jetson→「alert」、Pi4→パトカー点滅、Pico→ブザー |
+| 10 | 子供を楽しませるため、全デバイスで何らかのアクションを行う |
 
-**意義**
-この結果は、**階層型クラウドエッジアーキテクチャ**（クラウドで高度な計画を行い、エッジデバイスで低レイテンシかつプライベートに実行する）の有効性を支持しています。
+**評価結果**
+
+| タスク | GPT-5.1 | Gemini 3 Pro | Claude Opus 4.5 | Claude Haiku 4.5 | Llama 3.3 70B | Qwen 3 32B | Gemini 2.5 Flash-Lite | Llama 3.1 8B | GPT-OSS 20B |
+|:------:|:-------:|:------------:|:---------------:|:----------------:|:-------------:|:----------:|:---------------------:|:------------:|:-----------:|
+| 1 | ○ | ○ | ○ | ○ | ○ | ○ | ○ | × | × |
+| 2 | ○ | ○ | ○ | ○ | ○ | ○ | ○ | ○ | ○ |
+| 3 | ○ | ○ | ○ | ○ | × | ○ | ○ | ○ | ○ |
+| 4 | △ | ○ | ○ | ○ | △ | ○ | ○ | ○ | ○ |
+| 5 | ○ | △ | ○ | ○ | △ | △ | △ | ○ | ○ |
+| 6 | ○ | ○ | ○ | ○ | ○ | ○ | ○ | △ | ○ |
+| 7 | △ | ○ | ○ | △ | ○ | ○ | ○ | △ | ○ |
+| 8 | △ | △ | ○ | ○ | ○ | ○ | ○ | △ | △ |
+| 9 | ○ | ○ | ○ | ○ | △ | ○ | ○ | ○ | ○ |
+| 10 | ○ | ○ | ○ | ○ | ○ | △ | △ | ○ | △ |
+
+**考察**
+
+- **大規模モデルは抽象的な指示に強い** — Claude Opus 4.5 と Gemini 3 Pro は全10タスクを完了。特にタスク10（「子供を楽しませる」）では「hello kids」メッセージや顔文字を使った創造的な応答を示した。
+- **大規模モデルでも物理デバイス固有の条件で躓くことがある** — GPT-5.1 と Claude Haiku 4.5 はタスク7・8 において、LEDの点灯色の誤りや処理タイムアウトが発生した。
+- **小規模モデルはエッジ制御での即応性に優れる場合がある** — Llama 3.1 8B はタスク3・10などの単純なタスクを上位モデルより迅速かつ安定して実行しており、レイテンシが重要なエッジ制御では必ずしも大規模モデルが最適ではないことを示している。
+- **失敗の原因はモデル能力だけではない** — Gemini 2.5 Flash-Lite と Llama 3.3 70B のタスク4・5における失敗は、ツール定義やプロンプトとの相性によるものであり、推論能力の問題とは切り分けて考える必要がある。
+
+**結論**：IoT制御では、タスクの性質に応じてモデルサイズを選定し（文脈理解重視なら大規模モデル、即応性重視なら小規模モデル）、プロンプトエンジニアリングでモデルごとの特性を吸収することが重要である。
 
 ## 📄 ライセンス
 このプロジェクトは **MITライセンス** です。自由に改造して遊んでください！
