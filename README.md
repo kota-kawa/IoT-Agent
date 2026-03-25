@@ -71,6 +71,35 @@ Open `http://localhost:5006` in your browser to see the dashboard.
 - **Raspberry Pi 4** (sensors, cameras)
 - **Raspberry Pi Pico W** (small projects)
 
+## 🧪 Evaluation
+
+### IoT Agent
+
+**Role**
+The IoT Agent translates natural-language requests into executable device-control commands across heterogeneous edge devices.
+
+**Evaluation Protocol**
+I designed 10 tasks ranging from:
+- single-device control
+- multi-device coordination
+- context-aware actions
+- visually grounded interaction
+
+Each task was evaluated with a three-level outcome:
+- **○** full success
+- **△** partial success
+- **×** failure
+
+**Result**
+High-capability models such as **Claude Opus 4.5** and **Gemini 3 Pro** showed strong robustness, including on abstract requests.
+At the same time, the experiments also showed that **small edge LLMs can still execute practical device-control tasks reliably** when function schemas and system prompts are carefully designed.
+
+**Failure Analysis**
+Some failures were caused not by raw reasoning weakness, but by mismatches in tool invocation, timeout handling, and device-specific branching.
+
+**Why this matters**
+This supports a **hierarchical cloud-edge architecture**: high-level planning in the cloud, low-latency/private execution on edge devices.
+
 ## 📄 License
 This project is licensed under the **MIT License**. Feel free to modify and share.
 See [LICENSE.md](LICENSE.md) for details.
@@ -134,6 +163,35 @@ docker-compose up --build
 - **NVIDIA Jetson**（AIロボットなど）
 - **Raspberry Pi 4**（センサーやカメラ）
 - **Raspberry Pi Pico W**（小さな工作向け）
+
+## 🧪 評価
+
+### IoT Agent
+
+**役割**
+IoT Agentは、自然言語によるリクエストを、異種エッジデバイス上で実行可能なデバイス制御コマンドに変換します。
+
+**評価プロトコル**
+以下の内容を含む10タスクを設計しました：
+- 単一デバイス制御
+- 複数デバイスの連携操作
+- コンテキストに応じた動作
+- 視覚情報を活用したインタラクション
+
+各タスクは3段階の結果で評価しました：
+- **○** 完全成功
+- **△** 部分的成功
+- **×** 失敗
+
+**結果**
+**Claude Opus 4.5** や **Gemini 3 Pro** などの高性能モデルは、抽象的なリクエストに対しても高い堅牢性を示しました。
+同時に、**関数スキーマとシステムプロンプトを適切に設計すれば、小規模なエッジLLMでも実用的なデバイス制御タスクを安定して実行できる**ことが実験から示されました。
+
+**失敗分析**
+一部の失敗は、推論能力の低さではなく、ツール呼び出しの不一致・タイムアウト処理・デバイス固有の分岐処理におけるミスマッチが原因でした。
+
+**意義**
+この結果は、**階層型クラウドエッジアーキテクチャ**（クラウドで高度な計画を行い、エッジデバイスで低レイテンシかつプライベートに実行する）の有効性を支持しています。
 
 ## 📄 ライセンス
 このプロジェクトは **MITライセンス** です。自由に改造して遊んでください！
